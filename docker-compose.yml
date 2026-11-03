@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "2048:2048"
-      - "2050:2050"
+      - "127.0.0.1:2048:2048"
+      - "127.0.0.1:2050:2050"
     volumes:
       - ./data:/data

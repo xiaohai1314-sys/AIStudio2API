@@ -264,7 +264,7 @@ func (s *server) handleGeminiVideoOperation(w http.ResponseWriter, r *http.Reque
 		missing = cmp.Or(missing, operation.Missing)
 		if operation.Done && operation.File != nil {
 			samples = append(samples, map[string]any{"video": map[string]any{
-				"uri": geminiVideoURI(r, operation.File.ID), "mimeType": "video/mp4",
+				"uri": s.geminiVideoURI(r, operation.File.ID), "mimeType": "video/mp4",
 			}})
 		}
 	}
@@ -549,8 +549,8 @@ func cleanOperationID(value string) string {
 }
 
 // geminiVideoURI 返回视频结果的 Files API 下载地址
-func geminiVideoURI(r *http.Request, driveID string) string {
-	return requestOrigin(r) + "/v1beta/files/" + geminiFileID(driveID) + ":download?alt=media"
+func (s *server) geminiVideoURI(r *http.Request, driveID string) string {
+	return s.requestOrigin(r) + "/v1beta/files/" + geminiFileID(driveID) + ":download?alt=media"
 }
 
 func normalizeVideoDefaults(request aistudio.VideoRequest) aistudio.VideoRequest {

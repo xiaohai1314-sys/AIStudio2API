@@ -202,6 +202,10 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 
 // runServer 管理 HTTP 监听，就绪后以管理页面地址调用 onReady，运行到 ctx 结束或监听出错；started 表示监听曾经就绪
 func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, updater api.UpdateService, onReady func(address string)) (started bool, err error) {
+	trustedProxies, err := config.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return false, err
+	}
 	manager.requests.log("service", "INFO", fmt.Sprintf("管理监听启动 | 地址=%s", cfg.ListenAddr))
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if errors.Is(err, portReserved) {
@@ -228,7 +232,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	}
 	manager.previewAddress = previewListener.Addr().String()
 	apiHandler := api.NewHandler(manager, api.Config{
-		APIKey: cfg.ProxyAPIKey, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
+		APIKey: cfg.ProxyAPIKey, PublicRateLimit: cfg.PublicRateLimit, PublicRateBurst: cfg.PublicRateBurst, MaxPublicInFlight: max(16, 2*cfg.MaxActiveWorkers), TrustedProxyCIDRs: trustedProxies, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
@@ -239,11 +243,13 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		Handler:           rootHandler(apiHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    16 << 10,
 	}
 	previewServer := &http.Server{
 		Handler:           webui.PreviewHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    16 << 10,
 	}
 	serveError := make(chan error, 2)
 	go func() {

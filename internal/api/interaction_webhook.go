@@ -2,19 +2,31 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 )
 
-// interactionWebhookClient 发送 webhook 事件，接收端需在数秒内应答
-var interactionWebhookClient = &http.Client{Timeout: 10 * time.Second}
+// interactionWebhookClient 发送 webhook 事件，接收端需在数秒内应答；重定向也不能进入内网。
+var interactionWebhookClient = &http.Client{
+	Transport: publicOutboundTransport,
+	Timeout:   10 * time.Second,
+	CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return checkRemoteMediaHost(request.Context(), request.URL.Hostname())
+	},
+}
 
 // interactionWebhookWindow 是 webhook 事件投递失败后继续重试的时长
-const interactionWebhookWindow = 24 * time.Hour
+const (
+	interactionWebhookWindow  = 24 * time.Hour
+	maxInteractionWebhookURIs = 8
+)
 
 // interactionWebhookConfig 是请求级 webhook 的地址与随事件返回的用户元数据
 type interactionWebhookConfig struct {
@@ -44,14 +56,17 @@ var interactionWebhookEvents = map[string]string{
 	"failed": "interaction.failed", "cancelled": "interaction.cancelled",
 }
 
-// validate 要求请求为后台交互且地址为 http 或 https URL
-func (config interactionWebhookConfig) validate(background bool) error {
+// validate 要求请求为后台交互，限制 webhook 数量，并拒绝内网回调目标。
+func (config interactionWebhookConfig) validate(ctx context.Context, background bool) error {
 	if !background {
 		return fmt.Errorf("webhook_config requires background to be true")
 	}
+	if len(config.URIs) > maxInteractionWebhookURIs {
+		return fmt.Errorf("webhook_config.uris allows at most %d URLs", maxInteractionWebhookURIs)
+	}
 	for _, uri := range config.URIs {
-		if parsed, err := url.Parse(uri); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return fmt.Errorf("webhook_config.uris must be http or https URLs: %q", uri)
+		if _, err := validatePublicHTTPURL(ctx, uri); err != nil {
+			return fmt.Errorf("webhook_config.uris must be public http or https URLs: %q: %w", uri, err)
 		}
 	}
 	return nil
@@ -84,6 +99,9 @@ func deliverInteractionWebhook(uri, messageID string, body []byte) {
 	deadline := time.Now().Add(interactionWebhookWindow)
 	for delay := time.Second; ; delay = min(delay*2, time.Hour) {
 		request, _ := http.NewRequest(http.MethodPost, uri, bytes.NewReader(body))
+		if err := checkRemoteMediaHost(context.Background(), request.URL.Hostname()); err != nil {
+			return
+		}
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("webhook-id", messageID)
 		request.Header.Set("webhook-timestamp", strconv.FormatInt(time.Now().Unix(), 10))

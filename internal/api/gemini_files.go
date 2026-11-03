@@ -258,7 +258,7 @@ func (s *server) startGeminiUpload(w http.ResponseWriter, r *http.Request) {
 		mime: firstMediaType(r.Header.Get("X-Goog-Upload-Header-Content-Type"), metadata.File.MIMEType),
 	}
 	id := s.uploads.start(session)
-	w.Header().Set("X-Goog-Upload-URL", requestOrigin(r)+"/upload/v1beta/files?upload_id="+url.QueryEscape(id)+"&upload_protocol=resumable")
+	w.Header().Set("X-Goog-Upload-URL", s.requestOrigin(r)+"/upload/v1beta/files?upload_id="+url.QueryEscape(id)+"&upload_protocol=resumable")
 	w.Header().Set("X-Goog-Upload-Status", "active")
 	w.WriteHeader(http.StatusOK)
 }
@@ -551,14 +551,11 @@ func writeGeminiUploadFailure(w http.ResponseWriter, err error, uploadStatus str
 	writeGeminiError(w, status, statusName, err.Error())
 }
 
-// requestOrigin 返回客户端访问本服务使用的协议与主机
-func requestOrigin(r *http.Request) string {
+// requestOrigin 返回客户端访问本服务使用的协议与主机。代理协议头只接受显式可信来源。
+func (s *server) requestOrigin(r *http.Request) string {
 	scheme := "http"
-	if r.TLS != nil {
+	if r.TLS != nil || trustedForwardedHTTPS(r, s.config.TrustedProxyCIDRs) {
 		scheme = "https"
-	}
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
-		scheme = forwarded
 	}
 	return scheme + "://" + r.Host
 }

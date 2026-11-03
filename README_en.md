@@ -225,7 +225,7 @@ docker compose up -d
 
 The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.0.0:2048` inside the container. `data/` holds `.env`, `auth/`, and `runtime/`; with the Camoufox backend, the first start downloads Camoufox to `data/runtime/camoufox/`. To migrate an existing installation, copy these three items into `data/`. The container runs as root, so files the service writes in `data/` are owned by root; edit them with `sudo` on Linux hosts.
 
-- Set `PROXY_API_KEY` when the port is reachable from other machines. Opening the console from outside the container requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
+- The container always listens on `0.0.0.0:2048` inside, so `data/.env` must set `PROXY_API_KEY` even when Compose publishes the ports on the host loopback interface; without it the service refuses to start. Only when remote access is required, change the mapping in `docker-compose.yml` to `0.0.0.0:2048:2048` (and expose the preview port only if needed) and use a strong key. Opening the console from outside the container also requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
 - Add accounts: choose "Sign in with browser" in "Add account" on the console and sign in to Google in the sign-in window that opens in the console; you can also paste cookies, or copy `auth/<Google email>/` from a computer that can sign in to Google into `data/auth/`.
 - `PROXY` and account proxies are reached from inside the container; when the proxy runs on the host, use the host's LAN address and allow LAN connections on the proxy.
 - The container time zone is UTC. New accounts' fingerprint time zone, log timestamps, and daily usage totals follow the container time zone; add `environment: { TZ: <IANA time zone> }` to `docker-compose.yml` to use another one. Each account's time zone can also be set on the Accounts page.
@@ -289,7 +289,7 @@ Account actions depend on state:
 3. "Stop service" cancels an in-progress launch or active requests and closes WAA workers while the management UI and Logs remain available
 4. Click "Start service" again to resume the APIs
 
-Starting again loads the latest data-plane settings from `.env`; the account selection strategy and worker capacity apply as soon as they are saved. Changes to `LISTEN_ADDR`, `PREVIEW_LISTEN_ADDR` or `PROXY_API_KEY` require restarting the management process.
+Starting again loads the latest data-plane settings from `.env`; the account selection strategy and worker capacity apply as soon as they are saved. Changes to `LISTEN_ADDR`, `PREVIEW_LISTEN_ADDR`, `PROXY_API_KEY`, `PUBLIC_RATE_LIMIT`, or `PUBLIC_RATE_BURST` require restarting the management process.
 
 Closing the desktop window keeps the app running in the system tray; choose Quit in the tray menu to exit the manager. For the command-line build, press `Ctrl+C` in the launch window or close that window to exit the manager. Closing the browser tab does not stop the manager.
 
@@ -335,7 +335,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 | Gemini | `http://127.0.0.1:2048` | `PROXY_API_KEY` from `.env` |
 
-Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, only pages on this machine can call the API from a browser; web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted. On the Settings page you can tick which accounts handle each key's requests.
+Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, the service can listen only on localhost or a loopback IP, and only pages on this machine can call the API from a browser. Web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted. On the Settings page you can tick which accounts handle each key's requests.
 
 For Cherry Studio:
 
@@ -587,9 +587,11 @@ Process environment variables override the same keys in `.env`, and those settin
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | Account file, directory, or comma-separated paths |
-| `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address |
+| `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address; a non-loopback address requires `PROXY_API_KEY`, otherwise the service refuses to start |
 | `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | Listen address for HTML previews in the API playground, on a port different from `LISTEN_ADDR`; when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use |
-| `PROXY_API_KEY` | empty | Public API key |
+| `PROXY_API_KEY` | empty | Public API key; required when `LISTEN_ADDR` is not a loopback address |
+| `PUBLIC_RATE_LIMIT` | `120` | Public API requests allowed per minute for each API key, or each peer IP when no key is configured; excess requests receive 429 |
+| `PUBLIC_RATE_BURST` | `30` | Requests an API key/IP can make immediately; must not exceed `PUBLIC_RATE_LIMIT` |
 | `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
 | `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
 | `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
@@ -598,6 +600,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ADMIN_AUTH_ENABLED` | `false` | Enable username/password login for the console |
 | `ADMIN_USERNAME` | `admin` | Administrator username |
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
+| `TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of trusted reverse proxies, such as `127.0.0.1/32`; only their `X-Forwarded-Proto` may mark a console-session cookie Secure |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |
@@ -622,7 +625,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `WAA_BACKEND` | `camoufox` | `camoufox` runs WAA in a Camoufox page; `spidermonkey` runs WAA in SpiderMonkey inside the service process and neither downloads nor starts Camoufox |
 | `TEMPORARY_CHAT` | `false` | Use Temporary Chat for the WAA prewarm page |
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key |
-| `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; empty uses the address of each request and follows `X-Forwarded-Proto` behind a reverse proxy |
+| `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; when empty, the request address is used and HTTPS from a reverse proxy requires `TRUSTED_PROXY_CIDRS` |
 
 The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more.
 
@@ -636,7 +639,7 @@ The console allows passwordless loopback access by default. For remote managemen
 
 Public APIs use the separate `PROXY_API_KEY`.
 
-Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: https`. Console login settings can also be saved from the settings page and take effect after restarting the process.
+Use an HTTPS reverse proxy that preserves `Host` and sets `X-Forwarded-Proto: https`. Also set `TRUSTED_PROXY_CIDRS` to the proxy's source CIDR (for example, `127.0.0.1/32` for a local proxy); otherwise this protocol header is deliberately ignored so a client cannot forge HTTPS and affect a console-session cookie or returned absolute URLs. Console login settings can also be saved from the settings page and take effect after restarting the process.
 
 HTML previews in the API playground run on a separate origin served at `PREVIEW_LISTEN_ADDR`, and the page opens them at the current host name with that port. When the console is opened from another computer, `PREVIEW_LISTEN_ADDR` listens on a reachable address like `LISTEN_ADDR`; behind a reverse proxy, also proxy the same port number on the same host name to `PREVIEW_LISTEN_ADDR`, for example `https://ai.example.com:2050` to local port `2050` when the console is `https://ai.example.com`.
 

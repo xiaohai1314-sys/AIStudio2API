@@ -46,7 +46,7 @@ func (s *server) mediaOutputFor(r *http.Request) mediaOutput {
 		return mediaOutput{}
 	}
 	if base == "" {
-		base = requestOrigin(r)
+		base = s.requestOrigin(r)
 	}
 	return mediaOutput{base: strings.TrimRight(base, "/"), dir: s.config.MediaDir}
 }

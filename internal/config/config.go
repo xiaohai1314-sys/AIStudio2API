@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ const (
 	defaultMaxActiveWorkers   = 10
 	defaultWarmConcurrency    = 5
 	defaultAccountConcurrency = 2
+	defaultPublicRateLimit    = 120
+	defaultPublicRateBurst    = 30
 )
 
 var configKeys = [...]string{
@@ -31,6 +34,8 @@ var configKeys = [...]string{
 	"LISTEN_ADDR",
 	"PREVIEW_LISTEN_ADDR",
 	"PROXY_API_KEY",
+	"PUBLIC_RATE_LIMIT",
+	"PUBLIC_RATE_BURST",
 	"API_KEY_ACCOUNTS",
 	"PROXY",
 	"INIT_TIMEOUT",
@@ -54,6 +59,7 @@ var configKeys = [...]string{
 	"ADMIN_AUTH_ENABLED",
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
+	"TRUSTED_PROXY_CIDRS",
 	"BUILD_NATIVE_NONSTREAM",
 	"NONSTREAM_KEEPALIVE",
 	"FAKE_STREAM",
@@ -105,6 +111,7 @@ type Config struct {
 	AdminAuthEnabled       bool
 	AdminUsername          string
 	AdminPassword          string
+	TrustedProxyCIDRs      string
 	BuildNativeNonstream   bool
 	NonstreamKeepalive     bool
 	FakeStream             bool
@@ -119,6 +126,8 @@ type Config struct {
 	ListenAddr             string
 	PreviewListenAddr      string
 	ProxyAPIKey            string
+	PublicRateLimit        int
+	PublicRateBurst        int
 	APIKeyAccounts         string
 	Proxy                  string
 	InitTimeout            time.Duration
@@ -163,6 +172,8 @@ func Default() Config {
 		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
+		PublicRateLimit:        defaultPublicRateLimit,
+		PublicRateBurst:        defaultPublicRateBurst,
 		RoutingStrategy:        "round-robin",
 		UpstreamChannels:       []string{"playground"},
 		WAABackend:             WAABackendCamoufox,
@@ -207,10 +218,13 @@ var configSetters = map[string]func(*Config, string) error{
 	"MAX_ACTIVE_WORKERS":       intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
 	"WARM_STARTUP_CONCURRENCY": intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
 	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
+	"PUBLIC_RATE_LIMIT":        intSetter("PUBLIC_RATE_LIMIT", func(c *Config) *int { return &c.PublicRateLimit }),
+	"PUBLIC_RATE_BURST":        intSetter("PUBLIC_RATE_BURST", func(c *Config) *int { return &c.PublicRateBurst }),
 	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
 	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
 	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
 	"ADMIN_PASSWORD":           textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
+	"TRUSTED_PROXY_CIDRS":      textSetter(func(c *Config) *string { return &c.TrustedProxyCIDRs }, strings.TrimSpace),
 	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
 	"FIRST_EVENT_HEDGE_MODELS": textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
 	"CONTINUATION_PROMPT":      textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
@@ -297,6 +311,16 @@ var configChecks = []configCheck{
 			return fmt.Errorf("PREVIEW_LISTEN_ADDR 的端口不能与 LISTEN_ADDR 相同")
 		}
 		return nil
+	}},
+	{[]string{"PUBLIC_RATE_LIMIT", "PUBLIC_RATE_BURST"}, func(c Config) error {
+		if c.PublicRateLimit <= 0 || c.PublicRateBurst <= 0 || c.PublicRateBurst > c.PublicRateLimit {
+			return fmt.Errorf("PUBLIC_RATE_BURST 必须是 1 到 PUBLIC_RATE_LIMIT")
+		}
+		return nil
+	}},
+	{[]string{"TRUSTED_PROXY_CIDRS"}, func(c Config) error {
+		_, err := ParseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
+		return err
 	}},
 	{[]string{"PROXY"}, func(c Config) error {
 		for _, proxy := range ProxyList(c.Proxy) {
@@ -501,6 +525,7 @@ func (c Config) envValues() map[string]string {
 		"ADMIN_AUTH_ENABLED":       strconv.FormatBool(c.AdminAuthEnabled),
 		"ADMIN_USERNAME":           c.AdminUsername,
 		"ADMIN_PASSWORD":           c.AdminPassword,
+		"TRUSTED_PROXY_CIDRS":      c.TrustedProxyCIDRs,
 		"BUILD_NATIVE_NONSTREAM":   strconv.FormatBool(c.BuildNativeNonstream),
 		"NONSTREAM_KEEPALIVE":      strconv.FormatBool(c.NonstreamKeepalive),
 		"FAKE_STREAM":              strconv.FormatBool(c.FakeStream),
@@ -515,6 +540,8 @@ func (c Config) envValues() map[string]string {
 		"LISTEN_ADDR":              c.ListenAddr,
 		"PREVIEW_LISTEN_ADDR":      c.PreviewListenAddr,
 		"PROXY_API_KEY":            c.ProxyAPIKey,
+		"PUBLIC_RATE_LIMIT":        strconv.Itoa(c.PublicRateLimit),
+		"PUBLIC_RATE_BURST":        strconv.Itoa(c.PublicRateBurst),
 		"PROXY":                    c.Proxy,
 		"INIT_TIMEOUT":             c.InitTimeout.String(),
 		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
@@ -575,6 +602,10 @@ func writeEnv(path string, values map[string]string) error {
 func (c Config) Validate() error {
 	if c.AdminAuthEnabled && (strings.TrimSpace(c.AdminUsername) == "" || strings.TrimSpace(c.AdminPassword) == "") {
 		return fmt.Errorf("开启管理登录需要 ADMIN_USERNAME 与 ADMIN_PASSWORD")
+	}
+	// 不并入 configChecks：取值无效时不能被静默改回回环地址，否则容器内会监听回环而端口映射失效
+	if !loopbackListenAddr(c.ListenAddr) && len(APIKeys(c.ProxyAPIKey)) == 0 {
+		return fmt.Errorf("LISTEN_ADDR 不是本机回环地址时必须设置 PROXY_API_KEY")
 	}
 	for _, check := range configChecks {
 		if err := check.check(c); err != nil {
@@ -656,6 +687,25 @@ func APIKeys(value string) []string {
 		}
 	}
 	return keys
+}
+
+// ParseTrustedProxyCIDRs 解析逗号分隔的可信反向代理网段。仅这些来源的 Forwarded 请求头可影响安全决策。
+func ParseTrustedProxyCIDRs(value string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for item := range strings.SplitSeq(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil || prefix != prefix.Masked() {
+			return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS 中的 %q 不是有效 CIDR", item)
+		}
+		if !slices.Contains(prefixes, prefix) {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	return prefixes, nil
 }
 
 // ParseModelMapping 解析逗号分隔的 别名:模型 ID，别名可含冒号，以最后一个冒号分隔
@@ -867,6 +917,20 @@ func validateListenAddr(key, value string) error {
 func listenPort(value string) string {
 	_, port, _ := net.SplitHostPort(strings.TrimSpace(value))
 	return port
+}
+
+// loopbackListenAddr 判断监听地址是否只接受本机连接。只有 localhost 和字面回环 IP 可在没有公开 API key 时使用。
+func loopbackListenAddr(value string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,11 +14,19 @@ import (
 
 // Config 定义公开 API 服务配置
 type Config struct {
-	APIKey           string
-	Admin            AdminService
-	AdminAuthEnabled bool
-	AdminUsername    string
-	AdminPassword    string
+	APIKey string
+	// PublicRateLimit 是每个 API key（无 key 时每个对端 IP）每分钟允许的公开 API 请求数。
+	PublicRateLimit int
+	// PublicRateBurst 是单个身份可立即使用的令牌数。
+	PublicRateBurst int
+	// MaxPublicInFlight 限制同时执行的公开 API 请求；零值使用保守默认值。
+	MaxPublicInFlight int
+	// TrustedProxyCIDRs 是可提供可信转发协议头的反向代理网段。
+	TrustedProxyCIDRs []netip.Prefix
+	Admin             AdminService
+	AdminAuthEnabled  bool
+	AdminUsername     string
+	AdminPassword     string
 	// AdminSessionPath 是记住我的管理会话文件
 	AdminSessionPath string
 	Ledger           RequestLedger
@@ -131,7 +140,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public))))))
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public))))))))
 	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
 	root.Handle("/v1/", loggedHandler)
 	root.Handle("/v1beta/", loggedHandler)

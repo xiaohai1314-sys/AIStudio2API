@@ -183,9 +183,11 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | 变量 | 作用 | 默认值 |
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | 账户文件、目录或逗号分隔的多个路径 | `auth` |
-| `LISTEN_ADDR` | HTTP 服务监听地址；端口被 Windows 保留（Hyper-V、WSL2 或 Docker 的 WinNAT 保留端口段）时改用其后第一个可监听的端口，管理页面顶部显示改用的地址 | `127.0.0.1:2048` |
+| `LISTEN_ADDR` | HTTP 服务监听地址；端口被 Windows 保留（Hyper-V、WSL2 或 Docker 的 WinNAT 保留端口段）时改用其后第一个可监听的端口，管理页面顶部显示改用的地址；不是本机回环地址时必须同时设置 `PROXY_API_KEY`，否则服务拒绝启动 | `127.0.0.1:2048` |
 | `PREVIEW_LISTEN_ADDR` | API 试用页 HTML 预览来源的监听地址，只提供 `/shim.html`；端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口，实际地址为管理端配置中的 `active_preview_listen_addr`；管理进程重启后生效 | `127.0.0.1:2050` |
-| `PROXY_API_KEY` | 公开 API 访问密钥，多个用逗号分隔 | 空 |
+| `PROXY_API_KEY` | 公开 API 访问密钥，多个用逗号分隔；`LISTEN_ADDR` 不是本机回环地址时必填 | 空 |
+| `PUBLIC_RATE_LIMIT` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数 | `120` |
+| `PUBLIC_RATE_BURST` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` | `30` |
 | `API_KEY_ACCOUNTS` | 逗号分隔，每项以最后一个 `:` 分成 `PROXY_API_KEY` 中的 key 与以 `\|` 分隔的账户 ID，该 key 的请求与文件上传只在这些账户中选号，未列出的 key 可用全部账户，不在 `PROXY_API_KEY` 中的项不起作用；保存后立即生效，同时修改 `PROXY_API_KEY` 时，管理服务重启前仍被接受的 key 沿用原来的绑定 | 空 |
 | `AUTO_START` | 管理服务就绪后自动启动生成服务；失败记录 `ERROR` 日志，管理服务继续运行，账户与配置以外的原因失败时以 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 | `false` |
 | `REQUEST_BODY_LOG` | 保存公开 API 的 POST 请求与响应正文，各截断到 64 KiB，只保留最近 1000 条；保存后立即生效 | `false` |
@@ -194,6 +196,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `ADMIN_AUTH_ENABLED` | 管理员账号密码登录开关 | `false` |
 | `ADMIN_USERNAME` | 管理员账号 | `admin` |
 | `ADMIN_PASSWORD` | 管理员密码，开启登录时必填 | 空 |
+| `TRUSTED_PROXY_CIDRS` | 可信反向代理的逗号分隔 CIDR；仅这些来源的 `X-Forwarded-Proto` 可影响管理会话 Cookie 的 Secure 属性 | 空 |
 | `PROXY` | setup 与未设置账户代理时使用的出口，多个代理用逗号分隔组成代理池；留空时生成服务使用系统代理 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
 | `REQUEST_TIMEOUT` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 | `30m` |
@@ -258,7 +261,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 - 登录有效期为 12 小时；登录时勾选“30 天内保持登录”的会话有效期为 30 天，保存在 `runtime/admin-sessions.json`，管理进程重启后仍有效
 - 退出登录撤销会话并结束它的管理 SSE 订阅
 
-登录关闭时，管理 API 使用回环来源与回环 Host 校验。远程管理通过 HTTPS 反向代理，代理保留 `Host` 并设置 `X-Forwarded-Proto: https`。生成 API 的访问密钥独立配置。
+登录关闭时，管理 API 使用回环来源与回环 Host 校验。远程管理通过 HTTPS 反向代理，代理保留 `Host` 并设置 `X-Forwarded-Proto: https`，且用 `TRUSTED_PROXY_CIDRS` 显式列出代理来源 CIDR；仅可信来源的协议头可影响会话 Cookie 和返回 URL。生成 API 的访问密钥独立配置。
 
 生成服务启动顺序如下。源码中的 `generation` 表示一次 Stop/Start 创建的生成服务实例：
 

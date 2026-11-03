@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -293,6 +295,27 @@ func (auth *adminAuth) setCookie(w http.ResponseWriter, r *http.Request, token s
 	http.SetCookie(w, &http.Cookie{
 		Name: adminCookieName, Value: token, Path: "/api", MaxAge: age,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		Secure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+		Secure: r.TLS != nil || trustedForwardedHTTPS(r, auth.config.TrustedProxyCIDRs),
 	})
+}
+
+// trustedForwardedHTTPS 仅当对端属于显式配置的可信代理网段时，才接受其 X-Forwarded-Proto。
+func trustedForwardedHTTPS(r *http.Request, trusted []netip.Prefix) bool {
+	if len(trusted) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	address = address.Unmap()
+	if !slices.ContainsFunc(trusted, func(prefix netip.Prefix) bool { return prefix.Contains(address) }) {
+		return false
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }

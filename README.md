@@ -225,7 +225,7 @@ docker compose up -d
 
 镜像支持 linux/amd64 与 linux/arm64，服务在容器内监听 `0.0.0.0:2048`。`data/` 保存 `.env`、`auth/` 与 `runtime/`，Camoufox 后端首次启动时把 Camoufox 下载到 `data/runtime/camoufox/`；迁移已有安装时把这三项复制到 `data/`。容器以 root 运行，服务写入 `data/` 的文件属于 root，Linux 宿主机上用 `sudo` 编辑。
 
-- 端口对外开放时设置 `PROXY_API_KEY`；从容器外打开管理页面需要 `ADMIN_AUTH_ENABLED=true` 与管理密码，用户名默认为 `admin`
+- 容器内固定监听 `0.0.0.0:2048`，因此即使 Compose 只把端口绑定到宿主机回环地址，`data/.env` 也必须设置 `PROXY_API_KEY`，否则服务拒绝启动。确需供其他机器访问时，再将 `docker-compose.yml` 的端口改为 `0.0.0.0:2048:2048`（预览端口按需开放）并使用高强度 key；从容器外打开管理页面还需要 `ADMIN_AUTH_ENABLED=true` 与管理密码，用户名默认为 `admin`
 - 添加账户：在管理页面“添加账户”中选择“浏览器登录”，在管理页面打开的登录窗口中登录 Google；也可以粘贴 Cookie，或把能登录 Google 的电脑上的 `auth/<Google 邮箱>/` 复制到 `data/auth/`
 - `PROXY` 与账户代理从容器内访问，代理运行在宿主机时填写宿主机的局域网地址，并允许代理接受局域网连接
 - 容器时区为 UTC，新账户的指纹时区、日志时间与用量页的按日统计取容器时区；在 `docker-compose.yml` 中加入 `environment: { TZ: <IANA 时区> }` 改用其他时区，账户时区也可在账户页单独设置
@@ -289,7 +289,7 @@ docker compose up -d
 3. 点击“停止服务”会取消正在进行的启动或活动请求并关闭 WAA Worker，管理页面与日志保持可用
 4. 再次点击“启动服务”即可恢复 API
 
-停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略与 Worker 容量保存后立即生效；管理页面地址、预览地址和 `PROXY_API_KEY` 在管理进程重启后生效。
+停止后再次启动会读取最新 `.env` 生成服务配置，账户选择策略与 Worker 容量保存后立即生效；管理页面地址、预览地址、`PROXY_API_KEY`、`PUBLIC_RATE_LIMIT` 与 `PUBLIC_RATE_BURST` 在管理进程重启后生效。
 
 桌面版关闭窗口后在系统托盘继续运行，从托盘菜单“退出”结束管理进程；命令行版在启动窗口按 `Ctrl+C` 或关闭窗口会退出整个管理进程。关闭浏览器标签页不会停止管理进程。
 
@@ -335,7 +335,7 @@ curl http://127.0.0.1:2048/v1/chat/completions \
 | Anthropic Messages | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 | Gemini | `http://127.0.0.1:2048` | `.env` 中的 `PROXY_API_KEY` |
 
-模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。
+模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，服务只能监听 `localhost` 或回环 IP，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。
 
 以 Cherry Studio 为例：
 
@@ -587,9 +587,11 @@ cp .env.example .env
 | 变量 | 默认值 | 作用 |
 | --- | --- | --- |
 | `AISTUDIO_AUTH_STATES` | `auth` | 账户文件、目录或多个逗号分隔路径 |
-| `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址 |
+| `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址；不是本机回环地址时必须同时设置 `PROXY_API_KEY`，否则服务拒绝启动 |
 | `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览 |
-| `PROXY_API_KEY` | 空 | 公开 API key |
+| `PROXY_API_KEY` | 空 | 公开 API key；`LISTEN_ADDR` 不是本机回环地址时必填 |
+| `PUBLIC_RATE_LIMIT` | `120` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数；超限返回 429 |
+| `PUBLIC_RATE_BURST` | `30` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` |
 | `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
@@ -598,6 +600,7 @@ cp .env.example .env
 | `ADMIN_AUTH_ENABLED` | `false` | 管理控制台账号密码登录开关 |
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
+| `TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理的逗号分隔 CIDR，例如 `127.0.0.1/32`；仅这些来源的 `X-Forwarded-Proto` 可使管理会话 Cookie 标记为 Secure |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
 | `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 |
@@ -622,7 +625,7 @@ cp .env.example .env
 | `WAA_BACKEND` | `camoufox` | `camoufox` 在 Camoufox 页面运行 WAA；`spidermonkey` 在服务进程内的 SpiderMonkey 中运行 WAA，不下载也不启动 Camoufox |
 | `TEMPORARY_CHAT` | `false` | WAA 预热页是否使用临时对话 |
 | `MEDIA_OUTPUT` | `inline` | Chat Completions 与 Messages 正文中生成图片与音频的引用方式：`inline` 以 data URI 内联；`url` 按内容命名保存到 `runtime/media/`，以本服务的 `/media/<文件名>` URL 引用，该路径不校验 API key |
-| `MEDIA_BASE_URL` | 空 | 媒体 URL 使用的服务地址，例如 `https://ai.example.com`；留空时使用每个请求访问的地址，经反向代理时跟随 `X-Forwarded-Proto` |
+| `MEDIA_BASE_URL` | 空 | 媒体 URL 使用的服务地址，例如 `https://ai.example.com`；留空时使用每个请求访问的地址，可信反向代理的 HTTPS 协议需配置 `TRUSTED_PROXY_CIDRS` |
 
 服务启动时会载入 `AISTUDIO_AUTH_STATES` 中的全部账户；`WARM_WORKER_LIMIT` 控制常驻预热规模，`MAX_ACTIVE_WORKERS` 控制峰值 Worker 上限，`WARM_STARTUP_CONCURRENCY` 控制同时冷启动的 Camoufox Worker 数，`PER_ACCOUNT_CONCURRENCY` 控制单账户请求槽位；这四项在管理页面保存后立即作用于后续调度，峰值上限调低时关闭多出的空闲 Worker，常驻数调高时补足预热。
 
@@ -636,7 +639,7 @@ cp .env.example .env
 
 公开 API 使用独立的 `PROXY_API_KEY`。
 
-反向代理使用 HTTPS，并保留原始 `Host`、设置 `X-Forwarded-Proto: https`。管理页“服务配置”可调整登录开关及凭据，保存后重启程序生效。
+反向代理使用 HTTPS，并保留原始 `Host`、设置 `X-Forwarded-Proto: https`。同时设置 `TRUSTED_PROXY_CIDRS` 为代理到本服务的来源 CIDR（例如本机代理为 `127.0.0.1/32`）；否则服务会刻意忽略该协议头，避免客户端伪造 HTTPS 标记影响管理会话 Cookie 或返回的绝对 URL。管理页“服务配置”可调整登录开关及凭据，保存后重启程序生效。
 
 API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来源，页面以当前访问的主机名加该端口打开预览。从其他电脑访问时，`PREVIEW_LISTEN_ADDR` 与 `LISTEN_ADDR` 一样监听可访问的地址；经反向代理访问时，在同一主机名的同一端口号上再代理到 `PREVIEW_LISTEN_ADDR`，例如管理页面为 `https://ai.example.com` 时，代理 `https://ai.example.com:2050` 到本机 `2050`。
 

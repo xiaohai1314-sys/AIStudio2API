@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -463,6 +465,114 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+const maxPublicRateLimitBuckets = 4096
+
+type publicRateBucket struct {
+	tokens  float64
+	updated time.Time
+}
+
+// publicRateLimiter 是进程内的每身份令牌桶。身份数量有上限，避免未设 API key 的本机模式被大量伪造来源耗尽内存。
+type publicRateLimiter struct {
+	mu      sync.Mutex
+	rate    float64
+	burst   float64
+	buckets map[string]publicRateBucket
+}
+
+func newPublicRateLimiter(perMinute, burst int) *publicRateLimiter {
+	if perMinute <= 0 {
+		perMinute = 120
+	}
+	if burst <= 0 || burst > perMinute {
+		burst = min(30, perMinute)
+	}
+	return &publicRateLimiter{rate: float64(perMinute), burst: float64(burst), buckets: make(map[string]publicRateBucket)}
+}
+
+// allow 取走一个令牌；返回的秒数是客户端最早可重试的时刻。
+func (limiter *publicRateLimiter) allow(identity string, now time.Time) (retryAfter int, allowed bool) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	bucket, exists := limiter.buckets[identity]
+	if !exists {
+		if len(limiter.buckets) >= maxPublicRateLimitBuckets {
+			return 60, false
+		}
+		bucket = publicRateBucket{tokens: limiter.burst, updated: now}
+	}
+	bucket.tokens = min(limiter.burst, bucket.tokens+now.Sub(bucket.updated).Seconds()*limiter.rate/60)
+	bucket.updated = now
+	if bucket.tokens >= 1 {
+		bucket.tokens--
+		limiter.buckets[identity] = bucket
+		return 0, true
+	}
+	limiter.buckets[identity] = bucket
+	return max(1, int(math.Ceil((1-bucket.tokens)*60/limiter.rate))), false
+}
+
+// publicRateLimitMiddleware 对每个已认证 API key 限制请求速率；没有 API key 时回退到直接对端地址。
+func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, next http.Handler) http.Handler {
+	keys := apiKeys(configuredKeys)
+	limiter := newPublicRateLimiter(perMinute, burst)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity := publicRateLimitIdentity(r, keys)
+		if retryAfter, allowed := limiter.allow(identity, time.Now()); !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			writePublicRateLimitError(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func publicRateLimitIdentity(r *http.Request, keys []string) string {
+	if key := matchedAPIKey(r, keys); key != "" {
+		digest := sha256.Sum256([]byte(key))
+		return "key:" + string(digest[:])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		return "peer:unknown"
+	}
+	return "peer:" + host
+}
+
+// publicConcurrencyMiddleware 限制执行中的公开 API 请求。流式响应、上传与后台生成均在其完成前占用一个名额，避免突发流量把 Worker 与账户队列耗尽。
+func publicConcurrencyMiddleware(limit int, next http.Handler) http.Handler {
+	if limit <= 0 {
+		limit = 16
+	}
+	slots := make(chan struct{}, limit)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-r.Context().Done():
+			return
+		default:
+			w.Header().Set("Retry-After", "1")
+			writePublicRateLimitError(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writePublicRateLimitError 按请求协议返回可重试的容量保护错误。
+func writePublicRateLimitError(w http.ResponseWriter, r *http.Request) {
+	const message = "Too many requests are already in progress; retry shortly."
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/v1/messages"):
+		writeAnthropicError(w, http.StatusTooManyRequests, "rate_limit_error", message)
+	case strings.HasPrefix(r.URL.Path, "/v1beta/"), strings.HasPrefix(r.URL.Path, "/upload/"):
+		writeGeminiError(w, http.StatusTooManyRequests, "RESOURCE_EXHAUSTED", message)
+	default:
+		writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", message)
+	}
+}
+
 func sameOriginMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
@@ -486,7 +596,7 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
 	keys := apiKeys(configuredKeys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(keys) > 0 && !checkAPIKeyMatches(r, keys) {
+		if len(keys) > 0 && matchedAPIKey(r, keys) == "" {
 			writeAuthError(w, r)
 			return
 		}
@@ -502,11 +612,8 @@ func apiKeyContextMiddleware(configuredKeys string, next http.Handler) http.Hand
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, candidate := range apiKeyCandidates(r) {
-			if candidate != "" && slices.Contains(keys, candidate) {
-				r = r.WithContext(aistudio.ContextWithAPIKey(r.Context(), candidate))
-				break
-			}
+		if key := matchedAPIKey(r, keys); key != "" {
+			r = r.WithContext(aistudio.ContextWithAPIKey(r.Context(), key))
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -539,17 +646,22 @@ func apiKeyCandidates(r *http.Request) []string {
 
 // checkAPIKeyMatches 判断请求头或 URL 中任一 API key 是否与配置的某个 key 相同
 func checkAPIKeyMatches(r *http.Request, keys []string) bool {
+	return matchedAPIKey(r, keys) != ""
+}
+
+// matchedAPIKey 返回与请求凭据常量时间匹配的已配置 API key。
+func matchedAPIKey(r *http.Request, keys []string) string {
 	for _, cand := range apiKeyCandidates(r) {
 		if cand == "" {
 			continue
 		}
 		for _, key := range keys {
 			if subtle.ConstantTimeCompare([]byte(cand), []byte(key)) == 1 {
-				return true
+				return key
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // bearerToken 返回 Authorization Bearer 凭据

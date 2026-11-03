@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -107,4 +108,25 @@ func TestAdminLoginRateLimit(t *testing.T) {
 		t.Fatal(login.Code)
 	}
 	authExchange(handler, "POST", "/api/auth/logout", "", login.Result().Cookies()[0])
+}
+
+func TestTrustedProxyForwardedHTTPS(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.42.0.0/16")}
+	request := httptest.NewRequest(http.MethodGet, "http://console.example/api/auth/session", nil)
+	request.RemoteAddr = "10.42.1.10:443"
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if !trustedForwardedHTTPS(request, trusted) {
+		t.Fatal("trusted proxy HTTPS was not accepted")
+	}
+	request.RemoteAddr = "192.0.2.10:443"
+	if trustedForwardedHTTPS(request, trusted) {
+		t.Fatal("untrusted peer controlled X-Forwarded-Proto")
+	}
+	if origin := (&server{config: Config{TrustedProxyCIDRs: trusted}}).requestOrigin(request); origin != "http://console.example" {
+		t.Fatalf("untrusted proxy origin = %q", origin)
+	}
+	request.RemoteAddr = "10.42.1.10:443"
+	if origin := (&server{config: Config{TrustedProxyCIDRs: trusted}}).requestOrigin(request); origin != "https://console.example" {
+		t.Fatalf("trusted proxy origin = %q", origin)
+	}
 }
