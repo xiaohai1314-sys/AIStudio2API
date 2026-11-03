@@ -1511,6 +1511,7 @@ export const messages: Record<TranslationKey, string> = {
     'HTTP, HTTPS 또는 SOCKS5 프록시. 쉼표로 여러 개를 구분하면 프록시 풀이 되며, 비우면 시스템 프록시 사용',
   'settings.proxyPool': '프록시 풀',
   'settings.proxyScore': '건강도 {score}%',
+  'settings.proxyForbidden': '403 비율 {rate}%',
   'settings.proxyAvailable': '사용 가능',
   'settings.proxyUnavailable': '사용 불가',
   'settings.proxyAccounts': '계정 {count}개',

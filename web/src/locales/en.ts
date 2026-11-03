@@ -1543,6 +1543,7 @@ export const messages: Record<TranslationKey, string> = {
     'HTTP, HTTPS or SOCKS5 proxy. Separate several with commas to form a pool; empty uses the system proxy',
   'settings.proxyPool': 'Proxy pool',
   'settings.proxyScore': 'Health {score}%',
+  'settings.proxyForbidden': '403 rate {rate}%',
   'settings.proxyAvailable': 'Available',
   'settings.proxyUnavailable': 'Unavailable',
   'settings.proxyAccounts': '{count} accounts',

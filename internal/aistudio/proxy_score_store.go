@@ -23,9 +23,10 @@ type proxyScoreFile struct {
 
 // proxyScoreSample 是一个代理在评分窗口内的样本
 type proxyScoreSample struct {
-	Good  int       `json:"good"`
-	Bad   int       `json:"bad"`
-	Since time.Time `json:"since"`
+	Good    int                `json:"good"`
+	Bad     int                `json:"bad"`
+	Since   time.Time          `json:"since"`
+	History []proxyScoreBucket `json:"history,omitempty"`
 }
 
 // LoadScores 读取上次进程保存的评分样本，文件不存在时直接返回
@@ -53,11 +54,18 @@ func (p *ProxyPool) LoadScores(path string) error {
 	now := time.Now()
 	for _, entry := range p.entries {
 		sample, ok := file.Proxies[proxyScoreKey(entry.proxy)]
-		if !ok || sample.Good < 0 || sample.Bad < 0 || now.Sub(sample.Since) >= proxyScoreWindow {
+		if !ok || sample.Good < 0 || sample.Bad < 0 {
 			continue
 		}
-		entry.good, entry.bad, entry.scoreSince = sample.Good, sample.Bad, sample.Since
-		entry.score = proxyScore(entry.good, entry.bad)
+		if now.Sub(sample.Since) < proxyScoreWindow {
+			entry.good, entry.bad, entry.scoreSince = sample.Good, sample.Bad, sample.Since
+		}
+		for _, bucket := range sample.History {
+			if bucket.Hour.IsZero() || now.Sub(bucket.Hour) >= proxyHistoryWindow || bucket.Hour.After(now) {
+				continue
+			}
+			entry.history[proxyHistoryIndex(bucket.Hour)] = bucket
+		}
 	}
 	return nil
 }
@@ -102,14 +110,20 @@ func (p *ProxyPool) saveLocked() error {
 		return nil
 	}
 	now := time.Now()
-	file := proxyScoreFile{Version: 1, UpdatedAt: now.UTC(), Proxies: make(map[string]proxyScoreSample, len(p.entries))}
+	file := proxyScoreFile{Version: 2, UpdatedAt: now.UTC(), Proxies: make(map[string]proxyScoreSample, len(p.entries))}
 	for _, entry := range p.entries {
-		if entry.good+entry.bad == 0 || now.Sub(entry.scoreSince) >= proxyScoreWindow {
+		if entry.good+entry.bad == 0 && entry.historyTotalsEmpty(now) {
 			continue
 		}
-		file.Proxies[proxyScoreKey(entry.proxy)] = proxyScoreSample{
-			Good: entry.good, Bad: entry.bad, Since: entry.scoreSince.UTC(),
+		sample := proxyScoreSample{Good: entry.good, Bad: entry.bad, Since: entry.scoreSince.UTC()}
+		cutoff := now.UTC().Add(-proxyHistoryWindow)
+		for _, bucket := range entry.history {
+			if bucket.Hour.IsZero() || bucket.Hour.Before(cutoff) || bucket.Hour.After(now.UTC()) {
+				continue
+			}
+			sample.History = append(sample.History, bucket)
 		}
+		file.Proxies[proxyScoreKey(entry.proxy)] = sample
 	}
 	data, err := json.Marshal(file)
 	if err != nil {

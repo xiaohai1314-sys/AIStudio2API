@@ -15,8 +15,14 @@ import (
 // proxyFailureThreshold 为代理判定不可用前允许的连续网络错误次数
 const proxyFailureThreshold = 3
 
-// proxyScoreWindow 是代理健康评分的统计窗口
+// proxyScoreWindow 是代理健康评分的短窗口
 const proxyScoreWindow = 30 * time.Minute
+
+// proxyHistoryWindow 是代理 403 率与长期评分的统计窗口
+const proxyHistoryWindow = 24 * time.Hour
+
+// proxyHistoryBuckets 是长期统计按小时分桶的数量
+const proxyHistoryBuckets = int(proxyHistoryWindow / time.Hour)
 
 // proxyQualityRanks 按出口质量排序，数值越大越优先
 var proxyQualityRanks = map[string]int{"mobile": 4, "residential": 3, "isp": 2, "datacenter": 1}
@@ -41,22 +47,32 @@ type proxyEntry struct {
 	failures  int
 	checkedAt time.Time
 	lastError string
-	// good 与 bad 是评分窗口内的成功与风控/网络失败次数，score 由二者算出
+	// good 与 bad 是短窗口内的成功与风控/网络失败次数
 	good       int
 	bad        int
-	score      int
 	scoreSince time.Time
+	// history 是近 24 小时按小时分桶的样本，用于长期评分与 403 率
+	history [proxyHistoryBuckets]proxyScoreBucket
 }
 
-// ProxyStatus 表示代理池中一个代理的可用性、健康评分与绑定账户数
+// proxyScoreBucket 是一个小时内的代理样本
+type proxyScoreBucket struct {
+	Hour      time.Time `json:"hour"`
+	Good      int       `json:"good"`
+	Bad       int       `json:"bad"`
+	Forbidden int       `json:"forbidden"`
+}
+
+// ProxyStatus 表示代理池中一个代理的可用性、健康评分、403 率与绑定账户数
 type ProxyStatus struct {
-	Proxy     string     `json:"proxy"`
-	Quality   string     `json:"quality,omitempty"`
-	Available bool       `json:"available"`
-	Accounts  int        `json:"accounts"`
-	Score     int        `json:"score"`
-	CheckedAt *time.Time `json:"checked_at,omitempty"`
-	Error     string     `json:"error,omitempty"`
+	Proxy         string     `json:"proxy"`
+	Quality       string     `json:"quality,omitempty"`
+	Available     bool       `json:"available"`
+	Accounts      int        `json:"accounts"`
+	Score         int        `json:"score"`
+	ForbiddenRate int        `json:"forbidden_rate"`
+	CheckedAt     *time.Time `json:"checked_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
 }
 
 // NewProxyPool 创建代理池，proxies 为空时账户使用系统代理或直连
@@ -65,7 +81,7 @@ func NewProxyPool(pool *AccountPool, proxies []string) *ProxyPool {
 	for _, proxy := range proxies {
 		if proxy = strings.TrimSpace(proxy); proxy != "" {
 			quality := appconfig.ProxyQuality(proxy)
-			entries = append(entries, &proxyEntry{proxy: proxy, quality: quality, rank: proxyQualityRanks[quality], score: 100})
+			entries = append(entries, &proxyEntry{proxy: proxy, quality: quality, rank: proxyQualityRanks[quality]})
 		}
 	}
 	return &ProxyPool{pool: pool, entries: entries}
@@ -190,13 +206,13 @@ func (p *ProxyPool) rankOfLocked(proxy string) int {
 // scoreOfLocked 返回代理的健康评分，未记录的代理按满分处理
 func (p *ProxyPool) scoreOfLocked(proxy string) int {
 	if entry := p.entryLocked(proxy); entry != nil {
-		return entry.score
+		return entry.scoreLocked(time.Now())
 	}
 	return 100
 }
 
-// recordLocked 记录一次成功或失败并重算评分，窗口过期后从零开始
-func (entry *proxyEntry) recordLocked(good bool, now time.Time) {
+// recordLocked 记录一次结果并更新短窗口与小时分桶，窗口过期后从零开始
+func (entry *proxyEntry) recordLocked(good, forbidden bool, now time.Time) {
 	if now.Sub(entry.scoreSince) >= proxyScoreWindow {
 		entry.good, entry.bad = 0, 0
 		entry.scoreSince = now
@@ -206,7 +222,74 @@ func (entry *proxyEntry) recordLocked(good bool, now time.Time) {
 	} else {
 		entry.bad++
 	}
-	entry.score = proxyScore(entry.good, entry.bad)
+	hour := now.UTC().Truncate(time.Hour)
+	bucket := &entry.history[proxyHistoryIndex(hour)]
+	if !bucket.Hour.Equal(hour) {
+		*bucket = proxyScoreBucket{Hour: hour}
+	}
+	if good {
+		bucket.Good++
+	} else {
+		bucket.Bad++
+	}
+	if forbidden {
+		bucket.Forbidden++
+	}
+}
+
+// scoreLocked 合并短窗口与近 24 小时的评分，短窗口没有样本时使用长期评分
+func (entry *proxyEntry) scoreLocked(now time.Time) int {
+	longGood, longBad, _ := entry.historyTotals(now)
+	switch {
+	case entry.good+entry.bad == 0 && longGood+longBad == 0:
+		return 100
+	case entry.good+entry.bad == 0:
+		return proxyScore(longGood, longBad)
+	case longGood+longBad == 0:
+		return proxyScore(entry.good, entry.bad)
+	}
+	short := float64(proxyScore(entry.good, entry.bad))
+	long := float64(proxyScore(longGood, longBad))
+	return int(math.Round(0.6*short + 0.4*long))
+}
+
+// forbiddenRateLocked 返回近 24 小时的 403 占全部结果的比例
+func (entry *proxyEntry) forbiddenRateLocked(now time.Time) int {
+	longGood, longBad, forbidden := entry.historyTotals(now)
+	if longGood+longBad == 0 {
+		return 0
+	}
+	return int(math.Round(100 * float64(forbidden) / float64(longGood+longBad)))
+}
+
+// historyTotals 汇总窗口内的小时桶，丢弃过期数据
+func (entry *proxyEntry) historyTotals(now time.Time) (good, bad, forbidden int) {
+	cutoff := now.UTC().Add(-proxyHistoryWindow)
+	for index := range entry.history {
+		bucket := &entry.history[index]
+		if bucket.Hour.IsZero() || bucket.Hour.Before(cutoff) || bucket.Hour.After(now.UTC()) {
+			continue
+		}
+		good += bucket.Good
+		bad += bucket.Bad
+		forbidden += bucket.Forbidden
+	}
+	return good, bad, forbidden
+}
+
+// historyTotalsEmpty 判断近 24 小时是否没有任何样本
+func (entry *proxyEntry) historyTotalsEmpty(now time.Time) bool {
+	good, bad, _ := entry.historyTotals(now)
+	return good+bad == 0
+}
+
+// proxyHistoryIndex 把小时映射到固定数量的分桶
+func proxyHistoryIndex(hour time.Time) int {
+	index := int(hour.Unix()/int64(time.Hour)) % proxyHistoryBuckets
+	if index < 0 {
+		index += proxyHistoryBuckets
+	}
+	return index
 }
 
 // proxyScore 返回 0 到 100 的健康评分，没有样本时为 100
@@ -282,7 +365,7 @@ func (p *ProxyPool) ReportFailure(proxy string, err error) ([]string, error) {
 	}
 	entry.failures++
 	entry.lastError = err.Error()
-	entry.recordLocked(false, time.Now())
+	entry.recordLocked(false, false, time.Now())
 	p.scheduleSaveLocked()
 	if entry.down || entry.failures < proxyFailureThreshold || !p.otherAvailableLocked(entry) {
 		return nil, nil
@@ -293,13 +376,22 @@ func (p *ProxyPool) ReportFailure(proxy string, err error) ([]string, error) {
 
 // ReportRisk 记录经 proxy 发出的请求命中上游风控，计入健康评分
 func (p *ProxyPool) ReportRisk(proxy string) {
+	p.reportOutcome(proxy, false, false)
+}
+
+// ReportForbidden 记录经 proxy 发出的请求被上游 403 拒绝，同时计入 403 率
+func (p *ProxyPool) ReportForbidden(proxy string) {
+	p.reportOutcome(proxy, false, true)
+}
+
+func (p *ProxyPool) reportOutcome(proxy string, good, forbidden bool) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if entry := p.entryLocked(proxy); entry != nil {
-		entry.recordLocked(false, time.Now())
+		entry.recordLocked(good, forbidden, time.Now())
 		p.scheduleSaveLocked()
 	}
 }
@@ -313,7 +405,7 @@ func (p *ProxyPool) ReportSuccess(proxy string) {
 	defer p.mu.Unlock()
 	if entry := p.entryLocked(proxy); entry != nil {
 		entry.failures = 0
-		entry.recordLocked(true, time.Now())
+		entry.recordLocked(true, false, time.Now())
 		p.scheduleSaveLocked()
 	}
 }
@@ -379,8 +471,12 @@ func (p *ProxyPool) Status() []ProxyStatus {
 	}
 	p.pool.mu.Unlock()
 	statuses := make([]ProxyStatus, 0, len(p.entries))
+	now := time.Now()
 	for _, entry := range p.entries {
-		status := ProxyStatus{Proxy: entry.proxy, Quality: entry.quality, Available: !entry.down, Accounts: counts[entry.proxy], Score: entry.score, Error: entry.lastError}
+		status := ProxyStatus{
+			Proxy: entry.proxy, Quality: entry.quality, Available: !entry.down, Accounts: counts[entry.proxy],
+			Score: entry.scoreLocked(now), ForbiddenRate: entry.forbiddenRateLocked(now), Error: entry.lastError,
+		}
 		if !entry.checkedAt.IsZero() {
 			status.CheckedAt = timePointer(entry.checkedAt)
 		}

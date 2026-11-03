@@ -222,15 +222,16 @@ type EnvironmentCheckResult struct {
 	Error             string         `json:"error,omitempty"`
 }
 
-// AdminProxy 表示代理池中一个代理的可用性、健康评分与绑定账户数
+// AdminProxy 表示代理池中一个代理的可用性、健康评分、403 率与绑定账户数
 type AdminProxy struct {
-	Proxy     string     `json:"proxy"`
-	Quality   string     `json:"quality,omitempty"`
-	Available bool       `json:"available"`
-	Accounts  int        `json:"accounts"`
-	Score     int        `json:"score"`
-	CheckedAt *time.Time `json:"checked_at,omitempty"`
-	Error     string     `json:"error,omitempty"`
+	Proxy         string     `json:"proxy"`
+	Quality       string     `json:"quality,omitempty"`
+	Available     bool       `json:"available"`
+	Accounts      int        `json:"accounts"`
+	Score         int        `json:"score"`
+	ForbiddenRate int        `json:"forbidden_rate"`
+	CheckedAt     *time.Time `json:"checked_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
 }
 
 // AdminAccountRefresh 表示一次手动刷新后的账户与刷新前后的权益和模型数

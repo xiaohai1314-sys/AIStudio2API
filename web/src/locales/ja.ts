@@ -1532,6 +1532,7 @@ export const messages: Record<TranslationKey, string> = {
     'HTTP、HTTPS、SOCKS5 プロキシ。カンマ区切りで複数指定するとプールになり、空欄ではシステム プロキシを使用',
   'settings.proxyPool': 'プロキシプール',
   'settings.proxyScore': '健全性 {score}%',
+  'settings.proxyForbidden': '403率 {rate}%',
   'settings.proxyAvailable': '利用可能',
   'settings.proxyUnavailable': '利用不可',
   'settings.proxyAccounts': '{count} アカウント',

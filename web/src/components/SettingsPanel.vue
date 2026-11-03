@@ -1014,6 +1014,11 @@ async function saveConfig(): Promise<void> {
                     <span class="text-gray-500">
                       {{ t('settings.proxyScore').replace('{score}', String(entry.score)) }}
                     </span>
+                    <span v-if="entry.forbidden_rate > 0" class="text-amber-400">
+                      {{
+                        t('settings.proxyForbidden').replace('{rate}', String(entry.forbidden_rate))
+                      }}
+                    </span>
                   </li>
                 </ul>
               </div>

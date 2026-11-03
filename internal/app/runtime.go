@@ -2193,7 +2193,7 @@ func (service *trackedService) settleAttempt(
 			service.pool.RecordEndpoint(modelID, lease.Channel(), aistudio.EndpointForbidden)
 			definitive := aistudio.DefinitiveAuthenticationFailure(err) || aistudio.DefinitiveAccountRestriction(err)
 			if !definitive {
-				service.proxies.ReportRisk(attempt.proxy)
+				service.proxies.ReportForbidden(attempt.proxy)
 			}
 			if risk.Forbidden >= aistudio.RiskIsolationThreshold && !definitive {
 				if pauseErr := service.pool.PauseAccount(accountID, fmt.Sprintf("窗口内 403 达到 %d 次，已暂停等待人工检查", aistudio.RiskIsolationThreshold)); pauseErr != nil {

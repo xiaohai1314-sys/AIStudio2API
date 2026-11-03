@@ -85,3 +85,73 @@ func TestProxyScoresRejectCorruptFile(t *testing.T) {
 		t.Fatalf("损坏文件影响了评分: %d", score)
 	}
 }
+
+// TestProxyForbiddenHistoryPersists 验证 403 计数随评分文件一起保存与恢复
+func TestProxyForbiddenHistoryPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxy-scores.json")
+	proxy := "http://a.example:8080#residential"
+	pool, _ := newQualityTestPool(0)
+	first := NewProxyPool(pool, []string{proxy})
+	if err := first.LoadScores(path); err != nil {
+		t.Fatal(err)
+	}
+	first.ReportForbidden(proxy)
+	first.ReportSuccess(proxy)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := NewProxyPool(pool, []string{proxy})
+	if err := second.LoadScores(path); err != nil {
+		t.Fatal(err)
+	}
+	if status := second.Status()[0]; status.ForbiddenRate != 50 || status.Score != 50 {
+		t.Fatalf("恢复后的 403 率与评分 = %d, %d", status.ForbiddenRate, status.Score)
+	}
+}
+
+// TestProxyHistoryScoresAfterShortWindowExpires 验证短窗口过期后仍使用 24 小时历史评分
+func TestProxyHistoryScoresAfterShortWindowExpires(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxy-scores.json")
+	proxy := "http://a.example:8080#residential"
+	hour := time.Now().Add(-3 * time.Hour).Truncate(time.Hour)
+	data, err := json.Marshal(proxyScoreFile{
+		Version: 2,
+		Proxies: map[string]proxyScoreSample{
+			proxyScoreKey(proxy): {
+				Good: 1, Bad: 3, Since: time.Now().Add(-time.Hour),
+				History: []proxyScoreBucket{{Hour: hour, Good: 1, Bad: 3, Forbidden: 3}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pool, _ := newQualityTestPool(0)
+	proxies := NewProxyPool(pool, []string{proxy})
+	if err := proxies.LoadScores(path); err != nil {
+		t.Fatal(err)
+	}
+	status := proxies.Status()[0]
+	if status.Score != 25 || status.ForbiddenRate != 75 {
+		t.Fatalf("长期历史未生效: 评分=%d 403率=%d", status.Score, status.ForbiddenRate)
+	}
+}
+
+// TestProxyHistoryDropsExpiredBuckets 验证超过 24 小时的分桶在汇总时被忽略
+func TestProxyHistoryDropsExpiredBuckets(t *testing.T) {
+	pool, _ := newQualityTestPool(0)
+	proxies := NewProxyPool(pool, []string{"http://a.example:8080"})
+	entry := proxies.entries[0]
+	now := time.Now().UTC()
+	old := now.Add(-proxyHistoryWindow - time.Hour).Truncate(time.Hour)
+	entry.history[proxyHistoryIndex(old)] = proxyScoreBucket{Hour: old, Bad: 10, Forbidden: 10}
+	if score := entry.scoreLocked(now); score != 100 {
+		t.Fatalf("过期分桶影响了评分: %d", score)
+	}
+	if rate := entry.forbiddenRateLocked(now); rate != 0 {
+		t.Fatalf("过期分桶影响了 403 率: %d", rate)
+	}
+}

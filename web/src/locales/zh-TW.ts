@@ -1443,6 +1443,7 @@ export const messages: Record<TranslationKey, string> = {
     'HTTP、HTTPS 或 SOCKS5 代理伺服器，多個以逗號分隔組成代理池；留空使用系統代理',
   'settings.proxyPool': '代理池',
   'settings.proxyScore': '健康度 {score}%',
+  'settings.proxyForbidden': '403 率 {rate}%',
   'settings.proxyAvailable': '可用',
   'settings.proxyUnavailable': '無法使用',
   'settings.proxyAccounts': '{count} 個帳號',

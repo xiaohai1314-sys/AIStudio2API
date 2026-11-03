@@ -1588,6 +1588,7 @@ export const messages: Record<TranslationKey, string> = {
     'Proxy HTTP, HTTPS ou SOCKS5. Plusieurs séparés par des virgules forment un pool ; vide utilise le proxy système',
   'settings.proxyPool': 'Pool de proxys',
   'settings.proxyScore': 'Santé {score} %',
+  'settings.proxyForbidden': 'Taux 403 {rate} %',
   'settings.proxyAvailable': 'Disponible',
   'settings.proxyUnavailable': 'Indisponible',
   'settings.proxyAccounts': '{count} comptes',

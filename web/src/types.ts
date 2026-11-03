@@ -62,6 +62,7 @@ interface ProxyPoolEntry {
   available: boolean
   accounts: number
   score: number
+  forbidden_rate: number
   checked_at?: string
   error?: string
 }

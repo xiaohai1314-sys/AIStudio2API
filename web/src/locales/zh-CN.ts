@@ -1439,6 +1439,7 @@ export const messages = {
   'settings.proxyHelp': 'HTTP、HTTPS 或 SOCKS5 代理，多个用逗号分隔组成代理池；留空用系统代理',
   'settings.proxyPool': '代理池',
   'settings.proxyScore': '健康度 {score}%',
+  'settings.proxyForbidden': '403 率 {rate}%',
   'settings.proxyAvailable': '可用',
   'settings.proxyUnavailable': '不可用',
   'settings.proxyAccounts': '{count} 个账户',

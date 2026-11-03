@@ -892,7 +892,8 @@ func (admin *runtimeAdmin) proxyPoolStatus() []api.AdminProxy {
 	pool := make([]api.AdminProxy, 0, len(statuses))
 	for _, status := range statuses {
 		pool = append(pool, api.AdminProxy{
-			Proxy: status.Proxy, Quality: status.Quality, Available: status.Available, Accounts: status.Accounts, Score: status.Score, CheckedAt: status.CheckedAt, Error: status.Error,
+			Proxy: status.Proxy, Quality: status.Quality, Available: status.Available, Accounts: status.Accounts,
+			Score: status.Score, ForbiddenRate: status.ForbiddenRate, CheckedAt: status.CheckedAt, Error: status.Error,
 		})
 	}
 	return pool
