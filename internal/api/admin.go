@@ -202,6 +202,7 @@ type EnvironmentCheckResult struct {
 // AdminProxy 表示代理池中一个代理的可用性与绑定账户数
 type AdminProxy struct {
 	Proxy     string     `json:"proxy"`
+	Quality   string     `json:"quality,omitempty"`
 	Available bool       `json:"available"`
 	Accounts  int        `json:"accounts"`
 	CheckedAt *time.Time `json:"checked_at,omitempty"`

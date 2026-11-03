@@ -46,6 +46,9 @@ var configKeys = [...]string{
 	"MAX_ACTIVE_WORKERS",
 	"WARM_STARTUP_CONCURRENCY",
 	"PER_ACCOUNT_CONCURRENCY",
+	"ACCOUNT_RATE_LIMIT",
+	"ACCOUNT_RATE_JITTER",
+	"ENVIRONMENT_BINDING",
 	"ROUTING_STRATEGY",
 	"UPSTREAM_CHANNELS",
 	"MODEL_MAPPING",
@@ -110,36 +113,42 @@ const DefaultContinuationPrompt = "Continue the assistant response after the fol
 
 // Config 保存服务的全局配置
 type Config struct {
-	AutoStart              bool
-	RequestBodyLog         bool
-	AuthFailurePause       bool
-	LogFile                bool
-	LogMaxTotalMB          int
-	AdminAuthEnabled       bool
-	AdminUsername          string
-	AdminPassword          string
-	EncryptCredentials     bool
-	TrustedProxyCIDRs      string
-	BuildNativeNonstream   bool
-	NonstreamKeepalive     bool
-	FakeStream             bool
-	YouTubeLinks           bool
-	SearchModelAliases     bool
-	GoogleSearch           bool
-	FirstEventHedge        string
-	FirstEventHedgeModels  string
-	ContinuationRewrite    bool
-	ContinuationPrompt     string
-	AuthStates             string
-	ListenAddr             string
-	PreviewListenAddr      string
-	PProfAddr              string
-	GeoIPDBPath            string
-	ProxyAPIKey            string
-	PublicRateLimit        int
-	PublicRateBurst        int
-	APIKeyAccounts         string
-	Proxy                  string
+	AutoStart             bool
+	RequestBodyLog        bool
+	AuthFailurePause      bool
+	LogFile               bool
+	LogMaxTotalMB         int
+	AdminAuthEnabled      bool
+	AdminUsername         string
+	AdminPassword         string
+	EncryptCredentials    bool
+	TrustedProxyCIDRs     string
+	BuildNativeNonstream  bool
+	NonstreamKeepalive    bool
+	FakeStream            bool
+	YouTubeLinks          bool
+	SearchModelAliases    bool
+	GoogleSearch          bool
+	FirstEventHedge       string
+	FirstEventHedgeModels string
+	ContinuationRewrite   bool
+	ContinuationPrompt    string
+	AuthStates            string
+	ListenAddr            string
+	PreviewListenAddr     string
+	PProfAddr             string
+	GeoIPDBPath           string
+	ProxyAPIKey           string
+	PublicRateLimit       int
+	PublicRateBurst       int
+	APIKeyAccounts        string
+	Proxy                 string
+	// AccountRateLimit 是单账户每分钟最多发出的上游请求数，0 表示不限制
+	AccountRateLimit int
+	// AccountRateJitter 是请求间隔的随机抖动百分比
+	AccountRateJitter int
+	// EnvironmentBinding 为真时账户认证绑定出口代理与浏览器指纹，二者变化后需要重新登录
+	EnvironmentBinding     bool
 	InitTimeout            time.Duration
 	RequestTimeout         time.Duration
 	WarmWorkerLimit        int
@@ -182,6 +191,9 @@ func Default() Config {
 		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
+		AccountRateLimit:       60,
+		AccountRateJitter:      25,
+		EnvironmentBinding:     true,
 		PublicRateLimit:        defaultPublicRateLimit,
 		PublicRateBurst:        defaultPublicRateBurst,
 		GeoIPDBPath:            defaultGeoIPDBPath,
@@ -231,6 +243,9 @@ var configSetters = map[string]func(*Config, string) error{
 	"MAX_ACTIVE_WORKERS":       intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
 	"WARM_STARTUP_CONCURRENCY": intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
 	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
+	"ACCOUNT_RATE_LIMIT":       intSetter("ACCOUNT_RATE_LIMIT", func(c *Config) *int { return &c.AccountRateLimit }),
+	"ACCOUNT_RATE_JITTER":      intSetter("ACCOUNT_RATE_JITTER", func(c *Config) *int { return &c.AccountRateJitter }),
+	"ENVIRONMENT_BINDING":      boolSetter("ENVIRONMENT_BINDING", func(c *Config) *bool { return &c.EnvironmentBinding }),
 	"PUBLIC_RATE_LIMIT":        intSetter("PUBLIC_RATE_LIMIT", func(c *Config) *int { return &c.PublicRateLimit }),
 	"PUBLIC_RATE_BURST":        intSetter("PUBLIC_RATE_BURST", func(c *Config) *int { return &c.PublicRateBurst }),
 	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
@@ -387,6 +402,15 @@ var configChecks = []configCheck{
 	{[]string{"PER_ACCOUNT_CONCURRENCY"}, func(c Config) error {
 		if c.PerAccountConcurrency <= 0 {
 			return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
+		}
+		return nil
+	}},
+	{[]string{"ACCOUNT_RATE_LIMIT", "ACCOUNT_RATE_JITTER"}, func(c Config) error {
+		if c.AccountRateLimit < 0 {
+			return fmt.Errorf("ACCOUNT_RATE_LIMIT 不能为负数")
+		}
+		if c.AccountRateJitter < 0 || c.AccountRateJitter > 90 {
+			return fmt.Errorf("ACCOUNT_RATE_JITTER 必须是 0 到 90 之间的整数")
 		}
 		return nil
 	}},
@@ -578,6 +602,9 @@ func (c Config) envValues() map[string]string {
 		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
 		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
 		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
+		"ACCOUNT_RATE_LIMIT":       strconv.Itoa(c.AccountRateLimit),
+		"ACCOUNT_RATE_JITTER":      strconv.Itoa(c.AccountRateJitter),
+		"ENVIRONMENT_BINDING":      strconv.FormatBool(c.EnvironmentBinding),
 		"ROUTING_STRATEGY":         c.RoutingStrategy,
 		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":            c.ModelMapping,
@@ -815,6 +842,32 @@ func ProxyList(value string) []string {
 	return proxies
 }
 
+// ProxyQualityTags 是代理 URL 片段中允许的出口质量标签，按优先级从高到低排列
+var ProxyQualityTags = []string{"mobile", "residential", "isp", "datacenter"}
+
+// ProxyQuality 返回代理 URL 片段中的出口质量标签，未标注时返回空字符串
+func ProxyQuality(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	quality := strings.ToLower(strings.TrimSpace(parsed.Fragment))
+	if slices.Contains(ProxyQualityTags, quality) {
+		return quality
+	}
+	return ""
+}
+
+// ProxyAddress 返回去掉质量标签后的代理地址，用于比较出口是否变化
+func ProxyAddress(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Fragment == "" {
+		return strings.TrimSpace(value)
+	}
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
 // ValidateProxy 校验账户或全局代理 URL
 func ValidateProxy(value string) error {
 	value = strings.TrimSpace(value)
@@ -833,8 +886,11 @@ func ValidateProxy(value string) error {
 	if parsed.User != nil && parsed.User.Username() == "" {
 		return fmt.Errorf("PROXY 认证信息缺少用户名")
 	}
-	if parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("PROXY 不能包含路径、查询参数或片段")
+	if parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" {
+		return fmt.Errorf("PROXY 不能包含路径或查询参数")
+	}
+	if parsed.Fragment != "" && ProxyQuality(value) == "" {
+		return fmt.Errorf("PROXY 片段只能是 %s 之一", strings.Join(ProxyQualityTags, "、"))
 	}
 	return nil
 }

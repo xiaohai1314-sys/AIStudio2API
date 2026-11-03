@@ -7,10 +7,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	appconfig "github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
 // proxyFailureThreshold 为代理判定不可用前允许的连续网络错误次数
 const proxyFailureThreshold = 3
+
+// proxyQualityRanks 按出口质量排序，数值越大越优先
+var proxyQualityRanks = map[string]int{"mobile": 4, "residential": 3, "isp": 2, "datacenter": 1}
 
 // ProxyPool 把未固定代理的账户按绑定数分配到代理池，代理不可用时改绑到其他可用代理
 type ProxyPool struct {
@@ -22,6 +27,8 @@ type ProxyPool struct {
 // proxyEntry 表示代理池中的一个代理与其健康状态
 type proxyEntry struct {
 	proxy     string
+	quality   string
+	rank      int
 	down      bool
 	failures  int
 	checkedAt time.Time
@@ -31,6 +38,7 @@ type proxyEntry struct {
 // ProxyStatus 表示代理池中一个代理的可用性与绑定账户数
 type ProxyStatus struct {
 	Proxy     string     `json:"proxy"`
+	Quality   string     `json:"quality,omitempty"`
 	Available bool       `json:"available"`
 	Accounts  int        `json:"accounts"`
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
@@ -42,7 +50,8 @@ func NewProxyPool(pool *AccountPool, proxies []string) *ProxyPool {
 	entries := make([]*proxyEntry, 0, len(proxies))
 	for _, proxy := range proxies {
 		if proxy = strings.TrimSpace(proxy); proxy != "" {
-			entries = append(entries, &proxyEntry{proxy: proxy})
+			quality := appconfig.ProxyQuality(proxy)
+			entries = append(entries, &proxyEntry{proxy: proxy, quality: quality, rank: proxyQualityRanks[quality]})
 		}
 	}
 	return &ProxyPool{pool: pool, entries: entries}
@@ -87,12 +96,7 @@ func (p *ProxyPool) assignLocked() ([]string, error) {
 		pending = append(pending, account)
 	}
 	for _, account := range pending {
-		chosen := available[0]
-		for _, proxy := range available[1:] {
-			if counts[proxy] < counts[chosen] {
-				chosen = proxy
-			}
-		}
+		chosen := p.chooseLocked(available, counts)
 		counts[chosen]++
 		bindings[account] = chosen
 	}
@@ -142,13 +146,29 @@ func (p *ProxyPool) Next() string {
 		}
 	}
 	p.pool.mu.Unlock()
+	chosen := p.chooseLocked(available, counts)
+	return chosen
+}
+
+// chooseLocked 在可用代理中选出出口质量最高、绑定数最少的代理
+func (p *ProxyPool) chooseLocked(available []string, counts map[string]int) string {
 	chosen := available[0]
+	chosenRank := p.rankOfLocked(chosen)
 	for _, proxy := range available[1:] {
-		if counts[proxy] < counts[chosen] {
-			chosen = proxy
+		rank := p.rankOfLocked(proxy)
+		if rank > chosenRank || rank == chosenRank && counts[proxy] < counts[chosen] {
+			chosen, chosenRank = proxy, rank
 		}
 	}
 	return chosen
+}
+
+// rankOfLocked 返回代理的出口质量等级，未标注时为 0
+func (p *ProxyPool) rankOfLocked(proxy string) int {
+	if entry := p.entryLocked(proxy); entry != nil {
+		return entry.rank
+	}
+	return 0
 }
 
 // availableLocked 返回可用代理；全部不可用时返回全部代理
@@ -297,7 +317,7 @@ func (p *ProxyPool) Status() []ProxyStatus {
 	p.pool.mu.Unlock()
 	statuses := make([]ProxyStatus, 0, len(p.entries))
 	for _, entry := range p.entries {
-		status := ProxyStatus{Proxy: entry.proxy, Available: !entry.down, Accounts: counts[entry.proxy], Error: entry.lastError}
+		status := ProxyStatus{Proxy: entry.proxy, Quality: entry.quality, Available: !entry.down, Accounts: counts[entry.proxy], Error: entry.lastError}
 		if !entry.checkedAt.IsZero() {
 			status.CheckedAt = timePointer(entry.checkedAt)
 		}

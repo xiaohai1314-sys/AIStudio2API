@@ -162,7 +162,15 @@ func NewProxyHTTPClient(proxyURL string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{Transport: roundTripper}, nil
+	client := &http.Client{Transport: roundTripper}
+	// 登录与人机验证跳转不自动跟随，交由调用方识别为风控并暂停账户
+	client.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+		if challengeURL(request.URL.String()) {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
+	return client, nil
 }
 
 // UploadAssistantFile 以账户身份按官网对话面板的 /_/upload 可续传协议上传附件，返回上传路径

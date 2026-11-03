@@ -540,6 +540,9 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 	if err != nil {
 		return fmt.Errorf("读取 bidi WebChannel handshake: %w", err)
 	}
+	if challenge := DetectChallenge("BidiGenerateContent", response.StatusCode, response.Header, body); challenge != nil {
+		return challenge
+	}
 	if response.StatusCode != http.StatusOK {
 		return DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
 	}
@@ -720,6 +723,9 @@ func (s *BidiSession) postBatch(ctx context.Context, batch []bidiOutgoing) (resu
 	if err != nil {
 		return fmt.Errorf("读取 bidi WebChannel ACK: %w", err)
 	}
+	if challenge := DetectChallenge("BidiGenerateContent", response.StatusCode, response.Header, body); challenge != nil {
+		return challenge
+	}
 	if response.StatusCode != http.StatusOK {
 		return DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
 	}
@@ -837,6 +843,9 @@ func (s *BidiSession) readBackchannel(first bool, ready func(error)) (int, error
 		body, readErr := io.ReadAll(response.Body)
 		if readErr != nil {
 			return 0, readErr
+		}
+		if challenge := DetectChallenge("BidiGenerateContent", response.StatusCode, response.Header, body); challenge != nil {
+			return 0, challenge
 		}
 		return 0, DecodeRPCError("BidiGenerateContent", response.StatusCode, body)
 	}

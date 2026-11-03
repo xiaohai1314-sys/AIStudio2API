@@ -509,6 +509,10 @@ func modelBoundRPCMethod(method string) bool {
 
 func (s *PooledService) markRetryableFailure(ctx context.Context, lease *AccountLease, modelAccessScope string, err error) error {
 	accountID := lease.Account().ID
+	if IsChallenge(err) {
+		// 风控页意味着账户已被上游标记，暂停等待人工检查而不是继续轮换
+		return s.pool.PauseAccount(accountID, "上游要求人机验证，已暂停等待人工检查")
+	}
 	if DefinitiveAuthenticationFailure(err) {
 		return lease.ConfirmAuthenticationFailure(ctx, err)
 	}
@@ -576,6 +580,9 @@ func (s *PooledService) modelsForLease(ctx context.Context, lease *AccountLease)
 
 // catalogFailure 认证失败时确认账户会话并把已失效的账户标为需要登录，其余失败记为该账户最近一次目录读取错误
 func (s *PooledService) catalogFailure(ctx context.Context, lease *AccountLease, err error) error {
+	if IsChallenge(err) {
+		return errors.Join(err, s.pool.PauseAccount(lease.Account().ID, "上游要求人机验证，已暂停等待人工检查"))
+	}
 	if DefinitiveAuthenticationFailure(err) {
 		return errors.Join(err, lease.ConfirmAuthenticationFailure(ctx, err))
 	}

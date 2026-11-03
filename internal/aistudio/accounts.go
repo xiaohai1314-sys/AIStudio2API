@@ -175,6 +175,10 @@ type accountRuntimeState struct {
 	Proxy              string                     `json:"proxy,omitempty"`
 	AuthPaused         bool                       `json:"auth_paused,omitempty"`
 	AuthPauseReason    string                     `json:"auth_pause_reason,omitempty"`
+	// EnvironmentProxy 与 EnvironmentFingerprint 记录认证成功时的出口代理与指纹摘要
+	EnvironmentProxy       string    `json:"environment_proxy,omitempty"`
+	EnvironmentFingerprint string    `json:"environment_fingerprint,omitempty"`
+	EnvironmentBoundAt     time.Time `json:"environment_bound_at,omitempty"`
 }
 
 // ModelAccessState 表示账户对单个模型的实测调用资格
@@ -2319,6 +2323,49 @@ func (p *AccountPool) clearAuthPause(accountID string) error {
 	return err
 }
 
+// BindEnvironment 记录账户当前认证所对应的出口代理与指纹摘要，用于发现会话环境变化
+func (p *AccountPool) BindEnvironment(accountID string, proxy string, fingerprint string) error {
+	proxy = appconfig.ProxyAddress(proxy)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if proxy == "" || fingerprint == "" {
+		return nil
+	}
+	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		if runtimeState.EnvironmentProxy == proxy && runtimeState.EnvironmentFingerprint == fingerprint {
+			return false, nil, nil
+		}
+		runtimeState.EnvironmentProxy = proxy
+		runtimeState.EnvironmentFingerprint = fingerprint
+		runtimeState.EnvironmentBoundAt = time.Now().UTC()
+		return true, nil, nil
+	})
+	return err
+}
+
+// EnvironmentDrift 返回账户认证时记录的出口代理或指纹与当前值不一致的原因，未记录过时返回空
+func (p *AccountPool) EnvironmentDrift(accountID string, proxy string, fingerprint string) string {
+	p.mu.Lock()
+	account := p.byID[strings.TrimSpace(accountID)]
+	p.mu.Unlock()
+	if account == nil {
+		return ""
+	}
+	account.runtimeMu.Lock()
+	boundProxy := account.runtime.EnvironmentProxy
+	boundFingerprint := account.runtime.EnvironmentFingerprint
+	account.runtimeMu.Unlock()
+	if boundProxy == "" || boundFingerprint == "" {
+		return ""
+	}
+	switch {
+	case boundProxy != appconfig.ProxyAddress(proxy):
+		return "出口代理已变化"
+	case boundFingerprint != strings.TrimSpace(fingerprint):
+		return "浏览器指纹已变化"
+	}
+	return ""
+}
+
 // AccountState 返回账户当前状态
 func (p *AccountPool) AccountState(accountID string) (AccountState, bool) {
 	p.mu.Lock()
@@ -3376,6 +3423,10 @@ func cloneRuntime(value accountRuntimeState) accountRuntimeState {
 		Proxy:              value.Proxy,
 		AuthPaused:         value.AuthPaused,
 		AuthPauseReason:    value.AuthPauseReason,
+
+		EnvironmentProxy:       value.EnvironmentProxy,
+		EnvironmentFingerprint: value.EnvironmentFingerprint,
+		EnvironmentBoundAt:     value.EnvironmentBoundAt,
 	}
 	for key, cooldown := range value.Cooldowns {
 		result.Cooldowns[key] = cooldown

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
@@ -101,9 +102,11 @@ func newRuntime(
 	refresher := newAuthRuntimeRefresher(workers, headers, requests, globalProxy, cfg.AuthFailurePause)
 	workers.refresher = refresher
 	client := aistudio.NewClient(aistudio.ClientOptions{
-		Transport:       &authRetryTransport{transport: transport, refresher: refresher},
-		Protected:       &authRetryProtectedTransport{transport: protected, refresher: refresher},
-		ContextProvider: aistudio.NewPoolRequestContextProvider(pool),
+		Transport:         &authRetryTransport{transport: transport, refresher: refresher},
+		Protected:         &authRetryProtectedTransport{transport: protected, refresher: refresher},
+		ContextProvider:   aistudio.NewPoolRequestContextProvider(pool),
+		AccountRateLimit:  cfg.AccountRateLimit,
+		AccountRateJitter: cfg.AccountRateJitter,
 	})
 	pooled := aistudio.NewPooledService(pool, client)
 	pooled.BuildNativeNonstream = cfg.BuildNativeNonstream
@@ -118,6 +121,7 @@ func newRuntime(
 	admin := newRuntimeAdmin(lifecycle, pool, store, service, requests, login, workers, headers, cfg)
 	admin.proxies, admin.globalProxy = proxies, globalProxy
 	service.proxies, service.rebindAccounts = proxies, admin.rebindAccounts
+	service.globalProxy, service.environmentBinding = globalProxy, cfg.EnvironmentBinding
 	workers.proxyFailed = service.reportProxyFailure
 	probeCtx, stopProbe := context.WithCancel(lifecycle)
 	if len(proxyList) > 1 {
@@ -145,6 +149,8 @@ type trackedService struct {
 	modelMapping       []config.ModelAlias
 	proxies            *aistudio.ProxyPool
 	rebindAccounts     func([]string)
+	globalProxy        string
+	environmentBinding bool
 	lifecycle          context.Context
 	service            aistudio.Service
 	catalog            modelCatalogService
@@ -1650,6 +1656,7 @@ type generateAttempt struct {
 	hedge            bool
 	accountLabel     string
 	proxy            string
+	egress           string
 	workerGeneration uint64
 	startedAt        time.Time
 	copies           *aistudio.TemporaryFileCopies
@@ -1831,6 +1838,15 @@ func (service *trackedService) generateWithRetry(
 		err = nil
 		accountLabel := lease.Account().Config.Label
 		retry.attempted[lease.Account().ID] = struct{}{}
+		// 出口代理或指纹变化后旧会话不再可信，要求重新登录而不是带着旧凭据换环境继续使用
+		if service.environmentBinding {
+			if reason := service.environmentDrift(lease.Account()); reason != "" {
+				_ = service.pool.MarkAuthRequired(lease.Account().ID, reason+"，需要重新登录")
+				_ = lease.Release()
+				retry.extend()
+				continue
+			}
+		}
 		service.markAttemptAccount(requestCtx, request.ID, modelID, lease)
 		api.MarkAccessLogScheduled(requestCtx)
 		if queueDelayed {
@@ -1891,6 +1907,7 @@ func (service *trackedService) generateWithRetry(
 		}
 		if winner != nil {
 			service.proxies.ReportSuccess(winner.proxy)
+			service.bindEnvironment(winner)
 			if retry.buildRejection != nil {
 				service.coolRejectedBuild(request.ID, retry.buildRejection, modelID, winner.accountLabel)
 			}
@@ -1973,8 +1990,9 @@ func (service *trackedService) startAttempt(
 	request.AccountID = lease.Account().ID
 	attempt := &generateAttempt{
 		lease: lease, selection: selection, hedge: hedge, accountLabel: lease.Account().Config.Label,
-		proxy: service.proxies.Binding(request.AccountID), workerGeneration: service.workers.WorkerGeneration(request.AccountID),
-		startedAt: time.Now(), activity: &upstreamActivity{}, done: make(chan struct{}),
+		proxy: service.proxies.Binding(request.AccountID), egress: lease.Account().EffectiveProxy(service.globalProxy),
+		workerGeneration: service.workers.WorkerGeneration(request.AccountID),
+		startedAt:        time.Now(), activity: &upstreamActivity{}, done: make(chan struct{}),
 	}
 	attemptCtx, cancel := context.WithCancel(requestCtx)
 	attempt.cancel = cancel
@@ -2085,6 +2103,38 @@ func (service *trackedService) runAttempt(
 	attempt.err = err
 }
 
+// environmentDrift 返回账户认证时记录的出口代理或指纹与当前值不一致的原因
+func (service *trackedService) environmentDrift(account *aistudio.Account) string {
+	if strings.TrimSpace(account.StoragePath) == "" {
+		return ""
+	}
+	digest, err := camoufoxnative.AccountFingerprintDigest(camoufoxnative.Options{
+		StorageStatePath: account.StoragePath, Locale: account.Config.Locale, Timezone: account.Config.Timezone,
+	})
+	if err != nil {
+		return ""
+	}
+	return service.pool.EnvironmentDrift(account.ID, account.EffectiveProxy(service.globalProxy), digest)
+}
+
+// bindEnvironment 记录成功请求使用的出口代理与指纹，作为后续会话一致性校验的基准
+func (service *trackedService) bindEnvironment(attempt *generateAttempt) {
+	if !service.environmentBinding {
+		return
+	}
+	account := attempt.lease.Account()
+	if strings.TrimSpace(account.StoragePath) == "" {
+		return
+	}
+	digest, err := camoufoxnative.AccountFingerprintDigest(camoufoxnative.Options{
+		StorageStatePath: account.StoragePath, Locale: account.Config.Locale, Timezone: account.Config.Timezone,
+	})
+	if err != nil {
+		return
+	}
+	_ = service.pool.BindEnvironment(account.ID, attempt.egress, digest)
+}
+
 // settleAttempt 处理失败的尝试：记录访问日志与冷却，释放租约，mayRecover 为真时按需重建 Worker
 func (service *trackedService) settleAttempt(
 	requestCtx context.Context,
@@ -2118,6 +2168,16 @@ func (service *trackedService) settleAttempt(
 	workerReplaced := errors.Is(err, errAccountWorkerReplaced)
 	localWorkerFailure := (workerFailed || workerReplaced) && requestCtx.Err() == nil
 	retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
+	// 风控页或登录跳转意味着该账户已被上游标记，暂停等待人工处理；
+	// 账户级问题不影响其他账户，仍有可用账户时改由它们继续
+	if aistudio.IsChallenge(err) {
+		if pauseErr := service.pool.PauseAccount(accountID, "上游要求人机验证，已暂停等待人工检查"); pauseErr != nil {
+			err = errors.Join(err, pauseErr)
+			retryable = false
+		} else {
+			retryable = requestCtx.Err() == nil
+		}
+	}
 	if aistudio.DefinitiveAuthenticationFailure(err) {
 		if stateErr := lease.ConfirmAuthenticationFailure(requestCtx, err); stateErr != nil {
 			err = errors.Join(err, stateErr)

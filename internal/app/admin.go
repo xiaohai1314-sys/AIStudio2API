@@ -878,7 +878,7 @@ func (admin *runtimeAdmin) proxyPoolStatus() []api.AdminProxy {
 	pool := make([]api.AdminProxy, 0, len(statuses))
 	for _, status := range statuses {
 		pool = append(pool, api.AdminProxy{
-			Proxy: status.Proxy, Available: status.Available, Accounts: status.Accounts, CheckedAt: status.CheckedAt, Error: status.Error,
+			Proxy: status.Proxy, Quality: status.Quality, Available: status.Available, Accounts: status.Accounts, CheckedAt: status.CheckedAt, Error: status.Error,
 		})
 	}
 	return pool
@@ -974,6 +974,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
+		AccountRateLimit:       saved.AccountRateLimit,
+		AccountRateJitter:      saved.AccountRateJitter,
+		EnvironmentBinding:     saved.EnvironmentBinding,
 		RoutingStrategy:        value.RoutingStrategy,
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),

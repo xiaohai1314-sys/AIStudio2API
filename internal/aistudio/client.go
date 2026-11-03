@@ -78,6 +78,10 @@ type ClientOptions struct {
 	Transport       RPCTransport
 	Protected       ProtectedTransport
 	ContextProvider RequestContextProvider
+	// AccountRateLimit 是单账户每分钟最多发出的上游请求数，0 表示不限制
+	AccountRateLimit int
+	// AccountRateJitter 是请求间隔的随机抖动百分比
+	AccountRateJitter int
 }
 
 // Client 实现 AI Studio 私有协议核心
@@ -85,6 +89,7 @@ type Client struct {
 	transport       RPCTransport
 	protected       ProtectedTransport
 	contextProvider RequestContextProvider
+	pacer           *pacer
 	catalogMu       sync.RWMutex
 	catalogs        map[string]modelCatalog
 	tierMu          sync.RWMutex
@@ -100,6 +105,7 @@ func NewClient(options ClientOptions) *Client {
 		transport:       options.Transport,
 		protected:       options.Protected,
 		contextProvider: options.ContextProvider,
+		pacer:           newPacer(options.AccountRateLimit, options.AccountRateJitter),
 		catalogs:        make(map[string]modelCatalog),
 		tiers:           make(map[string]BenefitTier),
 		termsAccepted:   make(map[string]struct{}),
@@ -160,6 +166,9 @@ func (e *RPCError) RetryAt(now time.Time) time.Time {
 }
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
+	if err := c.pacer.Wait(ctx, accountID); err != nil {
+		return nil, err
+	}
 	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
 	c.applyBenefitTier(method, accountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
@@ -170,6 +179,9 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 }
 
 func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return nil, err
+	}
 	rpc := newRPCRequest("GenerateContent", request.AccountID, request.ID, body, true)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	if request.ImageRoute {
@@ -184,6 +196,9 @@ func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body 
 }
 
 func (c *Client) doProtectedVideo(ctx context.Context, request VideoRequest, body []byte) (*RPCResponse, error) {
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return nil, err
+	}
 	rpc := newRPCRequest("GenerateVideo", request.AccountID, "", body, false)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	response, err := c.protected.(VideoProtectedTransport).DoProtectedVideo(ctx, request, rpc)
@@ -217,6 +232,9 @@ func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, er
 		if readErr != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)
 		}
+		if challenge := DetectChallenge(method, response.StatusCode, response.Header, raw); challenge != nil {
+			return nil, challenge
+		}
 		rpcError := DecodeRPCError(method, response.StatusCode, raw)
 		if rpcError.RetryDelay <= 0 {
 			value := strings.TrimSpace(response.Header.Get("Retry-After"))
@@ -231,7 +249,11 @@ func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, er
 	contentType := response.Header.Get("Content-Type")
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.EqualFold(mediaType, JSONProtobufContentType) {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, maxChallengeBody))
 		response.Body.Close()
+		if challenge := DetectChallenge(method, response.StatusCode, response.Header, raw); challenge != nil {
+			return nil, challenge
+		}
 		return nil, fmt.Errorf("AI Studio %s 返回未识别的 Content-Type %q", method, contentType)
 	}
 	return response, nil
