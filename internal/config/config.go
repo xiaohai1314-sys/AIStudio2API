@@ -252,15 +252,15 @@ var configSetters = map[string]func(*Config, string) error{
 		}
 		return nil
 	},
-	"PROXY_API_KEY":            textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
-	"PROXY":                    textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
-	"ROUTING_STRATEGY":         textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
-	"MODEL_MAPPING":            textSetter(func(c *Config) *string { return &c.ModelMapping }, strings.TrimSpace),
-	"MODEL_CHANNELS":           textSetter(func(c *Config) *string { return &c.ModelChannels }, strings.TrimSpace),
-	"API_KEY_ACCOUNTS":         textSetter(func(c *Config) *string { return &c.APIKeyAccounts }, strings.TrimSpace),
-	"WAA_BACKEND":              textSetter(func(c *Config) *string { return &c.WAABackend }, lowerTrim),
-	"MEDIA_OUTPUT":             textSetter(func(c *Config) *string { return &c.MediaOutput }, lowerTrim),
-	"MEDIA_BASE_URL":           textSetter(func(c *Config) *string { return &c.MediaBaseURL }, strings.TrimSpace),
+	"PROXY_API_KEY":    textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
+	"PROXY":            textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
+	"ROUTING_STRATEGY": textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
+	"MODEL_MAPPING":    textSetter(func(c *Config) *string { return &c.ModelMapping }, strings.TrimSpace),
+	"MODEL_CHANNELS":   textSetter(func(c *Config) *string { return &c.ModelChannels }, strings.TrimSpace),
+	"API_KEY_ACCOUNTS": textSetter(func(c *Config) *string { return &c.APIKeyAccounts }, strings.TrimSpace),
+	"WAA_BACKEND":      textSetter(func(c *Config) *string { return &c.WAABackend }, lowerTrim),
+	"MEDIA_OUTPUT":     textSetter(func(c *Config) *string { return &c.MediaOutput }, lowerTrim),
+	"MEDIA_BASE_URL":   textSetter(func(c *Config) *string { return &c.MediaBaseURL }, strings.TrimSpace),
 	"UPSTREAM_CHANNELS": func(c *Config, value string) error {
 		c.UpstreamChannels = parseUpstreamChannels(value)
 		return nil
