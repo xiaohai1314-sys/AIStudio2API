@@ -246,6 +246,7 @@ type AccountStatus struct {
 	Cooldowns   map[string]CooldownState `json:"-"`
 	LastUsed    *time.Time               `json:"last_used,omitempty"`
 	Message     string                   `json:"message,omitempty"`
+	Risk        AccountRisk              `json:"risk,omitempty"`
 }
 
 // AccountSelection 描述账户调度所需的能力或粘性条件
@@ -312,7 +313,9 @@ type AccountPool struct {
 	channels              []Channel
 	modelChannels         map[string]Channel
 	apiKeyAccounts        map[string][]string
-	changed               chan struct{}
+	// risk 保存各账户在当前窗口内的风控响应计数
+	risk    map[string]*accountRiskWindow
+	changed chan struct{}
 	// sessionCheck 以官网页面的方式打开 AI Studio 检查账户会话，为空时认证失败直接标记需要重新登录
 	sessionCheck func(context.Context, *Account) error
 	// sessions 合并同一账户并发的会话检查
@@ -753,6 +756,7 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
 		routingStrategy: "round-robin", lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
+		risk: make(map[string]*accountRiskWindow),
 	}
 	for _, account := range p.accounts {
 		if account.runtime.Cooldowns == nil {
@@ -2419,6 +2423,7 @@ func (p *AccountPool) Status() []AccountStatus {
 			BenefitTier: tier,
 			Cooldowns:   cloneCooldowns(account.runtime.Cooldowns),
 			Message:     message,
+			Risk:        p.riskOfLocked(account, now),
 		}
 		if !account.LastUsed.IsZero() {
 			status.LastUsed = timePointer(account.LastUsed)

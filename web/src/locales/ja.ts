@@ -110,6 +110,10 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.timezone': 'タイムゾーン',
   'accounts.envCheck': '環境を確認',
   'accounts.envWarnings': '環境の不一致',
+  'accounts.risk': 'リスク',
+  'accounts.riskChallenge': 'チャレンジ',
+  'accounts.riskForbidden': '403 拒否',
+  'accounts.riskRateLimited': 'レート制限',
   'accounts.envCheckRunning': '確認中…',
   'accounts.envExit': '出口 IP',
   'accounts.envNoWarnings': '言語・タイムゾーンと出口地域が一致しています',
@@ -1468,6 +1472,9 @@ export const messages: Record<TranslationKey, string> = {
     'API プレイグラウンドの HTML プレビュー用オリジン。現在のホスト名とこのポートで開きます。',
   'settings.apiKeyAccountsHelp':
     '各キーのリクエストを処理するアカウントを選びます。選ばない場合はすべてのアカウントを使います',
+  'settings.apiKeyRateLimits': 'キー別レート制限',
+  'settings.apiKeyRateLimitsHelp':
+    '1 行に 1 件、API key:1 分あたりのリクエスト数で入力します。未指定のキーは全体の制限を使います',
   'settings.keyAccountsAll': 'すべてのアカウント',
   'settings.keyAccountsSome': '指定したアカウント',
   'settings.accountSearch': 'アカウントを検索',

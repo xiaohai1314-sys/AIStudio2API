@@ -57,6 +57,7 @@ const sections: {
       'preview_listen_addr',
       'proxy_api_key',
       'api_key_accounts',
+      'api_key_rate_limits',
       'auth_states',
       'media_output',
       'media_base_url',
@@ -551,6 +552,24 @@ async function saveConfig(): Promise<void> {
                   />
                 </div>
               </div>
+            </SettingRow>
+            <SettingRow
+              v-if="apiKeyList.length > 0"
+              :label="t('settings.apiKeyRateLimits')"
+              control-id="setting-api-key-rate-limits"
+              :description="t('settings.apiKeyRateLimitsHelp')"
+              effect="immediate"
+              :changed="changedFields.has('api_key_rate_limits')"
+              :env="environmentKey('api_key_rate_limits')"
+            >
+              <textarea
+                id="setting-api-key-rate-limits"
+                v-model.trim="form.api_key_rate_limits"
+                :class="[inputClass, 'resize-y font-mono']"
+                rows="3"
+                spellcheck="false"
+                placeholder="key:60"
+              />
             </SettingRow>
             <SettingRow
               :label="t('settings.authPath')"

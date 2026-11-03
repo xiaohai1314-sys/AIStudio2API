@@ -23,6 +23,13 @@ export interface AccountWarning {
   message: string
 }
 
+export interface AccountRisk {
+  challenge: number
+  forbidden: number
+  rate_limited: number
+  last_at?: string
+}
+
 export interface Account {
   id: string
   label: string
@@ -36,6 +43,7 @@ export interface Account {
   benefit_tier: string
   message: string
   warnings?: AccountWarning[]
+  risk?: AccountRisk
 }
 
 export interface EnvironmentCheckResult {
@@ -342,6 +350,7 @@ export interface ServiceConfig {
   model_mapping: string
   model_channels: string
   api_key_accounts: string
+  api_key_rate_limits: string
   waa_backend: 'camoufox' | 'spidermonkey'
   temporary_chat: boolean
   media_output: 'inline' | 'url'

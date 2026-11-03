@@ -39,6 +39,7 @@ var configKeys = [...]string{
 	"PUBLIC_RATE_LIMIT",
 	"PUBLIC_RATE_BURST",
 	"API_KEY_ACCOUNTS",
+	"API_KEY_RATE_LIMITS",
 	"PROXY",
 	"INIT_TIMEOUT",
 	"REQUEST_TIMEOUT",
@@ -142,7 +143,9 @@ type Config struct {
 	PublicRateLimit       int
 	PublicRateBurst       int
 	APIKeyAccounts        string
-	Proxy                 string
+	// APIKeyRateLimits 为个别 API key 指定每分钟请求上限，格式 key:每分钟
+	APIKeyRateLimits string
+	Proxy            string
 	// AccountRateLimit 是单账户每分钟最多发出的上游请求数，0 表示不限制
 	AccountRateLimit int
 	// AccountRateJitter 是请求间隔的随机抖动百分比
@@ -213,7 +216,7 @@ type InvalidValue struct {
 }
 
 // secretKeys 是取值可能含凭据的配置键，无效时不记录原值
-var secretKeys = []string{"PROXY", "PROXY_API_KEY", "API_KEY_ACCOUNTS", "ADMIN_PASSWORD"}
+var secretKeys = []string{"PROXY", "PROXY_API_KEY", "API_KEY_ACCOUNTS", "API_KEY_RATE_LIMITS", "ADMIN_PASSWORD"}
 
 // invalidValue 返回无效配置项的记录，凭据键不带原值
 func invalidValue(key, value string, err error) InvalidValue {
@@ -267,15 +270,16 @@ var configSetters = map[string]func(*Config, string) error{
 		}
 		return nil
 	},
-	"PROXY_API_KEY":    textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
-	"PROXY":            textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
-	"ROUTING_STRATEGY": textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
-	"MODEL_MAPPING":    textSetter(func(c *Config) *string { return &c.ModelMapping }, strings.TrimSpace),
-	"MODEL_CHANNELS":   textSetter(func(c *Config) *string { return &c.ModelChannels }, strings.TrimSpace),
-	"API_KEY_ACCOUNTS": textSetter(func(c *Config) *string { return &c.APIKeyAccounts }, strings.TrimSpace),
-	"WAA_BACKEND":      textSetter(func(c *Config) *string { return &c.WAABackend }, lowerTrim),
-	"MEDIA_OUTPUT":     textSetter(func(c *Config) *string { return &c.MediaOutput }, lowerTrim),
-	"MEDIA_BASE_URL":   textSetter(func(c *Config) *string { return &c.MediaBaseURL }, strings.TrimSpace),
+	"PROXY_API_KEY":       textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
+	"PROXY":               textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
+	"ROUTING_STRATEGY":    textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
+	"MODEL_MAPPING":       textSetter(func(c *Config) *string { return &c.ModelMapping }, strings.TrimSpace),
+	"MODEL_CHANNELS":      textSetter(func(c *Config) *string { return &c.ModelChannels }, strings.TrimSpace),
+	"API_KEY_ACCOUNTS":    textSetter(func(c *Config) *string { return &c.APIKeyAccounts }, strings.TrimSpace),
+	"API_KEY_RATE_LIMITS": textSetter(func(c *Config) *string { return &c.APIKeyRateLimits }, strings.TrimSpace),
+	"WAA_BACKEND":         textSetter(func(c *Config) *string { return &c.WAABackend }, lowerTrim),
+	"MEDIA_OUTPUT":        textSetter(func(c *Config) *string { return &c.MediaOutput }, lowerTrim),
+	"MEDIA_BASE_URL":      textSetter(func(c *Config) *string { return &c.MediaBaseURL }, strings.TrimSpace),
 	"UPSTREAM_CHANNELS": func(c *Config, value string) error {
 		c.UpstreamChannels = parseUpstreamChannels(value)
 		return nil
@@ -431,6 +435,10 @@ var configChecks = []configCheck{
 	}},
 	{[]string{"API_KEY_ACCOUNTS"}, func(c Config) error {
 		_, err := ParseAPIKeyAccounts(c.APIKeyAccounts, c.ProxyAPIKey)
+		return err
+	}},
+	{[]string{"API_KEY_RATE_LIMITS"}, func(c Config) error {
+		_, err := ParseAPIKeyRateLimits(c.APIKeyRateLimits, c.ProxyAPIKey)
 		return err
 	}},
 	{[]string{"WAA_BACKEND"}, func(c Config) error {
@@ -610,6 +618,7 @@ func (c Config) envValues() map[string]string {
 		"MODEL_MAPPING":            c.ModelMapping,
 		"MODEL_CHANNELS":           c.ModelChannels,
 		"API_KEY_ACCOUNTS":         c.APIKeyAccounts,
+		"API_KEY_RATE_LIMITS":      c.APIKeyRateLimits,
 		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
 		"WAA_BACKEND":              c.WAABackend,
 		"MEDIA_OUTPUT":             c.MediaOutput,
@@ -732,6 +741,40 @@ func ParseAPIKeyAccounts(value string, apiKeys string) (map[string][]string, err
 		accounts[key] = ids
 	}
 	return accounts, nil
+}
+
+// APIKeyRateLimit 是单个 API key 的请求速率上限
+type APIKeyRateLimit struct {
+	PerMinute int
+}
+
+// ParseAPIKeyRateLimits 解析逗号分隔的 API key:每分钟请求数，跳过不在 apiKeys 中的 key
+func ParseAPIKeyRateLimits(value string, apiKeys string) (map[string]APIKeyRateLimit, error) {
+	keys := APIKeys(apiKeys)
+	limits := make(map[string]APIKeyRateLimit)
+	for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' }) {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		index := strings.LastIndexByte(item, ':')
+		if index < 0 {
+			return nil, fmt.Errorf("API_KEY_RATE_LIMITS 的每一项写成 API key:每分钟请求数")
+		}
+		key := strings.TrimSpace(item[:index])
+		perMinute, err := strconv.Atoi(strings.TrimSpace(item[index+1:]))
+		if key == "" || err != nil || perMinute <= 0 {
+			return nil, fmt.Errorf("API_KEY_RATE_LIMITS 的每一项写成 API key:每分钟请求数")
+		}
+		if !slices.Contains(keys, key) {
+			continue
+		}
+		if _, exists := limits[key]; exists {
+			return nil, fmt.Errorf("API_KEY_RATE_LIMITS 中同一 key 重复")
+		}
+		limits[key] = APIKeyRateLimit{PerMinute: perMinute}
+	}
+	return limits, nil
 }
 
 // APIKeys 返回 PROXY_API_KEY 中逗号分隔、去掉空白的各个 key

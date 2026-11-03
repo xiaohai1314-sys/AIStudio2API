@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 )
 
@@ -24,6 +25,16 @@ func modelChannels(value string) map[string]aistudio.Channel {
 		channels[model] = aistudio.Channel(channel)
 	}
 	return channels
+}
+
+// apiKeyRateLimits 解析 API_KEY_RATE_LIMITS 为公开接口的每 key 速率上限
+func apiKeyRateLimits(keys, bindings string) map[string]api.KeyRateLimit {
+	limits, _ := config.ParseAPIKeyRateLimits(bindings, keys)
+	result := make(map[string]api.KeyRateLimit, len(limits))
+	for key, limit := range limits {
+		result[key] = api.KeyRateLimit{PerMinute: limit.PerMinute}
+	}
+	return result
 }
 
 // apiKeyAccounts 解析 API_KEY_ACCOUNTS 为各 API key 可用的账户 ID；active 是管理服务启动时的配置，已从 keys 中移除而管理服务仍接受的 key 沿用 active 中的绑定

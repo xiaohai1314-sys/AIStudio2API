@@ -2170,12 +2170,29 @@ func (service *trackedService) settleAttempt(
 	retryable := retryableGenerateAccountError(requestCtx, err) || localWorkerFailure
 	// 风控页或登录跳转意味着该账户已被上游标记，暂停等待人工处理；
 	// 账户级问题不影响其他账户，仍有可用账户时改由它们继续
-	if aistudio.IsChallenge(err) {
+	challenge := aistudio.IsChallenge(err)
+	if challenge {
+		service.pool.RecordRisk(accountID, aistudio.RiskChallenge)
 		if pauseErr := service.pool.PauseAccount(accountID, "上游要求人机验证，已暂停等待人工检查"); pauseErr != nil {
 			err = errors.Join(err, pauseErr)
 			retryable = false
 		} else {
 			retryable = requestCtx.Err() == nil
+		}
+	} else {
+		switch aistudio.ErrorStatus(err) {
+		case http.StatusForbidden:
+			risk := service.pool.RecordRisk(accountID, aistudio.RiskForbidden)
+			if risk.Forbidden >= aistudio.RiskIsolationThreshold && !aistudio.DefinitiveAuthenticationFailure(err) && !aistudio.DefinitiveAccountRestriction(err) {
+				if pauseErr := service.pool.PauseAccount(accountID, fmt.Sprintf("窗口内 403 达到 %d 次，已暂停等待人工检查", aistudio.RiskIsolationThreshold)); pauseErr != nil {
+					err = errors.Join(err, pauseErr)
+					retryable = false
+				} else {
+					retryable = requestCtx.Err() == nil
+				}
+			}
+		case http.StatusTooManyRequests:
+			service.pool.RecordRisk(accountID, aistudio.RiskRateLimited)
 		}
 	}
 	if aistudio.DefinitiveAuthenticationFailure(err) {

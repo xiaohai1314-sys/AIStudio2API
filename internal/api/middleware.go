@@ -532,12 +532,23 @@ func (limiter *publicRateLimiter) evict(now time.Time) {
 }
 
 // publicRateLimitMiddleware 对每个已认证 API key 限制请求速率；没有 API key 时回退到直接对端地址。
-func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, next http.Handler) http.Handler {
+// keyLimits 可为个别 key 指定更严格的速率，未列出的 key 使用 perMinute。
+func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, keyLimits map[string]KeyRateLimit, next http.Handler) http.Handler {
 	keys := apiKeys(configuredKeys)
 	limiter := newPublicRateLimiter(perMinute, burst)
+	perKey := make(map[string]*publicRateLimiter, len(keyLimits))
+	for key, limit := range keyLimits {
+		perKey[key] = newPublicRateLimiter(limit.PerMinute, 0)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limiterFor := limiter
+		if key := matchedAPIKey(r, keys); key != "" {
+			if custom, ok := perKey[key]; ok {
+				limiterFor = custom
+			}
+		}
 		identity := publicRateLimitIdentity(r, keys)
-		if retryAfter, allowed := limiter.allow(identity, time.Now()); !allowed {
+		if retryAfter, allowed := limiterFor.allow(identity, time.Now()); !allowed {
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			writePublicRateLimitError(w, r)
 			return

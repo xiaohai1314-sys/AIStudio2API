@@ -150,6 +150,12 @@ function accountSummary(account: Account): string {
   ].join(' · ')
 }
 
+// riskTotal 汇总账户在风控窗口内的命中次数
+function riskTotal(account: Account): number {
+  const risk = account.risk
+  return risk ? risk.challenge + risk.forbidden + risk.rate_limited : 0
+}
+
 // actionError 将账户写操作错误发送到全局通知
 function actionError(error: unknown): void {
   emit('notice', errorText(error), 'error')
@@ -828,6 +834,20 @@ async function refreshAllAccounts(): Promise<void> {
             >
               {{ t(stateKeys[account.state]) }}
             </span>
+            <button
+              v-if="riskTotal(account) > 0"
+              type="button"
+              class="rounded border border-orange-900/50 bg-orange-900/20 px-1.5 py-0.5 text-xs whitespace-nowrap text-orange-300 transition hover:bg-orange-900/40"
+              @click="
+                reason = {
+                  account,
+                  kind: t('accounts.risk'),
+                  text: `${t('accounts.riskChallenge')} ${account.risk?.challenge ?? 0}\n${t('accounts.riskForbidden')} ${account.risk?.forbidden ?? 0}\n${t('accounts.riskRateLimited')} ${account.risk?.rate_limited ?? 0}`,
+                }
+              "
+            >
+              {{ t('accounts.risk') }} {{ riskTotal(account) }}
+            </button>
             <button
               v-if="account.message"
               type="button"

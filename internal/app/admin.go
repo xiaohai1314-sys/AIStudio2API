@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -159,9 +160,22 @@ func (admin *runtimeAdmin) EnvironmentCheck(ctx context.Context, input api.Envir
 	return result, nil
 }
 
-// UpdateGeoIP 下载并替换 GeoIP 数据库
+// UpdateGeoIP 经出口代理下载并替换 GeoIP 数据库，避免更新请求暴露本机地址
 func (admin *runtimeAdmin) UpdateGeoIP(ctx context.Context) error {
 	client := &http.Client{Timeout: 5 * time.Minute}
+	proxy := strings.TrimSpace(admin.globalProxy)
+	if proxy == "" && admin.proxies != nil {
+		proxy = admin.proxies.Next()
+	}
+	if proxy = config.ProxyAddress(proxy); proxy != "" {
+		proxyURL, err := url.Parse(proxy)
+		if err != nil {
+			return fmt.Errorf("解析 GeoIP 下载代理: %w", err)
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = http.ProxyURL(proxyURL)
+		client.Transport = transport
+	}
 	return accountenv.DownloadGeoIP(ctx, client, admin.config.GeoIPDBPath, time.Now())
 }
 
@@ -907,8 +921,21 @@ func adminAccountDTO(status aistudio.AccountStatus) api.AdminAccount {
 		ID: status.ID, Label: status.Label, Enabled: status.Enabled, State: string(status.State),
 		Proxy: status.Proxy, Egress: status.Egress, Locale: status.Locale, Timezone: status.Timezone,
 		Models: status.Models, BenefitTier: status.BenefitTier, Message: status.Message,
-		Warnings: adminWarnings(warnings),
+		Warnings: adminWarnings(warnings), Risk: adminAccountRisk(status.Risk),
 	}
+}
+
+// adminAccountRisk 把账户风控计数转换为管理端结构，没有记录时返回 nil
+func adminAccountRisk(risk aistudio.AccountRisk) *api.AdminAccountRisk {
+	if risk.IsZero() {
+		return nil
+	}
+	result := &api.AdminAccountRisk{Challenge: risk.Challenge, Forbidden: risk.Forbidden, RateLimited: risk.RateLimited}
+	if !risk.LastAt.IsZero() {
+		at := risk.LastAt
+		result.LastAt = &at
+	}
+	return result
 }
 
 func invalidAccount(err error) error {
@@ -982,6 +1009,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
 		APIKeyAccounts:         strings.TrimSpace(value.APIKeyAccounts),
+		APIKeyRateLimits:       strings.TrimSpace(value.APIKeyRateLimits),
 		TemporaryChat:          value.TemporaryChat,
 		WAABackend:             value.WAABackend,
 		MediaOutput:            strings.ToLower(strings.TrimSpace(value.MediaOutput)),
@@ -1283,6 +1311,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		ModelMapping:           cfg.ModelMapping,
 		ModelChannels:          cfg.ModelChannels,
 		APIKeyAccounts:         cfg.APIKeyAccounts,
+		APIKeyRateLimits:       cfg.APIKeyRateLimits,
 		TemporaryChat:          cfg.TemporaryChat,
 		WAABackend:             cfg.WAABackend,
 		MediaOutput:            cfg.MediaOutput,

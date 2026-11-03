@@ -35,7 +35,7 @@ func TestPublicConcurrencyLimit(t *testing.T) {
 }
 
 func TestPublicRateLimitPerAPIKey(t *testing.T) {
-	handler := publicRateLimitMiddleware("key-a,key-b", 2, 1, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := publicRateLimitMiddleware("key-a,key-b", 2, 1, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	request := func(key string) *httptest.ResponseRecorder {
@@ -102,5 +102,30 @@ func TestPublicRateLimiterEvictsRefilledBuckets(t *testing.T) {
 	}
 	if len(limiter.buckets) != 1 {
 		t.Fatalf("空闲到回满的桶应当全部淘汰，剩余 %d", len(limiter.buckets))
+	}
+}
+
+// TestPublicRateLimitPerKeyOverride 验证个别 key 使用自己的上限，其他 key 沿用全局上限
+func TestPublicRateLimitPerKeyOverride(t *testing.T) {
+	handler := publicRateLimitMiddleware("key-a,key-b", 60, 30, map[string]KeyRateLimit{"key-a": {PerMinute: 1}}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := func(key string) *httptest.ResponseRecorder {
+		writer := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		handler.ServeHTTP(writer, req)
+		return writer
+	}
+	if response := request("key-a"); response.Code != http.StatusNoContent {
+		t.Fatalf("first key-a request = %d", response.Code)
+	}
+	if response := request("key-a"); response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "60" {
+		t.Fatalf("limited key-a request = status %d retry-after %q", response.Code, response.Header().Get("Retry-After"))
+	}
+	for range 2 {
+		if response := request("key-b"); response.Code != http.StatusNoContent {
+			t.Fatalf("key-b should keep the global limit, got %d", response.Code)
+		}
 	}
 }

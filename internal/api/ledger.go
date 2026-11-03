@@ -474,6 +474,7 @@ func requestBodyMiddleware(ledger RequestLedger, next http.Handler) http.Handler
 		body := RequestBody{ID: r.Context().Value(accessLogContextKey{}).(*accessLogMetadata).id(), Time: time.Now().UTC()}
 		body.Request, body.RequestSize = request.result()
 		body.Response, body.ResponseSize = response.result()
+		body.Request, body.Response = redactBody(body.Request), redactBody(body.Response)
 		ledger.SaveBody(body)
 	})
 }

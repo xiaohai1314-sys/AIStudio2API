@@ -460,6 +460,11 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 		"javascript.options.mem.nursery.max_kb": 4096,
 		// gfx.webrender.max-shared-surface-size 为 WebRender 共享渲染目标的边长上限
 		"gfx.webrender.max-shared-surface-size": 512,
+		// 关闭 WebRTC 与 IPv6，避免绕过代理暴露本机地址
+		"media.peerconnection.enabled":                  false,
+		"media.peerconnection.ice.no_host":              true,
+		"media.peerconnection.ice.default_address_only": true,
+		"network.dns.disableIPv6":                       true,
 	}
 	proxyValue = strings.TrimSpace(proxyValue)
 	if proxyValue == "" {

@@ -19,6 +19,8 @@ type Config struct {
 	PublicRateLimit int
 	// PublicRateBurst 是单个身份可立即使用的令牌数。
 	PublicRateBurst int
+	// APIKeyRateLimits 为个别 API key 指定每分钟请求上限，未列出的 key 使用 PublicRateLimit。
+	APIKeyRateLimits map[string]KeyRateLimit
 	// MaxPublicInFlight 限制同时执行的公开 API 请求；零值使用保守默认值。
 	MaxPublicInFlight int
 	// TrustedProxyCIDRs 是可提供可信转发协议头的反向代理网段。
@@ -44,6 +46,11 @@ type Config struct {
 	WaitLaunch func(context.Context)
 	// EgressProxy 返回服务连接外部 MCP 服务器所用的出口代理，空串为直连
 	EgressProxy func() string
+}
+
+// KeyRateLimit 是单个 API key 的请求速率上限
+type KeyRateLimit struct {
+	PerMinute int
 }
 
 // ResponseModes 是生成请求的响应方式设置
@@ -140,7 +147,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public))))))))
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public))))))))
 	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
 	root.Handle("/v1/", loggedHandler)
 	root.Handle("/v1beta/", loggedHandler)

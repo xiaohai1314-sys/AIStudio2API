@@ -111,6 +111,10 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.timezone': 'Fuseau horaire',
   'accounts.envCheck': "Vérifier l'environnement",
   'accounts.envWarnings': 'Environnement incohérent',
+  'accounts.risk': 'Risque',
+  'accounts.riskChallenge': 'Challenge',
+  'accounts.riskForbidden': '403 bloqué',
+  'accounts.riskRateLimited': 'Débit limité',
   'accounts.envCheckRunning': 'Vérification…',
   'accounts.envExit': 'IP de sortie',
   'accounts.envNoWarnings': 'Langue, fuseau horaire et région de sortie concordent',
@@ -1522,6 +1526,9 @@ export const messages: Record<TranslationKey, string> = {
     'Origine distincte des aperçus HTML du bac à sable API, ouverts avec le nom d’hôte actuel et ce port, différent du port d’écoute.',
   'settings.apiKeyAccountsHelp':
     'Choisissez les comptes qui traitent les requêtes de chaque clé. Sans sélection, la clé peut utiliser tous les comptes',
+  'settings.apiKeyRateLimits': 'Limite par clé',
+  'settings.apiKeyRateLimitsHelp':
+    'Une entrée par ligne au format API key:requêtes par minute. Les clés non listées utilisent la limite globale',
   'settings.keyAccountsAll': 'Tous les comptes',
   'settings.keyAccountsSome': 'Comptes choisis',
   'settings.accountSearch': 'Rechercher un compte',

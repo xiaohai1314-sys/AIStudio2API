@@ -161,18 +161,27 @@ type AdminAccountCounts struct {
 
 // AdminAccount 表示管理端账户摘要
 type AdminAccount struct {
-	ID          string         `json:"id"`
-	Label       string         `json:"label"`
-	Enabled     bool           `json:"enabled"`
-	State       string         `json:"state"`
-	Proxy       string         `json:"proxy"`
-	Egress      string         `json:"egress"`
-	Locale      string         `json:"locale"`
-	Timezone    string         `json:"timezone"`
-	Models      []string       `json:"models"`
-	BenefitTier string         `json:"benefit_tier"`
-	Message     string         `json:"message"`
-	Warnings    []AdminWarning `json:"warnings,omitempty"`
+	ID          string            `json:"id"`
+	Label       string            `json:"label"`
+	Enabled     bool              `json:"enabled"`
+	State       string            `json:"state"`
+	Proxy       string            `json:"proxy"`
+	Egress      string            `json:"egress"`
+	Locale      string            `json:"locale"`
+	Timezone    string            `json:"timezone"`
+	Models      []string          `json:"models"`
+	BenefitTier string            `json:"benefit_tier"`
+	Message     string            `json:"message"`
+	Warnings    []AdminWarning    `json:"warnings,omitempty"`
+	Risk        *AdminAccountRisk `json:"risk,omitempty"`
+}
+
+// AdminAccountRisk 是账户在一个时间窗口内命中的风控响应
+type AdminAccountRisk struct {
+	Challenge   int        `json:"challenge"`
+	Forbidden   int        `json:"forbidden"`
+	RateLimited int        `json:"rate_limited"`
+	LastAt      *time.Time `json:"last_at,omitempty"`
 }
 
 // AdminWarning 表示账户环境的一处不一致
@@ -320,6 +329,7 @@ type RuntimeConfig struct {
 	ModelMapping              string               `json:"model_mapping"`
 	ModelChannels             string               `json:"model_channels"`
 	APIKeyAccounts            string               `json:"api_key_accounts"`
+	APIKeyRateLimits          string               `json:"api_key_rate_limits"`
 	TemporaryChat             bool                 `json:"temporary_chat"`
 	WAABackend                string               `json:"waa_backend"`
 	MediaOutput               string               `json:"media_output"`

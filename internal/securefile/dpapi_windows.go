@@ -19,6 +19,13 @@ var (
 // cryptProtectUIForbidden 禁止 DPAPI 弹出任何界面
 const cryptProtectUIForbidden = 0x1
 
+// errUnsupported 表示当前平台没有对应的解密实现
+var errUnsupported = errors.New("AES 凭证加密仅支持非 Windows 平台")
+
+func envelope() string { return envelopePrefix }
+
+func unprotectAES([]byte) ([]byte, error) { return nil, errUnsupported }
+
 // dataBlob 对应 Win32 的 DATA_BLOB
 type dataBlob struct {
 	size uint32

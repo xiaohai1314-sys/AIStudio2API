@@ -108,6 +108,10 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.timezone': '시간대',
   'accounts.envCheck': '환경 확인',
   'accounts.envWarnings': '환경 불일치',
+  'accounts.risk': '리스크',
+  'accounts.riskChallenge': '챌린지',
+  'accounts.riskForbidden': '403 차단',
+  'accounts.riskRateLimited': '요청 제한',
   'accounts.envCheckRunning': '확인 중…',
   'accounts.envExit': '출구 IP',
   'accounts.envNoWarnings': '언어, 시간대와 출구 지역이 일치합니다',
@@ -1450,6 +1454,9 @@ export const messages: Record<TranslationKey, string> = {
     'API 플레이그라운드 HTML 미리보기용 출처입니다. 현재 호스트 이름과 이 포트로 엽니다.',
   'settings.apiKeyAccountsHelp':
     '각 키의 요청을 처리할 계정을 선택합니다. 선택하지 않으면 모든 계정을 사용합니다',
+  'settings.apiKeyRateLimits': '키별 요청 제한',
+  'settings.apiKeyRateLimitsHelp':
+    '한 줄에 하나씩 API key:분당 요청 수 형식으로 입력합니다. 지정하지 않은 키는 전역 제한을 사용합니다',
   'settings.keyAccountsAll': '모든 계정',
   'settings.keyAccountsSome': '선택한 계정',
   'settings.accountSearch': '계정 검색',

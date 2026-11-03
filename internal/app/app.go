@@ -68,6 +68,7 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 		return false, err
 	}
 	securefile.Configure(cfg.EncryptCredentials)
+	securefile.ConfigureKeyPath(filepath.Join("runtime", "credentials.key"))
 	if err := logs.set(cfg.LogFile, cfg.LogMaxTotalMB); err != nil {
 		return false, err
 	}
@@ -235,7 +236,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	}
 	manager.previewAddress = previewListener.Addr().String()
 	apiHandler := api.NewHandler(manager, api.Config{
-		APIKey: cfg.ProxyAPIKey, PublicRateLimit: cfg.PublicRateLimit, PublicRateBurst: cfg.PublicRateBurst, MaxPublicInFlight: max(16, 2*cfg.MaxActiveWorkers), TrustedProxyCIDRs: trustedProxies, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
+		APIKey: cfg.ProxyAPIKey, PublicRateLimit: cfg.PublicRateLimit, PublicRateBurst: cfg.PublicRateBurst, APIKeyRateLimits: apiKeyRateLimits(cfg.ProxyAPIKey, cfg.APIKeyRateLimits), MaxPublicInFlight: max(16, 2*cfg.MaxActiveWorkers), TrustedProxyCIDRs: trustedProxies, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,

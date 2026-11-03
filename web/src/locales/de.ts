@@ -110,6 +110,10 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.timezone': 'Zeitzone',
   'accounts.envCheck': 'Umgebung prüfen',
   'accounts.envWarnings': 'Umgebungsabweichung',
+  'accounts.risk': 'Risiko',
+  'accounts.riskChallenge': 'Herausforderung',
+  'accounts.riskForbidden': '403 blockiert',
+  'accounts.riskRateLimited': 'Ratenbegrenzt',
   'accounts.envCheckRunning': 'Wird geprüft…',
   'accounts.envExit': 'Exit-IP',
   'accounts.envNoWarnings': 'Sprache, Zeitzone und Ausgangsregion stimmen überein',
@@ -1516,6 +1520,9 @@ export const messages: Record<TranslationKey, string> = {
     'Eigener Ursprung für HTML-Vorschauen im API-Playground, geöffnet mit dem aktuellen Hostnamen und diesem Port, anders als der Listen-Port.',
   'settings.apiKeyAccountsHelp':
     'Wählen Sie, welche Konten die Anfragen jedes Schlüssels bearbeiten. Ohne Auswahl kann der Schlüssel alle Konten nutzen',
+  'settings.apiKeyRateLimits': 'Limit pro Schlüssel',
+  'settings.apiKeyRateLimitsHelp':
+    'Ein Eintrag pro Zeile als API key:Anfragen pro Minute. Nicht aufgeführte Schlüssel nutzen das globale Limit',
   'settings.keyAccountsAll': 'Alle Konten',
   'settings.keyAccountsSome': 'Ausgewählte Konten',
   'settings.accountSearch': 'Konten suchen',
