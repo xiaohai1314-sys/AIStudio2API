@@ -93,7 +93,9 @@ func (reader *streamReadRecorder) failure(method string, frames int, decodeErr e
 
 type sparseJSONReader struct {
 	source        *bufio.Reader
-	pending       []byte
+	pendingStart  int
+	pendingEnd    int
+	pending       [5]byte
 	inString      bool
 	escaped       bool
 	previousToken byte
@@ -103,31 +105,43 @@ func newSparseJSONReader(source io.Reader) io.Reader {
 	return &sparseJSONReader{source: bufio.NewReader(source)}
 }
 
+// Read 批量处理已缓冲的上游字节，把稀疏数组空位补成 null 后写入 destination
 func (r *sparseJSONReader) Read(destination []byte) (int, error) {
 	written := 0
 	for written < len(destination) {
-		if len(r.pending) > 0 {
-			count := copy(destination[written:], r.pending)
-			r.pending = r.pending[count:]
+		if r.pendingStart < r.pendingEnd {
+			count := copy(destination[written:], r.pending[r.pendingStart:r.pendingEnd])
+			r.pendingStart += count
 			written += count
 			continue
 		}
-		if written > 0 && r.source.Buffered() == 0 {
-			return written, nil
-		}
-		value, err := r.source.ReadByte()
-		if err != nil {
+		buffered, _ := r.source.Peek(r.source.Buffered())
+		if len(buffered) == 0 {
 			if written > 0 {
 				return written, nil
 			}
-			return 0, err
+			var err error
+			if buffered, err = r.source.Peek(1); err != nil {
+				return 0, err
+			}
 		}
-		r.pending = r.normalize(value)
+		consumed := 0
+		for consumed < len(buffered) && written < len(destination) {
+			expanded := r.normalize(buffered[consumed])
+			consumed++
+			count := copy(destination[written:], r.pending[:expanded])
+			written += count
+			if count < expanded {
+				r.pendingStart, r.pendingEnd = count, expanded
+			}
+		}
+		r.source.Discard(consumed)
 	}
 	return written, nil
 }
 
-func (r *sparseJSONReader) normalize(value byte) []byte {
+// normalize 把字节规整到 pending 并返回长度；稀疏数组的空位补成 null
+func (r *sparseJSONReader) normalize(value byte) int {
 	if r.inString {
 		if r.escaped {
 			r.escaped = false
@@ -136,25 +150,30 @@ func (r *sparseJSONReader) normalize(value byte) []byte {
 		} else if value == '"' {
 			r.inString = false
 		}
-		return []byte{value}
+		r.pending[0] = value
+		return 1
 	}
 	if value == '"' {
 		r.inString = true
 		r.previousToken = value
-		return []byte{value}
+		r.pending[0] = value
+		return 1
 	}
 	if value == ',' && (r.previousToken == '[' || r.previousToken == ',') {
 		r.previousToken = value
-		return []byte("null,")
+		copy(r.pending[:], "null,")
+		return 5
 	}
 	if value == ']' && r.previousToken == ',' {
 		r.previousToken = value
-		return []byte("null]")
+		copy(r.pending[:], "null]")
+		return 5
 	}
 	if !unicode.IsSpace(rune(value)) {
 		r.previousToken = value
 	}
-	return []byte{value}
+	r.pending[0] = value
+	return 1
 }
 
 func decodeJSONValue(raw []byte) (json.RawMessage, error) {
