@@ -3,6 +3,8 @@ package camoufoxnative
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +19,16 @@ import (
 )
 
 const camoufoxRelease = "152.0.4-beta.29"
+
+// camoufoxChecksums 是固定发行版各平台压缩包的 sha256，升级 camoufoxRelease 时须同步更新
+var camoufoxChecksums = map[string]string{
+	"camoufox-152.0.4-beta.29-lin.arm64.zip":  "c8844c03f3c233d6a466d59fd3f4e6f21470bd685e1b7cc82d650379a9b23e35",
+	"camoufox-152.0.4-beta.29-lin.x86_64.zip": "1bea4b55a51c88e82dc7d426d9c75093d942d2afc8c911cb8fc78ebf723d686c",
+	"camoufox-152.0.4-beta.29-mac.arm64.zip":  "620d33289b5d52154cc7d92a9cca5915329aa6684105ab0f371d01480768eb53",
+	"camoufox-152.0.4-beta.29-mac.x86_64.zip": "eeada250746edefc5d7b63fc371d51ed3252b21134e971ac64ca590ff78e7bb7",
+	"camoufox-152.0.4-beta.29-win.i686.zip":   "fc98bab1836a61f0cff88731bfa3a170a839c5b61f93d581e3844d2c4adc3fc9",
+	"camoufox-152.0.4-beta.29-win.x86_64.zip": "b9ccdc298330e96f807999fe22aa212e9847fc9e210bc36b2e965b6cce03b25b",
+}
 
 // Download 是正在进行的 Camoufox 下载的已收与总字节，总字节未知时为 0
 type Download struct {
@@ -56,6 +68,10 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	if err != nil {
 		return "", err
 	}
+	expected, ok := camoufoxChecksums[asset]
+	if !ok {
+		return "", fmt.Errorf("Camoufox %s 没有内置的 sha256 摘要，无法校验下载内容", asset)
+	}
 	root, err := camoufoxInstallRoot()
 	if err != nil {
 		return "", err
@@ -71,6 +87,11 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 		}
 		return "", fmt.Errorf("%w；在 .env 的 PROXY 设置能访问 GitHub 的代理后重试，或手动下载 %s 解压到 %s", err, address, root)
 	}
+	if err := verifyCamoufoxArchive(archivePath, expected); err != nil {
+		os.Remove(archivePath)
+		return "", err
+	}
+	slog.Info("Camoufox 下载校验通过", "sha256", expected)
 	staging, err := os.MkdirTemp(filepath.Dir(root), ".camoufox-stage-*")
 	if err != nil {
 		return "", fmt.Errorf("创建 Camoufox 临时目录: %w", err)
@@ -182,6 +203,23 @@ func camoufoxAssetName() (string, error) {
 		return "", fmt.Errorf("Camoufox 没有 %s/%s 发行包", runtime.GOOS, runtime.GOARCH)
 	}
 	return fmt.Sprintf("camoufox-%s-%s.%s.zip", camoufoxRelease, platform, architecture), nil
+}
+
+// verifyCamoufoxArchive 校验下载完成的压缩包与内置 sha256 一致
+func verifyCamoufoxArchive(archivePath string, expected string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("校验 Camoufox 下载文件: %w", err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("校验 Camoufox 下载文件: %w", err)
+	}
+	if actual := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("Camoufox 下载文件校验失败：期望 sha256 %s，实际 %s", expected, actual)
+	}
+	return nil
 }
 
 func extractCamoufoxArchive(ctx context.Context, archivePath string, destination string) error {
