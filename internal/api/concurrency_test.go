@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,5 +67,40 @@ func TestPublicRateLimiterRefills(t *testing.T) {
 	}
 	if _, allowed := limiter.allow("key", now.Add(time.Second)); !allowed {
 		t.Fatal("one minute-rate token did not refill after one second")
+	}
+}
+
+func TestPublicRateLimiterEvictsOldestWhenFull(t *testing.T) {
+	limiter := newPublicRateLimiter(1, 1)
+	now := time.Now()
+	for index := range maxPublicRateLimitBuckets {
+		identity := fmt.Sprintf("peer:%d", index)
+		if _, allowed := limiter.allow(identity, now.Add(time.Duration(index)*time.Millisecond)); !allowed {
+			t.Fatalf("第 %d 个身份被拒绝", index)
+		}
+	}
+	latest := now.Add(time.Duration(maxPublicRateLimitBuckets) * time.Millisecond)
+	if _, allowed := limiter.allow("peer:new", latest); !allowed {
+		t.Fatal("达到上限后新身份应当被接受")
+	}
+	if len(limiter.buckets) != maxPublicRateLimitBuckets {
+		t.Fatalf("淘汰后桶数量 = %d", len(limiter.buckets))
+	}
+	if _, exists := limiter.buckets["peer:0"]; exists {
+		t.Fatal("最久未使用的身份应当被淘汰")
+	}
+}
+
+func TestPublicRateLimiterEvictsRefilledBuckets(t *testing.T) {
+	limiter := newPublicRateLimiter(60, 1)
+	now := time.Now()
+	for index := range maxPublicRateLimitBuckets {
+		limiter.allow(fmt.Sprintf("peer:%d", index), now)
+	}
+	if _, allowed := limiter.allow("peer:new", now.Add(2*time.Second)); !allowed {
+		t.Fatal("新身份应当被接受")
+	}
+	if len(limiter.buckets) != 1 {
+		t.Fatalf("空闲到回满的桶应当全部淘汰，剩余 %d", len(limiter.buckets))
 	}
 }

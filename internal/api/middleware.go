@@ -497,7 +497,7 @@ func (limiter *publicRateLimiter) allow(identity string, now time.Time) (retryAf
 	bucket, exists := limiter.buckets[identity]
 	if !exists {
 		if len(limiter.buckets) >= maxPublicRateLimitBuckets {
-			return 60, false
+			limiter.evict(now)
 		}
 		bucket = publicRateBucket{tokens: limiter.burst, updated: now}
 	}
@@ -510,6 +510,25 @@ func (limiter *publicRateLimiter) allow(identity string, now time.Time) (retryAf
 	}
 	limiter.buckets[identity] = bucket
 	return max(1, int(math.Ceil((1-bucket.tokens)*60/limiter.rate))), false
+}
+
+// evict 在身份数量达到上限时腾出空间：先淘汰空闲到令牌完全回满的身份，仍无空间时淘汰最久未使用的身份
+func (limiter *publicRateLimiter) evict(now time.Time) {
+	refillSeconds := limiter.burst * 60 / limiter.rate
+	oldestIdentity := ""
+	var oldestUpdated time.Time
+	for identity, bucket := range limiter.buckets {
+		if now.Sub(bucket.updated).Seconds() >= refillSeconds {
+			delete(limiter.buckets, identity)
+			continue
+		}
+		if oldestIdentity == "" || bucket.updated.Before(oldestUpdated) {
+			oldestIdentity, oldestUpdated = identity, bucket.updated
+		}
+	}
+	if len(limiter.buckets) >= maxPublicRateLimitBuckets {
+		delete(limiter.buckets, oldestIdentity)
+	}
 }
 
 // publicRateLimitMiddleware 对每个已认证 API key 限制请求速率；没有 API key 时回退到直接对端地址。

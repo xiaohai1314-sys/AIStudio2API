@@ -1662,9 +1662,14 @@ type generateAttempt struct {
 	done             chan struct{}
 }
 
+// maxGenerateAttempts 是单次请求尝试次数的硬上限，避免上游持续失败时无限扩容换号
+const maxGenerateAttempts = 8
+
 // generateRetry 是生成请求跨尝试的换号与恢复状态
 type generateRetry struct {
-	maxAttempts       int
+	maxAttempts int
+	// baseAttempts 是初始尝试预算，等于可用账户数，扩容不超过它的两倍
+	baseAttempts      int
 	attempted         map[string]struct{}
 	recoveredWorker   map[string]struct{}
 	recoveryAccountID string
@@ -1677,6 +1682,18 @@ type generateRetry struct {
 	missingInlineMedia bool
 	// planLimitSeen 表示已有尝试收到套餐限额拒绝，之后全部账户冷却时不再改用套餐限额冷却中的账户
 	planLimitSeen bool
+}
+
+// attemptLimit 是尝试次数的上限：初始预算的两倍，不超过硬上限，且不低于初始预算
+func (retry *generateRetry) attemptLimit() int {
+	return max(min(retry.baseAttempts*2, maxGenerateAttempts), retry.baseAttempts)
+}
+
+// extend 增加一次尝试机会，达到上限后不再增加
+func (retry *generateRetry) extend() {
+	if retry.maxAttempts < retry.attemptLimit() {
+		retry.maxAttempts++
+	}
 }
 
 // attemptOutcome 是失败尝试处理后的错误与换号决定
@@ -1702,12 +1719,15 @@ func (service *trackedService) generateWithRetry(
 	continuationRounds := service.pool.OutputContinuationRounds(modelID, request.Config.MaxOutputTokens)
 	unbound := requestedAccountID == "" && resourceID == ""
 	fileBound := requestedAccountID == "" && resourceID != ""
-	retry := &generateRetry{maxAttempts: 1, recoveredWorker: make(map[string]struct{}), buildOnly: aistudio.RequestBuildOnly(request)}
+	baseAttempts := 1
 	if unbound || fileBound {
-		_, eligible := service.pool.EnabledAccounts()
-		if eligible > 1 {
-			retry.maxAttempts = eligible
+		if _, eligible := service.pool.EnabledAccounts(); eligible > 1 {
+			baseAttempts = eligible
 		}
+	}
+	retry := &generateRetry{
+		maxAttempts: baseAttempts, baseAttempts: baseAttempts,
+		recoveredWorker: make(map[string]struct{}), buildOnly: aistudio.RequestBuildOnly(request),
 	}
 	retry.attempted = make(map[string]struct{}, retry.maxAttempts)
 	assistant := service.pool.AssistantModel(modelID)
@@ -1883,7 +1903,7 @@ func (service *trackedService) generateWithRetry(
 		if last.recoverWorker {
 			retry.recoveryAccountID = last.accountID
 			delete(retry.attempted, last.accountID)
-			retry.maxAttempts++
+			retry.extend()
 		}
 		if attempt+1 == retry.maxAttempts {
 			break
@@ -2136,7 +2156,7 @@ func (service *trackedService) settleAttempt(
 			}
 			if !cooldown.Global && service.pool.AccountChannelAvailable(accountID, attempt.selection) {
 				delete(retry.attempted, accountID)
-				retry.maxAttempts++
+				retry.extend()
 			}
 		}
 	}
@@ -2154,14 +2174,14 @@ func (service *trackedService) settleAttempt(
 			retry.recoveryAccountID = accountID
 		}
 		delete(retry.attempted, accountID)
-		retry.maxAttempts++
+		retry.extend()
 		retryable = true
 	}
 	if missingInlineMedia {
 		retry.missingInlineMedia = true
 		retry.recoveryAccountID = accountID
 		delete(retry.attempted, accountID)
-		retry.maxAttempts++
+		retry.extend()
 		retryable = true
 	}
 	if !quotaFailure && !buildRejected {
