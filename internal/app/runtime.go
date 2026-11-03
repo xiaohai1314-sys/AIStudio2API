@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -70,6 +71,9 @@ func newRuntime(
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
 	pool.SetModelChannels(modelChannels(cfg.ModelChannels))
 	proxies := aistudio.NewProxyPool(pool, proxyList)
+	if err := proxies.LoadScores(filepath.Join("runtime", "proxy-scores.json")); err != nil {
+		requests.log("service", "WARN", "代理评分读取 | 错误="+err.Error())
+	}
 	if len(proxyList) > 1 {
 		if _, err := proxies.Probe(launchCtx, checkProxy); err != nil {
 			return nil, nil, nil, err
@@ -133,7 +137,7 @@ func newRuntime(
 	))
 	closeRuntime := func() error {
 		stopProbe()
-		err := workers.Close()
+		err := errors.Join(workers.Close(), proxies.Close())
 		transport.CloseIdleConnections()
 		headers.Close()
 		return err

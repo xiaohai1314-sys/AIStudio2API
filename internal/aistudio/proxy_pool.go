@@ -26,6 +26,10 @@ type ProxyPool struct {
 	mu      sync.Mutex
 	pool    *AccountPool
 	entries []*proxyEntry
+	// scorePath 是健康评分的持久化文件路径，为空时不落盘
+	scorePath string
+	saveTimer *time.Timer
+	closed    bool
 }
 
 // proxyEntry 表示代理池中的一个代理与其健康状态
@@ -279,6 +283,7 @@ func (p *ProxyPool) ReportFailure(proxy string, err error) ([]string, error) {
 	entry.failures++
 	entry.lastError = err.Error()
 	entry.recordLocked(false, time.Now())
+	p.scheduleSaveLocked()
 	if entry.down || entry.failures < proxyFailureThreshold || !p.otherAvailableLocked(entry) {
 		return nil, nil
 	}
@@ -295,6 +300,7 @@ func (p *ProxyPool) ReportRisk(proxy string) {
 	defer p.mu.Unlock()
 	if entry := p.entryLocked(proxy); entry != nil {
 		entry.recordLocked(false, time.Now())
+		p.scheduleSaveLocked()
 	}
 }
 
@@ -308,6 +314,7 @@ func (p *ProxyPool) ReportSuccess(proxy string) {
 	if entry := p.entryLocked(proxy); entry != nil {
 		entry.failures = 0
 		entry.recordLocked(true, time.Now())
+		p.scheduleSaveLocked()
 	}
 }
 
