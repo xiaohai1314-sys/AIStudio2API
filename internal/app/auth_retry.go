@@ -28,6 +28,8 @@ type authRuntimeRefresher struct {
 	prepareHeaders func(string) (func(bool), error)
 	globalProxy    string
 	requests       *requestRegistry
+	// pauseOnAuthFailure 为真时认证失败不自动续签，改为暂停账户等待人工检查
+	pauseOnAuthFailure bool
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -154,13 +156,14 @@ func newAuthRuntimeRefresher(
 	headers *accountHeaderProvider,
 	requests *requestRegistry,
 	globalProxy string,
+	pauseOnAuthFailure bool,
 ) *authRuntimeRefresher {
 	return &authRuntimeRefresher{
 		pool:    workers.pool,
 		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState, chromeHas: chromeIdentityImportable,
 		reset: workers.Reset, prepareWorker: workers.prepareUpdate, prepareHeaders: headers.prepareInvalidate,
 		globalProxy: globalProxy,
-		requests:    requests,
+		requests:    requests, pauseOnAuthFailure: pauseOnAuthFailure,
 	}
 }
 
@@ -222,6 +225,11 @@ func (refresher *authRuntimeRefresher) markAuthenticationRequired(ctx context.Co
 		return cause
 	}
 	err := lease.ConfirmAuthenticationFailure(ctx, cause)
+	if refresher.pauseOnAuthFailure {
+		if state, exists := refresher.pool.AccountState(lease.Account().ID); exists && state == aistudio.AccountAuthRequired {
+			err = errors.Join(err, refresher.pool.PauseAccount(lease.Account().ID, "认证失败，已暂停等待人工检查"))
+		}
+	}
 	statuses := refresher.pool.Status()
 	accounts := make([]api.AdminAccount, 0, len(statuses))
 	for _, status := range statuses {
@@ -245,6 +253,10 @@ func (refresher *authRuntimeRefresher) Recover(ctx context.Context, cause error,
 	var startup *accountWorkerInitError
 	if errors.As(cause, &startup) && startup.authHandled {
 		return cause
+	}
+	if refresher.pauseOnAuthFailure {
+		// 人工检查策略下不自动续签，直接暂停账户
+		return refresher.markAuthenticationRequired(ctx, cause)
 	}
 	if refresher.Available(ctx) {
 		if err := refresher.Refresh(ctx, generation); err == nil {

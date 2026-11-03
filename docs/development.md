@@ -191,11 +191,13 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `API_KEY_ACCOUNTS` | 逗号分隔，每项以最后一个 `:` 分成 `PROXY_API_KEY` 中的 key 与以 `\|` 分隔的账户 ID，该 key 的请求与文件上传只在这些账户中选号，未列出的 key 可用全部账户，不在 `PROXY_API_KEY` 中的项不起作用；保存后立即生效，同时修改 `PROXY_API_KEY` 时，管理服务重启前仍被接受的 key 沿用原来的绑定 | 空 |
 | `AUTO_START` | 管理服务就绪后自动启动生成服务；失败记录 `ERROR` 日志，管理服务继续运行，账户与配置以外的原因失败时以 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 | `false` |
 | `REQUEST_BODY_LOG` | 保存公开 API 的 POST 请求与响应正文，各截断到 64 KiB，只保留最近 1000 条；保存后立即生效 | `false` |
+| `AUTH_FAILURE_PAUSE` | 遇到 401、403 等认证或账户受限错误时暂停对应账户等待人工检查，不自动续签；关闭后恢复自动续签 | `true` |
 | `LOG_FILE` | 同时把服务日志写入 `runtime/logs/aistudio2api.log`，单文件 10 MB 轮转；保存后立即生效 | `true` |
 | `LOG_MAX_TOTAL_MB` | 日志目录总量上限，超出时删除最旧的文件，不小于 20；保存后立即生效 | `500` |
 | `ADMIN_AUTH_ENABLED` | 管理员账号密码登录开关 | `false` |
 | `ADMIN_USERNAME` | 管理员账号 | `admin` |
 | `ADMIN_PASSWORD` | 管理员密码，开启登录时必填 | 空 |
+| `ENCRYPT_CREDENTIALS` | 用 Windows DPAPI 加密保存账户认证状态与管理会话文件；仅 Windows 支持，开启后文件不能跨机器或用户复制 | `false` |
 | `TRUSTED_PROXY_CIDRS` | 可信反向代理的逗号分隔 CIDR；仅这些来源的 `X-Forwarded-Proto` 可影响管理会话 Cookie 的 Secure 属性 | 空 |
 | `PROXY` | setup 与未设置账户代理时使用的出口，多个代理用逗号分隔组成代理池；留空时生成服务使用系统代理 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |

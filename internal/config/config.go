@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,11 +55,13 @@ var configKeys = [...]string{
 	"MEDIA_BASE_URL",
 	"AUTO_START",
 	"REQUEST_BODY_LOG",
+	"AUTH_FAILURE_PAUSE",
 	"LOG_FILE",
 	"LOG_MAX_TOTAL_MB",
 	"ADMIN_AUTH_ENABLED",
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
+	"ENCRYPT_CREDENTIALS",
 	"TRUSTED_PROXY_CIDRS",
 	"BUILD_NATIVE_NONSTREAM",
 	"NONSTREAM_KEEPALIVE",
@@ -106,11 +109,13 @@ const DefaultContinuationPrompt = "Continue the assistant response after the fol
 type Config struct {
 	AutoStart              bool
 	RequestBodyLog         bool
+	AuthFailurePause       bool
 	LogFile                bool
 	LogMaxTotalMB          int
 	AdminAuthEnabled       bool
 	AdminUsername          string
 	AdminPassword          string
+	EncryptCredentials     bool
 	TrustedProxyCIDRs      string
 	BuildNativeNonstream   bool
 	NonstreamKeepalive     bool
@@ -174,6 +179,7 @@ func Default() Config {
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		PublicRateLimit:        defaultPublicRateLimit,
 		PublicRateBurst:        defaultPublicRateBurst,
+		AuthFailurePause:       true,
 		RoutingStrategy:        "round-robin",
 		UpstreamChannels:       []string{"playground"},
 		WAABackend:             WAABackendCamoufox,
@@ -203,6 +209,7 @@ func invalidValue(key, value string, err error) InvalidValue {
 var configSetters = map[string]func(*Config, string) error{
 	"AUTO_START":               boolSetter("AUTO_START", func(c *Config) *bool { return &c.AutoStart }),
 	"REQUEST_BODY_LOG":         boolSetter("REQUEST_BODY_LOG", func(c *Config) *bool { return &c.RequestBodyLog }),
+	"AUTH_FAILURE_PAUSE":       boolSetter("AUTH_FAILURE_PAUSE", func(c *Config) *bool { return &c.AuthFailurePause }),
 	"LOG_FILE":                 boolSetter("LOG_FILE", func(c *Config) *bool { return &c.LogFile }),
 	"ADMIN_AUTH_ENABLED":       boolSetter("ADMIN_AUTH_ENABLED", func(c *Config) *bool { return &c.AdminAuthEnabled }),
 	"BUILD_NATIVE_NONSTREAM":   boolSetter("BUILD_NATIVE_NONSTREAM", func(c *Config) *bool { return &c.BuildNativeNonstream }),
@@ -224,6 +231,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
 	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
 	"ADMIN_PASSWORD":           textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
+	"ENCRYPT_CREDENTIALS":      boolSetter("ENCRYPT_CREDENTIALS", func(c *Config) *bool { return &c.EncryptCredentials }),
 	"TRUSTED_PROXY_CIDRS":      textSetter(func(c *Config) *string { return &c.TrustedProxyCIDRs }, strings.TrimSpace),
 	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
 	"FIRST_EVENT_HEDGE_MODELS": textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
@@ -321,6 +329,12 @@ var configChecks = []configCheck{
 	{[]string{"TRUSTED_PROXY_CIDRS"}, func(c Config) error {
 		_, err := ParseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
 		return err
+	}},
+	{[]string{"ENCRYPT_CREDENTIALS"}, func(c Config) error {
+		if c.EncryptCredentials && runtime.GOOS != "windows" {
+			return fmt.Errorf("ENCRYPT_CREDENTIALS 仅支持 Windows")
+		}
+		return nil
 	}},
 	{[]string{"PROXY"}, func(c Config) error {
 		for _, proxy := range ProxyList(c.Proxy) {
@@ -520,11 +534,13 @@ func (c Config) envValues() map[string]string {
 	return map[string]string{
 		"AUTO_START":               strconv.FormatBool(c.AutoStart),
 		"REQUEST_BODY_LOG":         strconv.FormatBool(c.RequestBodyLog),
+		"AUTH_FAILURE_PAUSE":       strconv.FormatBool(c.AuthFailurePause),
 		"LOG_FILE":                 strconv.FormatBool(c.LogFile),
 		"LOG_MAX_TOTAL_MB":         strconv.Itoa(c.LogMaxTotalMB),
 		"ADMIN_AUTH_ENABLED":       strconv.FormatBool(c.AdminAuthEnabled),
 		"ADMIN_USERNAME":           c.AdminUsername,
 		"ADMIN_PASSWORD":           c.AdminPassword,
+		"ENCRYPT_CREDENTIALS":      strconv.FormatBool(c.EncryptCredentials),
 		"TRUSTED_PROXY_CIDRS":      c.TrustedProxyCIDRs,
 		"BUILD_NATIVE_NONSTREAM":   strconv.FormatBool(c.BuildNativeNonstream),
 		"NONSTREAM_KEEPALIVE":      strconv.FormatBool(c.NonstreamKeepalive),

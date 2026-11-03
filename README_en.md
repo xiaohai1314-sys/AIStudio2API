@@ -595,11 +595,13 @@ Process environment variables override the same keys in `.env`, and those settin
 | `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
 | `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
 | `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
+| `AUTH_FAILURE_PAUSE` | `true` | Pause the account for manual review on 401, 403, or other authentication and restriction errors instead of renewing automatically; set to `false` to restore automatic renewal |
 | `LOG_FILE` | `true` | Also write service logs to `runtime/logs/`, rotating at 10 MB per file |
 | `LOG_MAX_TOTAL_MB` | `500` | Total size limit of the log directory; the oldest files are removed beyond it; at least 20 |
 | `ADMIN_AUTH_ENABLED` | `false` | Enable username/password login for the console |
 | `ADMIN_USERNAME` | `admin` | Administrator username |
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
+| `ENCRYPT_CREDENTIALS` | `false` | Encrypt account auth states and the console session file with Windows DPAPI; Windows only, and encrypted files cannot be copied to another machine or user |
 | `TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of trusted reverse proxies, such as `127.0.0.1/32`; only their `X-Forwarded-Proto` may mark a console-session cookie Secure |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
@@ -666,7 +668,7 @@ Authentication files are stored in `auth/` by default:
 | --- | --- |
 | `auth/<Google email>/account.json` | Account email, proxy, locale, timezone, and enabled state |
 | `auth/<Google email>/storage-state.json` | Google cookies and authentication renewal material |
-| `auth/<Google email>/runtime-state.json` | Benefit tier, model eligibility, cooldowns, and resource ownership |
+| `auth/<Google email>/runtime-state.json` | Benefit tier, model eligibility, cooldowns, resource ownership, and the manual-review pause flag |
 | `auth/<Google email>/camoufox-cache/` | Web and startup cache of that account's browser; can be deleted while the service is stopped |
 | `auth/.leases/<Google email>.lock` | Cross-process lease for the account directory |
 | `[user cache]/AIStudio2API/runtime-leases/<Google email>.lock` | WAA Worker lease for that email on the current computer |
@@ -704,7 +706,7 @@ With `WAA_BACKEND=spidermonkey`, WAA runs in SpiderMonkey inside the service pro
 - **Client-Managed History**: Clients submit complete conversation context for Chat, Anthropic, and Gemini requests
 - **AI Studio History**: API requests are not saved to website history; `TEMPORARY_CHAT=true` also disables autosave for the WAA prewarm page
 - **Responses Sessions**: `previous_response_id` is stored only in the current process and is cleared on restart
-- **Authentication Expiry**: Chrome imports retain OAuth renewal material and renew on Windows; when a Chrome import on Linux, macOS, or Docker expires, copy it from Windows again. When another account expires and the local Chrome is signed in to the same email, the service renews it with that email's material from Chrome and renews it as a Chrome import from then on; otherwise log in again on the Accounts page
+- **Authentication Expiry**: Chrome imports retain OAuth renewal material and renew on Windows; when a Chrome import on Linux, macOS, or Docker expires, copy it from Windows again. When another account expires and the local Chrome is signed in to the same email, the service renews it with that email's material from Chrome and renews it as a Chrome import from then on; otherwise log in again on the Accounts page. With `AUTH_FAILURE_PAUSE=true` (the default), a 401, 403, or similar authentication/restriction error pauses the account for manual review instead of renewing; sign in again to resume.
 
 ## Contributing
 

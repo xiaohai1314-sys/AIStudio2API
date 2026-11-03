@@ -98,7 +98,7 @@ func newRuntime(
 	protected := aistudio.NewWorkerProtectedTransport(aistudio.WorkerProtectedTransportOptions{
 		Transport: transport, Workers: workers, SetupTimeout: cfg.InitTimeout,
 	})
-	refresher := newAuthRuntimeRefresher(workers, headers, requests, globalProxy)
+	refresher := newAuthRuntimeRefresher(workers, headers, requests, globalProxy, cfg.AuthFailurePause)
 	workers.refresher = refresher
 	client := aistudio.NewClient(aistudio.ClientOptions{
 		Transport:       &authRetryTransport{transport: transport, refresher: refresher},
@@ -110,7 +110,7 @@ func newRuntime(
 	pooled.YouTubeLinks = cfg.YouTubeLinks
 	pooled.ContinuationRewrite = cfg.ContinuationRewrite
 	pooled.ContinuationPrompt = cfg.ContinuationPrompt
-	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout)
+	service := newTrackedService(lifecycle, pooled, pool, requests, workers, cfg.RequestTimeout, cfg.AuthFailurePause)
 	service.buildNativeNonstream = cfg.BuildNativeNonstream
 	service.hedgeAuto, service.hedgeAfter, _ = config.ParseFirstEventHedge(cfg.FirstEventHedge)
 	service.hedgeModels = config.ModelList(cfg.FirstEventHedgeModels)
@@ -140,34 +140,36 @@ func newRuntime(
 // trackedService 跟踪生成请求及其唯一账户租约
 type trackedService struct {
 	buildNativeNonstream bool
-	modelMapping         []config.ModelAlias
-	proxies              *aistudio.ProxyPool
-	rebindAccounts       func([]string)
-	lifecycle            context.Context
-	service              aistudio.Service
-	catalog              modelCatalogService
-	pool                 *aistudio.AccountPool
-	requests             *requestRegistry
-	workers              *accountWorkerManager
-	timeout              time.Duration
-	state                atomic.Int32
-	lifecycleMu          sync.Mutex
-	transitionDone       chan struct{}
-	transitionErr        error
-	transitionTimedOut   bool
-	dataContext          context.Context
-	dataCancel           context.CancelFunc
-	modelsMu             sync.RWMutex
-	models               []aistudio.Model
-	modelSyncMu          sync.Mutex
-	modelRetriesMu       sync.Mutex
-	modelRetries         map[string]struct{}
-	modelRefreshDone     <-chan struct{}
-	modelChangeMu        sync.Mutex
-	modelRevision        uint64
-	modelApplied         uint64
-	stateRefreshMu       sync.Mutex
-	stateRefreshAt       map[string]time.Time
+	// pauseOnAuthFailure 为真时认证与账户受限错误暂停账户等待人工检查
+	pauseOnAuthFailure bool
+	modelMapping       []config.ModelAlias
+	proxies            *aistudio.ProxyPool
+	rebindAccounts     func([]string)
+	lifecycle          context.Context
+	service            aistudio.Service
+	catalog            modelCatalogService
+	pool               *aistudio.AccountPool
+	requests           *requestRegistry
+	workers            *accountWorkerManager
+	timeout            time.Duration
+	state              atomic.Int32
+	lifecycleMu        sync.Mutex
+	transitionDone     chan struct{}
+	transitionErr      error
+	transitionTimedOut bool
+	dataContext        context.Context
+	dataCancel         context.CancelFunc
+	modelsMu           sync.RWMutex
+	models             []aistudio.Model
+	modelSyncMu        sync.Mutex
+	modelRetriesMu     sync.Mutex
+	modelRetries       map[string]struct{}
+	modelRefreshDone   <-chan struct{}
+	modelChangeMu      sync.Mutex
+	modelRevision      uint64
+	modelApplied       uint64
+	stateRefreshMu     sync.Mutex
+	stateRefreshAt     map[string]time.Time
 	// hedgeAuto 与 hedgeAfter 是首事件超时备用请求的自适应开关与自定义等待
 	hedgeAuto  bool
 	hedgeAfter time.Duration
@@ -192,11 +194,12 @@ func newTrackedService(
 	requests *requestRegistry,
 	workers *accountWorkerManager,
 	timeout time.Duration,
+	pauseOnAuthFailure bool,
 ) *trackedService {
 	catalog := service.(modelCatalogService)
 	return &trackedService{
 		lifecycle: lifecycle, service: service, catalog: catalog, pool: pool, requests: requests, workers: workers,
-		timeout: timeout, modelRetries: make(map[string]struct{}), stateRefreshAt: make(map[string]time.Time),
+		timeout: timeout, pauseOnAuthFailure: pauseOnAuthFailure, modelRetries: make(map[string]struct{}), stateRefreshAt: make(map[string]time.Time),
 	}
 }
 
@@ -2099,6 +2102,11 @@ func (service *trackedService) settleAttempt(
 		if stateErr := lease.ConfirmAuthenticationFailure(requestCtx, err); stateErr != nil {
 			err = errors.Join(err, stateErr)
 			retryable = false
+		}
+	}
+	if service.pauseOnAuthFailure && aistudio.DefinitiveAccountRestriction(err) {
+		if pauseErr := service.pool.PauseAccount(accountID, "上游返回 403，已暂停等待人工检查"); pauseErr != nil {
+			err = errors.Join(err, pauseErr)
 		}
 	}
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())

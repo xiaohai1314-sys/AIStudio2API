@@ -595,11 +595,13 @@ cp .env.example .env
 | `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
+| `AUTH_FAILURE_PAUSE` | `true` | 遇到 401、403 等认证或账户受限错误时暂停对应账户等待人工检查，不自动续签；关闭后恢复自动续签与调度 |
 | `LOG_FILE` | `true` | 同时把服务日志写入 `runtime/logs/`，单文件 10 MB 轮转 |
 | `LOG_MAX_TOTAL_MB` | `500` | 日志目录总量上限，超出时删除最旧的文件，不小于 20 |
 | `ADMIN_AUTH_ENABLED` | `false` | 管理控制台账号密码登录开关 |
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
+| `ENCRYPT_CREDENTIALS` | `false` | 用 Windows DPAPI 加密保存账户认证状态与管理会话文件；仅 Windows 支持，开启后这些文件不能复制到其他机器或用户 |
 | `TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理的逗号分隔 CIDR，例如 `127.0.0.1/32`；仅这些来源的 `X-Forwarded-Proto` 可使管理会话 Cookie 标记为 Secure |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
@@ -667,7 +669,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 | --- | --- |
 | `auth/<Google 邮箱>/account.json` | 账户邮箱、代理、语言、时区和启用状态 |
 | `auth/<Google 邮箱>/storage-state.json` | Google Cookie 与认证续签材料 |
-| `auth/<Google 邮箱>/runtime-state.json` | 权益等级、模型资格、冷却状态与资源所属账户 |
+| `auth/<Google 邮箱>/runtime-state.json` | 权益等级、模型资格、冷却状态、资源所属账户与人工检查暂停标记 |
 | `auth/<Google 邮箱>/camoufox-cache/` | 该账户浏览器的网页缓存与启动缓存，服务停止时可删除 |
 | `auth/.leases/<Google 邮箱>.lock` | 同一账户目录的跨进程占用锁 |
 | `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
@@ -705,7 +707,7 @@ Go 负责编码、调度、流式解码与公开协议；受 WAA 保护的 `Gene
 - **客户端管理历史**: Chat、Anthropic 和 Gemini 请求由客户端提交完整对话上下文
 - **AI Studio 历史**: API 请求不保存到官网历史；`TEMPORARY_CHAT=true` 还会关闭 WAA 预热页的自动保存
 - **Responses 会话**: `previous_response_id` 仅在当前进程内保存，重启后不会保留
-- **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录
+- **认证有效期**: Chrome 导入账户保留 OAuth 续签材料，续签在 Windows 上执行，Linux、macOS 与 Docker 中的 Chrome 导入账户失效后重新从 Windows 复制；其他账户失效时，若本机 Chrome 登录着同一邮箱，服务从 Chrome 导入该邮箱的材料续签，此后按 Chrome 导入账户续签，否则在账户页重新登录。`AUTH_FAILURE_PAUSE=true`（默认）时遇到 401、403 等认证或账户受限错误直接暂停该账户等待人工检查，不执行上述自动续签，重新登录后恢复
 
 ## 贡献
 

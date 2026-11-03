@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/securefile"
 )
 
 const adminCookieName = "aistudio_admin"
@@ -71,7 +73,9 @@ func newAdminAuth(config Config) *adminAuth {
 	}
 	var saved rememberedSessions
 	if err == nil {
-		err = json.Unmarshal(data, &saved)
+		if data, err = securefile.Decrypt(data); err == nil {
+			err = json.Unmarshal(data, &saved)
+		}
 	}
 	if err != nil {
 		slog.Warn("读取管理会话文件失败", "path", config.AdminSessionPath, "error", err)
@@ -109,7 +113,13 @@ func (auth *adminAuth) saveRemembered() error {
 			saved.Sessions = append(saved.Sessions, rememberedSessionRow{Token: token, Expires: session.expires})
 		}
 	}
-	data, _ := json.Marshal(saved)
+	data, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	if data, err = securefile.Encrypt(data); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(auth.config.AdminSessionPath), 0o755); err != nil {
 		return err
 	}

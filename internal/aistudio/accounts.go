@@ -173,6 +173,8 @@ type accountRuntimeState struct {
 	BenefitTier        BenefitTier                `json:"benefit_tier,omitempty"`
 	CatalogFingerprint string                     `json:"catalog_fingerprint,omitempty"`
 	Proxy              string                     `json:"proxy,omitempty"`
+	AuthPaused         bool                       `json:"auth_paused,omitempty"`
+	AuthPauseReason    string                     `json:"auth_pause_reason,omitempty"`
 }
 
 // ModelAccessState 表示账户对单个模型的实测调用资格
@@ -215,6 +217,7 @@ type Account struct {
 	persistenceLocked     bool
 	authGeneration        uint64
 	authCheckedAt         time.Time
+	authPaused            bool
 	modelAccessGeneration uint64
 	stateMessage          string
 	catalogErr            error
@@ -1388,7 +1391,7 @@ func (l *AccountLease) markAuthenticationStateAt(required bool, reason string, c
 		l.account.State = AccountDisabled
 	} else if required {
 		l.account.State = AccountAuthRequired
-	} else if l.account.State == AccountAuthRequired {
+	} else if l.account.State == AccountAuthRequired && !l.account.authPaused {
 		l.account.State = AccountReady
 	}
 	if required {
@@ -2284,9 +2287,47 @@ func (p *AccountPool) recordCatalogFailure(accountID string, err error) {
 	}
 }
 
-// MarkReady 将账户恢复为可调度状态
+// MarkReady 将账户恢复为可调度状态并清除需人工检查的暂停标记
 func (p *AccountPool) MarkReady(accountID string) error {
-	return p.setAccountState(accountID, AccountReady, "")
+	return errors.Join(p.setAccountState(accountID, AccountReady, ""), p.clearAuthPause(accountID))
+}
+
+// PauseAccount 将账户暂停为需要人工检查的状态，并持久化暂停标记使重启后仍保持暂停
+func (p *AccountPool) PauseAccount(accountID string, reason string) error {
+	reason = strings.TrimSpace(reason)
+	_, persistErr := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		mark := func(account *Account) { account.authPaused = true }
+		if runtimeState.AuthPaused && runtimeState.AuthPauseReason == reason {
+			return false, mark, nil
+		}
+		runtimeState.AuthPaused, runtimeState.AuthPauseReason = true, reason
+		return true, mark, nil
+	})
+	return errors.Join(p.setAccountState(accountID, AccountAuthRequired, reason), persistErr)
+}
+
+// clearAuthPause 清除账户的暂停标记
+func (p *AccountPool) clearAuthPause(accountID string) error {
+	_, err := p.updateRuntime(accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		clear := func(account *Account) { account.authPaused = false }
+		if !runtimeState.AuthPaused && runtimeState.AuthPauseReason == "" {
+			return false, clear, nil
+		}
+		runtimeState.AuthPaused, runtimeState.AuthPauseReason = false, ""
+		return true, clear, nil
+	})
+	return err
+}
+
+// AccountState 返回账户当前状态
+func (p *AccountPool) AccountState(accountID string) (AccountState, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	account := p.byID[accountID]
+	if account == nil {
+		return "", false
+	}
+	return account.State, true
 }
 
 // Status 返回账户池的脱敏状态
@@ -2771,6 +2812,10 @@ func loadAccount(directory string) (*Account, error) {
 		return nil, fmt.Errorf("账户 %s: %w", id, err)
 	}
 	catalog, buildModels := readCatalogCache(filepath.Join(directory, catalogCacheName), runtimeState)
+	accountState := initialAccountState(accountConfig, state)
+	if accountConfig.Enabled && runtimeState.AuthPaused {
+		accountState = AccountAuthRequired
+	}
 	return &Account{
 		ID:            id,
 		Directory:     directory,
@@ -2781,7 +2826,9 @@ func loadAccount(directory string) (*Account, error) {
 		StorageState:  state,
 		Models:        cloneModels(catalog.models),
 		BenefitTier:   runtimeState.BenefitTier,
-		State:         initialAccountState(accountConfig, state),
+		State:         accountState,
+		stateMessage:  runtimeState.AuthPauseReason,
+		authPaused:    runtimeState.AuthPaused,
 		runtime:       runtimeState,
 		buildModels:   buildModels,
 		cachedCatalog: catalog,
@@ -3303,6 +3350,8 @@ func cloneRuntime(value accountRuntimeState) accountRuntimeState {
 		BenefitTier:        value.BenefitTier,
 		CatalogFingerprint: value.CatalogFingerprint,
 		Proxy:              value.Proxy,
+		AuthPaused:         value.AuthPaused,
+		AuthPauseReason:    value.AuthPauseReason,
 	}
 	for key, cooldown := range value.Cooldowns {
 		result.Cooldowns[key] = cooldown

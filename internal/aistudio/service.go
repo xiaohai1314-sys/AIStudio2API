@@ -484,6 +484,12 @@ func DefinitiveAuthenticationFailure(err error) bool {
 		(rpcError.StatusCode == http.StatusUnauthorized || rpcError.Code == 16)
 }
 
+// DefinitiveAccountRestriction 判断上游是否因账户受限明确拒绝请求
+func DefinitiveAccountRestriction(err error) bool {
+	var rpcError *RPCError
+	return errors.As(err, &rpcError) && rpcError.StatusCode == http.StatusForbidden && !driveAuthorizationMissing(err)
+}
+
 // DefinitiveWAARuntimeFailure 判断上游是否明确拒绝当前 WAA 运行态
 func DefinitiveWAARuntimeFailure(err error) bool {
 	var rpcError *RPCError

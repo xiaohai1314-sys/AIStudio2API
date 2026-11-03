@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/securefile"
 )
 
 // StateCookie 表示 Playwright storage state 中的 Cookie
@@ -145,6 +146,9 @@ func LoadStorageState(filePath string) (StorageState, error) {
 	if err != nil {
 		return StorageState{}, fmt.Errorf("读取 storage state: %w", err)
 	}
+	if data, err = securefile.Decrypt(data); err != nil {
+		return StorageState{}, fmt.Errorf("解密 storage state: %w", err)
+	}
 	var state StorageState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return StorageState{}, fmt.Errorf("解析 storage state: %w", err)
@@ -155,7 +159,7 @@ func LoadStorageState(filePath string) (StorageState, error) {
 	return state, nil
 }
 
-// WriteStorageState 原子写回 Playwright storage state
+// WriteStorageState 原子写回 Playwright storage state，启用凭证加密时以 DPAPI 密文保存
 func WriteStorageState(filePath string, state StorageState) error {
 	if err := state.Validate(); err != nil {
 		return err
@@ -165,6 +169,9 @@ func WriteStorageState(filePath string, state StorageState) error {
 		return fmt.Errorf("编码 storage state: %w", err)
 	}
 	data = append(data, '\n')
+	if data, err = securefile.Encrypt(data); err != nil {
+		return fmt.Errorf("加密 storage state: %w", err)
+	}
 	return atomicWriteFile(filePath, data, 0o600)
 }
 

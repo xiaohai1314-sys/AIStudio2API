@@ -72,3 +72,10 @@ func TestPublicRateLimitValidation(t *testing.T) {
 		t.Fatalf("invalid burst = %v, want burst error", err)
 	}
 }
+
+// TestAuthFailurePauseDefault 验证认证失败默认暂停账户等待人工检查
+func TestAuthFailurePauseDefault(t *testing.T) {
+	if !Default().AuthFailurePause {
+		t.Fatal("AUTH_FAILURE_PAUSE 默认应为 true")
+	}
+}
