@@ -45,6 +45,7 @@ type generationAdmin interface {
 	RuntimeConfig(context.Context) (api.RuntimeConfig, error)
 	UpdateRuntimeConfig(context.Context, api.RuntimeConfig) (api.RuntimeConfig, error)
 	Cooldowns(context.Context) ([]api.AdminCooldown, error)
+	EndpointRisks(context.Context) ([]api.AdminEndpointRisk, error)
 	ClearCooldown(ctx context.Context, accountID string, scope string) error
 	Requests(context.Context) ([]api.AdminRequest, error)
 	CancelRequest(context.Context, string) error
@@ -565,6 +566,13 @@ func (manager *runtimeManager) Cooldowns(ctx context.Context) ([]api.AdminCooldo
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.Cooldowns(ctx)
+}
+
+// EndpointRisks 返回当前生成服务按模型与通道汇总的风控计数
+func (manager *runtimeManager) EndpointRisks(ctx context.Context) ([]api.AdminEndpointRisk, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.EndpointRisks(ctx)
 }
 
 // ClearCooldown 手动清除账户在一个作用域上的冷却

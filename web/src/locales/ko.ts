@@ -112,6 +112,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.riskChallenge': '챌린지',
   'accounts.riskForbidden': '403 차단',
   'accounts.riskRateLimited': '요청 제한',
+  'accounts.riskStats': '최근 10분 업스트림 리스크',
   'accounts.envCheckRunning': '확인 중…',
   'accounts.envExit': '출구 IP',
   'accounts.envNoWarnings': '언어, 시간대와 출구 지역이 일치합니다',
@@ -1509,6 +1510,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxyHelp':
     'HTTP, HTTPS 또는 SOCKS5 프록시. 쉼표로 여러 개를 구분하면 프록시 풀이 되며, 비우면 시스템 프록시 사용',
   'settings.proxyPool': '프록시 풀',
+  'settings.proxyScore': '건강도 {score}%',
   'settings.proxyAvailable': '사용 가능',
   'settings.proxyUnavailable': '사용 불가',
   'settings.proxyAccounts': '계정 {count}개',

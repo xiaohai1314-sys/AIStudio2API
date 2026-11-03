@@ -84,3 +84,52 @@ func TestProxyStatusReportsQuality(t *testing.T) {
 		t.Fatalf("代理状态 = %+v, want quality mobile", statuses)
 	}
 }
+
+// TestProxyScoreTracksOutcomes 验证成功与风控命中改变健康评分
+func TestProxyScoreTracksOutcomes(t *testing.T) {
+	pool, _ := newQualityTestPool(1)
+	proxies := NewProxyPool(pool, []string{"http://a.example:8080#residential"})
+	proxy := "http://a.example:8080#residential"
+	if statuses := proxies.Status(); statuses[0].Score != 100 {
+		t.Fatalf("初始评分 = %d", statuses[0].Score)
+	}
+	proxies.ReportSuccess(proxy)
+	proxies.ReportRisk(proxy)
+	if statuses := proxies.Status(); statuses[0].Score != 50 {
+		t.Fatalf("一次成功一次风控后评分 = %d", statuses[0].Score)
+	}
+	proxies.ReportRisk(proxy)
+	proxies.ReportRisk(proxy)
+	if statuses := proxies.Status(); statuses[0].Score != 25 {
+		t.Fatalf("三次风控后评分 = %d", statuses[0].Score)
+	}
+}
+
+// TestProxyPoolPrefersHealthyProxyWithinQuality 验证同质量代理中优先选择评分更高的代理
+func TestProxyPoolPrefersHealthyProxyWithinQuality(t *testing.T) {
+	pool, _ := newQualityTestPool(0)
+	proxies := NewProxyPool(pool, []string{
+		"http://a.example:8080#residential",
+		"http://b.example:8080#residential",
+	})
+	proxies.ReportRisk("http://a.example:8080#residential")
+	proxies.ReportRisk("http://a.example:8080#residential")
+	if next := proxies.Next(); next != "http://b.example:8080#residential" {
+		t.Fatalf("Next() = %q，应选择评分更高的代理", next)
+	}
+}
+
+// TestProxyPoolKeepsQualityAboveScore 验证质量等级仍优先于健康评分
+func TestProxyPoolKeepsQualityAboveScore(t *testing.T) {
+	pool, _ := newQualityTestPool(0)
+	proxies := NewProxyPool(pool, []string{
+		"http://dc.example:8080#datacenter",
+		"http://res.example:8080#residential",
+	})
+	for range 5 {
+		proxies.ReportRisk("http://res.example:8080#residential")
+	}
+	if next := proxies.Next(); next != "http://res.example:8080#residential" {
+		t.Fatalf("Next() = %q，质量等级应优先于评分", next)
+	}
+}

@@ -58,10 +58,25 @@ export interface EnvironmentCheckResult {
 
 interface ProxyPoolEntry {
   proxy: string
+  quality?: string
   available: boolean
   accounts: number
+  score: number
   checked_at?: string
   error?: string
+}
+
+// EndpointRisk 是一个模型与通道近期的请求与风控计数
+export interface EndpointRisk {
+  model: string
+  channel: string
+  requests: number
+  succeeded: number
+  failed: number
+  challenge: number
+  forbidden: number
+  rate_limited: number
+  last_at?: string
 }
 
 export interface AccountRefresh {

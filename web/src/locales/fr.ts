@@ -115,6 +115,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.riskChallenge': 'Challenge',
   'accounts.riskForbidden': '403 bloqué',
   'accounts.riskRateLimited': 'Débit limité',
+  'accounts.riskStats': 'Risque amont (10 dernières minutes)',
   'accounts.envCheckRunning': 'Vérification…',
   'accounts.envExit': 'IP de sortie',
   'accounts.envNoWarnings': 'Langue, fuseau horaire et région de sortie concordent',
@@ -1586,6 +1587,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxyHelp':
     'Proxy HTTP, HTTPS ou SOCKS5. Plusieurs séparés par des virgules forment un pool ; vide utilise le proxy système',
   'settings.proxyPool': 'Pool de proxys',
+  'settings.proxyScore': 'Santé {score} %',
   'settings.proxyAvailable': 'Disponible',
   'settings.proxyUnavailable': 'Indisponible',
   'settings.proxyAccounts': '{count} comptes',

@@ -3,6 +3,7 @@ package aistudio
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +14,9 @@ import (
 
 // proxyFailureThreshold 为代理判定不可用前允许的连续网络错误次数
 const proxyFailureThreshold = 3
+
+// proxyScoreWindow 是代理健康评分的统计窗口
+const proxyScoreWindow = 30 * time.Minute
 
 // proxyQualityRanks 按出口质量排序，数值越大越优先
 var proxyQualityRanks = map[string]int{"mobile": 4, "residential": 3, "isp": 2, "datacenter": 1}
@@ -33,14 +37,20 @@ type proxyEntry struct {
 	failures  int
 	checkedAt time.Time
 	lastError string
+	// good 与 bad 是评分窗口内的成功与风控/网络失败次数，score 由二者算出
+	good       int
+	bad        int
+	score      int
+	scoreSince time.Time
 }
 
-// ProxyStatus 表示代理池中一个代理的可用性与绑定账户数
+// ProxyStatus 表示代理池中一个代理的可用性、健康评分与绑定账户数
 type ProxyStatus struct {
 	Proxy     string     `json:"proxy"`
 	Quality   string     `json:"quality,omitempty"`
 	Available bool       `json:"available"`
 	Accounts  int        `json:"accounts"`
+	Score     int        `json:"score"`
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
 	Error     string     `json:"error,omitempty"`
 }
@@ -51,7 +61,7 @@ func NewProxyPool(pool *AccountPool, proxies []string) *ProxyPool {
 	for _, proxy := range proxies {
 		if proxy = strings.TrimSpace(proxy); proxy != "" {
 			quality := appconfig.ProxyQuality(proxy)
-			entries = append(entries, &proxyEntry{proxy: proxy, quality: quality, rank: proxyQualityRanks[quality]})
+			entries = append(entries, &proxyEntry{proxy: proxy, quality: quality, rank: proxyQualityRanks[quality], score: 100})
 		}
 	}
 	return &ProxyPool{pool: pool, entries: entries}
@@ -150,14 +160,16 @@ func (p *ProxyPool) Next() string {
 	return chosen
 }
 
-// chooseLocked 在可用代理中选出出口质量最高、绑定数最少的代理
+// chooseLocked 在可用代理中选出出口质量最高、健康评分最高、绑定数最少的代理
 func (p *ProxyPool) chooseLocked(available []string, counts map[string]int) string {
 	chosen := available[0]
-	chosenRank := p.rankOfLocked(chosen)
+	chosenRank, chosenScore := p.rankOfLocked(chosen), p.scoreOfLocked(chosen)
 	for _, proxy := range available[1:] {
-		rank := p.rankOfLocked(proxy)
-		if rank > chosenRank || rank == chosenRank && counts[proxy] < counts[chosen] {
-			chosen, chosenRank = proxy, rank
+		rank, score := p.rankOfLocked(proxy), p.scoreOfLocked(proxy)
+		better := rank > chosenRank ||
+			rank == chosenRank && (score > chosenScore || score == chosenScore && counts[proxy] < counts[chosen])
+		if better {
+			chosen, chosenRank, chosenScore = proxy, rank, score
 		}
 	}
 	return chosen
@@ -169,6 +181,36 @@ func (p *ProxyPool) rankOfLocked(proxy string) int {
 		return entry.rank
 	}
 	return 0
+}
+
+// scoreOfLocked 返回代理的健康评分，未记录的代理按满分处理
+func (p *ProxyPool) scoreOfLocked(proxy string) int {
+	if entry := p.entryLocked(proxy); entry != nil {
+		return entry.score
+	}
+	return 100
+}
+
+// recordLocked 记录一次成功或失败并重算评分，窗口过期后从零开始
+func (entry *proxyEntry) recordLocked(good bool, now time.Time) {
+	if now.Sub(entry.scoreSince) >= proxyScoreWindow {
+		entry.good, entry.bad = 0, 0
+		entry.scoreSince = now
+	}
+	if good {
+		entry.good++
+	} else {
+		entry.bad++
+	}
+	entry.score = proxyScore(entry.good, entry.bad)
+}
+
+// proxyScore 返回 0 到 100 的健康评分，没有样本时为 100
+func proxyScore(good, bad int) int {
+	if good+bad == 0 {
+		return 100
+	}
+	return int(math.Round(100 * float64(good) / float64(good+bad)))
 }
 
 // availableLocked 返回可用代理；全部不可用时返回全部代理
@@ -236,6 +278,7 @@ func (p *ProxyPool) ReportFailure(proxy string, err error) ([]string, error) {
 	}
 	entry.failures++
 	entry.lastError = err.Error()
+	entry.recordLocked(false, time.Now())
 	if entry.down || entry.failures < proxyFailureThreshold || !p.otherAvailableLocked(entry) {
 		return nil, nil
 	}
@@ -243,7 +286,19 @@ func (p *ProxyPool) ReportFailure(proxy string, err error) ([]string, error) {
 	return p.assignLocked()
 }
 
-// ReportSuccess 清零 proxy 的连续网络错误
+// ReportRisk 记录经 proxy 发出的请求命中上游风控，计入健康评分
+func (p *ProxyPool) ReportRisk(proxy string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if entry := p.entryLocked(proxy); entry != nil {
+		entry.recordLocked(false, time.Now())
+	}
+}
+
+// ReportSuccess 清零 proxy 的连续网络错误并记录一次成功
 func (p *ProxyPool) ReportSuccess(proxy string) {
 	if p == nil {
 		return
@@ -252,6 +307,7 @@ func (p *ProxyPool) ReportSuccess(proxy string) {
 	defer p.mu.Unlock()
 	if entry := p.entryLocked(proxy); entry != nil {
 		entry.failures = 0
+		entry.recordLocked(true, time.Now())
 	}
 }
 
@@ -317,7 +373,7 @@ func (p *ProxyPool) Status() []ProxyStatus {
 	p.pool.mu.Unlock()
 	statuses := make([]ProxyStatus, 0, len(p.entries))
 	for _, entry := range p.entries {
-		status := ProxyStatus{Proxy: entry.proxy, Quality: entry.quality, Available: !entry.down, Accounts: counts[entry.proxy], Error: entry.lastError}
+		status := ProxyStatus{Proxy: entry.proxy, Quality: entry.quality, Available: !entry.down, Accounts: counts[entry.proxy], Score: entry.score, Error: entry.lastError}
 		if !entry.checkedAt.IsZero() {
 			status.CheckedAt = timePointer(entry.checkedAt)
 		}

@@ -36,6 +36,7 @@ type AdminService interface {
 	RuntimeConfig(context.Context) (RuntimeConfig, error)
 	UpdateRuntimeConfig(context.Context, RuntimeConfig) (RuntimeConfig, error)
 	Cooldowns(context.Context) ([]AdminCooldown, error)
+	EndpointRisks(context.Context) ([]AdminEndpointRisk, error)
 	ClearCooldown(ctx context.Context, accountID string, scope string) error
 	Requests(context.Context) ([]AdminRequest, error)
 	CancelRequest(context.Context, string) error
@@ -184,6 +185,19 @@ type AdminAccountRisk struct {
 	LastAt      *time.Time `json:"last_at,omitempty"`
 }
 
+// AdminEndpointRisk 是一个模型与通道在一个时间窗口内的请求与风控计数
+type AdminEndpointRisk struct {
+	Model       string     `json:"model"`
+	Channel     string     `json:"channel"`
+	Requests    int        `json:"requests"`
+	Succeeded   int        `json:"succeeded"`
+	Failed      int        `json:"failed"`
+	Challenge   int        `json:"challenge"`
+	Forbidden   int        `json:"forbidden"`
+	RateLimited int        `json:"rate_limited"`
+	LastAt      *time.Time `json:"last_at,omitempty"`
+}
+
 // AdminWarning 表示账户环境的一处不一致
 type AdminWarning struct {
 	Code    string `json:"code"`
@@ -208,12 +222,13 @@ type EnvironmentCheckResult struct {
 	Error             string         `json:"error,omitempty"`
 }
 
-// AdminProxy 表示代理池中一个代理的可用性与绑定账户数
+// AdminProxy 表示代理池中一个代理的可用性、健康评分与绑定账户数
 type AdminProxy struct {
 	Proxy     string     `json:"proxy"`
 	Quality   string     `json:"quality,omitempty"`
 	Available bool       `json:"available"`
 	Accounts  int        `json:"accounts"`
+	Score     int        `json:"score"`
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
 	Error     string     `json:"error,omitempty"`
 }
@@ -390,6 +405,7 @@ func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/config", s.handleUpdateRuntimeConfig)
 	mux.HandleFunc("GET /api/first-event-latency", s.handleFirstEventLatencies)
 	mux.HandleFunc("GET /api/cooldowns", s.handleCooldowns)
+	mux.HandleFunc("GET /api/risk/endpoints", s.handleEndpointRisks)
 	mux.HandleFunc("DELETE /api/accounts/{id}/cooldowns/{scope}", s.handleClearCooldown)
 	mux.HandleFunc("GET /api/requests", s.handleRequests)
 	mux.HandleFunc("POST /api/requests/{id}/cancel", s.handleCancelRequest)
@@ -678,6 +694,15 @@ func (s *server) handleCooldowns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]AdminCooldown{"cooldowns": cooldowns})
+}
+
+func (s *server) handleEndpointRisks(w http.ResponseWriter, r *http.Request) {
+	endpoints, err := s.config.Admin.EndpointRisks(r.Context())
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]AdminEndpointRisk{"endpoints": endpoints})
 }
 
 func (s *server) handleClearCooldown(w http.ResponseWriter, r *http.Request) {

@@ -1907,6 +1907,7 @@ func (service *trackedService) generateWithRetry(
 		}
 		if winner != nil {
 			service.proxies.ReportSuccess(winner.proxy)
+			service.pool.RecordEndpoint(modelID, winner.lease.Channel(), aistudio.EndpointSuccess)
 			service.bindEnvironment(winner)
 			if retry.buildRejection != nil {
 				service.coolRejectedBuild(request.ID, retry.buildRejection, modelID, winner.accountLabel)
@@ -2173,6 +2174,8 @@ func (service *trackedService) settleAttempt(
 	challenge := aistudio.IsChallenge(err)
 	if challenge {
 		service.pool.RecordRisk(accountID, aistudio.RiskChallenge)
+		service.pool.RecordEndpoint(modelID, lease.Channel(), aistudio.EndpointChallenge)
+		service.proxies.ReportRisk(attempt.proxy)
 		if pauseErr := service.pool.PauseAccount(accountID, "上游要求人机验证，已暂停等待人工检查"); pauseErr != nil {
 			err = errors.Join(err, pauseErr)
 			retryable = false
@@ -2183,7 +2186,12 @@ func (service *trackedService) settleAttempt(
 		switch aistudio.ErrorStatus(err) {
 		case http.StatusForbidden:
 			risk := service.pool.RecordRisk(accountID, aistudio.RiskForbidden)
-			if risk.Forbidden >= aistudio.RiskIsolationThreshold && !aistudio.DefinitiveAuthenticationFailure(err) && !aistudio.DefinitiveAccountRestriction(err) {
+			service.pool.RecordEndpoint(modelID, lease.Channel(), aistudio.EndpointForbidden)
+			definitive := aistudio.DefinitiveAuthenticationFailure(err) || aistudio.DefinitiveAccountRestriction(err)
+			if !definitive {
+				service.proxies.ReportRisk(attempt.proxy)
+			}
+			if risk.Forbidden >= aistudio.RiskIsolationThreshold && !definitive {
 				if pauseErr := service.pool.PauseAccount(accountID, fmt.Sprintf("窗口内 403 达到 %d 次，已暂停等待人工检查", aistudio.RiskIsolationThreshold)); pauseErr != nil {
 					err = errors.Join(err, pauseErr)
 					retryable = false
@@ -2193,6 +2201,11 @@ func (service *trackedService) settleAttempt(
 			}
 		case http.StatusTooManyRequests:
 			service.pool.RecordRisk(accountID, aistudio.RiskRateLimited)
+			service.pool.RecordEndpoint(modelID, lease.Channel(), aistudio.EndpointRateLimited)
+		default:
+			if err != nil && requestCtx.Err() == nil {
+				service.pool.RecordEndpoint(modelID, lease.Channel(), aistudio.EndpointFailed)
+			}
 		}
 	}
 	if aistudio.DefinitiveAuthenticationFailure(err) {

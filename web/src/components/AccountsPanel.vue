@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -18,6 +18,7 @@ import type {
   AccountState,
   ChromeImportProfile,
   CookieBrowser,
+  EndpointRisk,
   PairingToken,
 } from '@/types'
 import type { IconName } from '@/icons'
@@ -155,6 +156,36 @@ function riskTotal(account: Account): number {
   const risk = account.risk
   return risk ? risk.challenge + risk.forbidden + risk.rate_limited : 0
 }
+
+const endpointRisks = ref<EndpointRisk[]>([])
+const showRiskStats = ref(false)
+const riskTotals = computed(() =>
+  endpointRisks.value.reduce(
+    (totals, risk) => ({
+      hits: totals.hits + risk.challenge + risk.forbidden + risk.rate_limited,
+      challenge: totals.challenge + risk.challenge,
+      forbidden: totals.forbidden + risk.forbidden,
+      rateLimited: totals.rateLimited + risk.rate_limited,
+    }),
+    { hits: 0, challenge: 0, forbidden: 0, rateLimited: 0 },
+  ),
+)
+
+// loadEndpointRisks 拉取近 10 分钟按模型与通道汇总的风控计数
+async function loadEndpointRisks(): Promise<void> {
+  try {
+    endpointRisks.value = await api.endpointRisks()
+  } catch {
+    endpointRisks.value = []
+  }
+}
+
+let riskRefresh: number | undefined
+onMounted(() => {
+  void loadEndpointRisks()
+  riskRefresh = window.setInterval(() => void loadEndpointRisks(), 30000)
+})
+onUnmounted(() => window.clearInterval(riskRefresh))
 
 // actionError 将账户写操作错误发送到全局通知
 function actionError(error: unknown): void {
@@ -762,6 +793,76 @@ async function refreshAllAccounts(): Promise<void> {
             {{ egress ? maskedProxy(egress) : t('accounts.direct') }}
           </option>
         </UiSelect>
+      </div>
+      <div v-if="endpointRisks.length > 0" class="mb-3 rounded-lg border border-line bg-panel">
+        <button
+          type="button"
+          class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-xs"
+          @click="showRiskStats = !showRiskStats"
+        >
+          <span class="font-medium text-gray-300">{{ t('accounts.riskStats') }}</span>
+          <span class="text-orange-300">{{ t('accounts.risk') }} {{ riskTotals.hits }}</span>
+          <span class="text-gray-500"
+            >{{ t('accounts.riskChallenge') }} {{ riskTotals.challenge }}</span
+          >
+          <span class="text-gray-500"
+            >{{ t('accounts.riskForbidden') }} {{ riskTotals.forbidden }}</span
+          >
+          <span class="text-gray-500"
+            >{{ t('accounts.riskRateLimited') }} {{ riskTotals.rateLimited }}</span
+          >
+          <UiIcon
+            name="chevronDown"
+            :size="14"
+            class="ml-auto text-gray-500 transition"
+            :class="{ 'rotate-180': showRiskStats }"
+          />
+        </button>
+        <div v-if="showRiskStats" class="overflow-x-auto border-t border-line/60 px-3 py-2">
+          <table class="w-full text-left text-xs whitespace-nowrap">
+            <thead class="text-gray-500">
+              <tr>
+                <th class="py-1 pr-3 font-normal">{{ t('usage.dimension.model') }}</th>
+                <th class="py-1 pr-3 font-normal">{{ t('usage.dimension.channel') }}</th>
+                <th class="py-1 pr-3 font-normal">{{ t('usage.requests') }}</th>
+                <th class="py-1 pr-3 font-normal">{{ t('usage.succeeded') }}</th>
+                <th class="py-1 pr-3 font-normal">{{ t('accounts.riskChallenge') }}</th>
+                <th class="py-1 pr-3 font-normal">{{ t('accounts.riskForbidden') }}</th>
+                <th class="py-1 font-normal">{{ t('accounts.riskRateLimited') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="risk in endpointRisks"
+                :key="`${risk.channel}:${risk.model}`"
+                class="border-t border-line/40"
+              >
+                <td class="py-1 pr-3 text-gray-200">{{ risk.model }}</td>
+                <td class="py-1 pr-3 text-gray-500">{{ risk.channel }}</td>
+                <td class="py-1 pr-3 text-gray-400">{{ risk.requests }}</td>
+                <td class="py-1 pr-3 text-green-400">{{ risk.succeeded }}</td>
+                <td
+                  class="py-1 pr-3"
+                  :class="risk.challenge > 0 ? 'text-orange-300' : 'text-gray-600'"
+                >
+                  {{ risk.challenge }}
+                </td>
+                <td
+                  class="py-1 pr-3"
+                  :class="risk.forbidden > 0 ? 'text-orange-300' : 'text-gray-600'"
+                >
+                  {{ risk.forbidden }}
+                </td>
+                <td
+                  class="py-1"
+                  :class="risk.rate_limited > 0 ? 'text-orange-300' : 'text-gray-600'"
+                >
+                  {{ risk.rate_limited }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <div v-if="error" class="rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300">
         {{ error }}

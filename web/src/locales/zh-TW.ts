@@ -107,6 +107,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.riskChallenge': '人機驗證',
   'accounts.riskForbidden': '403 拒絕',
   'accounts.riskRateLimited': '限流',
+  'accounts.riskStats': '近 10 分鐘上游風控',
   'accounts.envCheckRunning': '檢查中…',
   'accounts.envExit': '出口 IP',
   'accounts.envNoWarnings': '語言、時區與出口地區一致',
@@ -1441,6 +1442,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxyHelp':
     'HTTP、HTTPS 或 SOCKS5 代理伺服器，多個以逗號分隔組成代理池；留空使用系統代理',
   'settings.proxyPool': '代理池',
+  'settings.proxyScore': '健康度 {score}%',
   'settings.proxyAvailable': '可用',
   'settings.proxyUnavailable': '無法使用',
   'settings.proxyAccounts': '{count} 個帳號',

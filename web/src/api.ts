@@ -9,6 +9,7 @@ import type {
   ChromeImportInput,
   CookieBrowser,
   CookieImportInput,
+  EndpointRisk,
   EnvironmentCheckResult,
   FirstEventLatency,
   ChromeImportProfile,
@@ -46,6 +47,10 @@ interface ModelsResponse {
 
 interface CooldownsResponse {
   cooldowns: Cooldown[]
+}
+
+interface EndpointRisksResponse {
+  endpoints: EndpointRisk[]
 }
 
 interface RequestsResponse {
@@ -138,6 +143,8 @@ export const api = {
   accounts: async () => (await requestJSON<AccountsResponse>('/api/accounts')).accounts,
   models: async () => (await requestJSON<ModelsResponse>('/api/models')).models,
   cooldowns: async () => (await requestJSON<CooldownsResponse>('/api/cooldowns')).cooldowns,
+  endpointRisks: async () =>
+    (await requestJSON<EndpointRisksResponse>('/api/risk/endpoints')).endpoints,
   requests: async () => (await requestJSON<RequestsResponse>('/api/requests')).requests,
   config: () => requestJSON<ServiceConfig>('/api/config'),
   usage: (query: URLSearchParams, signal: AbortSignal) =>

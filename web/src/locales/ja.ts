@@ -114,6 +114,7 @@ export const messages: Record<TranslationKey, string> = {
   'accounts.riskChallenge': 'チャレンジ',
   'accounts.riskForbidden': '403 拒否',
   'accounts.riskRateLimited': 'レート制限',
+  'accounts.riskStats': '直近 10 分の上流リスク',
   'accounts.envCheckRunning': '確認中…',
   'accounts.envExit': '出口 IP',
   'accounts.envNoWarnings': '言語・タイムゾーンと出口地域が一致しています',
@@ -1530,6 +1531,7 @@ export const messages: Record<TranslationKey, string> = {
   'settings.proxyHelp':
     'HTTP、HTTPS、SOCKS5 プロキシ。カンマ区切りで複数指定するとプールになり、空欄ではシステム プロキシを使用',
   'settings.proxyPool': 'プロキシプール',
+  'settings.proxyScore': '健全性 {score}%',
   'settings.proxyAvailable': '利用可能',
   'settings.proxyUnavailable': '利用不可',
   'settings.proxyAccounts': '{count} アカウント',

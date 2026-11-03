@@ -892,10 +892,28 @@ func (admin *runtimeAdmin) proxyPoolStatus() []api.AdminProxy {
 	pool := make([]api.AdminProxy, 0, len(statuses))
 	for _, status := range statuses {
 		pool = append(pool, api.AdminProxy{
-			Proxy: status.Proxy, Quality: status.Quality, Available: status.Available, Accounts: status.Accounts, CheckedAt: status.CheckedAt, Error: status.Error,
+			Proxy: status.Proxy, Quality: status.Quality, Available: status.Available, Accounts: status.Accounts, Score: status.Score, CheckedAt: status.CheckedAt, Error: status.Error,
 		})
 	}
 	return pool
+}
+
+// EndpointRisks 返回按模型与通道汇总的近期风控计数
+func (admin *runtimeAdmin) EndpointRisks(context.Context) ([]api.AdminEndpointRisk, error) {
+	risks := admin.pool.EndpointRisks()
+	result := make([]api.AdminEndpointRisk, 0, len(risks))
+	for _, risk := range risks {
+		item := api.AdminEndpointRisk{
+			Model: risk.Model, Channel: string(risk.Channel), Requests: risk.Requests, Succeeded: risk.Succeeded,
+			Failed: risk.Failed, Challenge: risk.Challenge, Forbidden: risk.Forbidden, RateLimited: risk.RateLimited,
+		}
+		if !risk.LastAt.IsZero() {
+			at := risk.LastAt
+			item.LastAt = &at
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 func (admin *runtimeAdmin) effectiveProxy(accountProxy string) string {

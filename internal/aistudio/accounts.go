@@ -314,8 +314,10 @@ type AccountPool struct {
 	modelChannels         map[string]Channel
 	apiKeyAccounts        map[string][]string
 	// risk 保存各账户在当前窗口内的风控响应计数
-	risk    map[string]*accountRiskWindow
-	changed chan struct{}
+	risk map[string]*accountRiskWindow
+	// endpointRisk 保存各模型与通道在当前窗口内的请求与风控计数
+	endpointRisk map[string]*endpointRiskEntry
+	changed      chan struct{}
 	// sessionCheck 以官网页面的方式打开 AI Studio 检查账户会话，为空时认证失败直接标记需要重新登录
 	sessionCheck func(context.Context, *Account) error
 	// sessions 合并同一账户并发的会话检查
@@ -756,7 +758,7 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
 		routingStrategy: "round-robin", lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
-		risk: make(map[string]*accountRiskWindow),
+		risk: make(map[string]*accountRiskWindow), endpointRisk: make(map[string]*endpointRiskEntry),
 	}
 	for _, account := range p.accounts {
 		if account.runtime.Cooldowns == nil {

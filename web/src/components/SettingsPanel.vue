@@ -1010,6 +1010,10 @@ async function saveConfig(): Promise<void> {
                     <span class="text-gray-500">
                       {{ t('settings.proxyAccounts').replace('{count}', String(entry.accounts)) }}
                     </span>
+                    <span v-if="entry.quality" class="text-gray-600">{{ entry.quality }}</span>
+                    <span class="text-gray-500">
+                      {{ t('settings.proxyScore').replace('{score}', String(entry.score)) }}
+                    </span>
                   </li>
                 </ul>
               </div>
