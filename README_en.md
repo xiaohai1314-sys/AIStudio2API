@@ -603,6 +603,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
 | `ENCRYPT_CREDENTIALS` | `false` | Encrypt account auth states and the console session file with Windows DPAPI; Windows only, and encrypted files cannot be copied to another machine or user |
 | `TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of trusted reverse proxies, such as `127.0.0.1/32`; only their `X-Forwarded-Proto` may mark a console-session cookie Secure |
+| `PPROF_ADDR` | empty | Listen address for profiling, such as `127.0.0.1:6060`; empty disables it, and when enabled `/debug/pprof/` serves CPU, memory and goroutine profiles |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |

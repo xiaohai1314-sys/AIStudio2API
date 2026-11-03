@@ -2,6 +2,7 @@ package securefile
 
 import (
 	"bytes"
+	"encoding/base64"
 	"runtime"
 	"testing"
 )
@@ -59,8 +60,17 @@ func TestDPAPITamperDetected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := append([]byte(nil), encrypted...)
-	tampered[len(tampered)-2] ^= 0x01
+	encoded, ok := bytes.CutPrefix(encrypted, []byte(envelopePrefix))
+	if !ok {
+		t.Fatalf("密文缺少标记: %q", encrypted)
+	}
+	protected, err := base64.StdEncoding.DecodeString(string(encoded))
+	if err != nil || len(protected) < 3 {
+		t.Fatalf("密文解码失败: %q, %v", protected, err)
+	}
+	// 篡改解码后的密文字节：直接翻转 base64 文本可能只改动填充位，解出的密文不变
+	protected[len(protected)/2] ^= 0x01
+	tampered := []byte(envelopePrefix + base64.StdEncoding.EncodeToString(protected))
 	if _, err := Decrypt(tampered); err == nil {
 		t.Fatal("被篡改的密文没有报错")
 	}

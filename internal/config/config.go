@@ -63,6 +63,7 @@ var configKeys = [...]string{
 	"ADMIN_PASSWORD",
 	"ENCRYPT_CREDENTIALS",
 	"TRUSTED_PROXY_CIDRS",
+	"PPROF_ADDR",
 	"BUILD_NATIVE_NONSTREAM",
 	"NONSTREAM_KEEPALIVE",
 	"FAKE_STREAM",
@@ -130,6 +131,7 @@ type Config struct {
 	AuthStates             string
 	ListenAddr             string
 	PreviewListenAddr      string
+	PProfAddr              string
 	ProxyAPIKey            string
 	PublicRateLimit        int
 	PublicRateBurst        int
@@ -239,6 +241,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"AISTUDIO_AUTH_STATES":     textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
 	"LISTEN_ADDR":              textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
 	"PREVIEW_LISTEN_ADDR":      textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
+	"PPROF_ADDR":               textSetter(func(c *Config) *string { return &c.PProfAddr }, strings.TrimSpace),
 	"PROXY_API_KEY":            textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
 	"PROXY":                    textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
 	"ROUTING_STRATEGY":         textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),

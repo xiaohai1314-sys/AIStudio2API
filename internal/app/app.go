@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -260,6 +261,9 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	go func() {
 		serveError <- previewServer.Serve(previewListener)
 	}()
+	if cfg.PProfAddr != "" {
+		go servePProf(ctx, cfg.PProfAddr, manager)
+	}
 
 	address := "http://" + browserAddress(listener.Addr().String())
 	manager.requests.log("service", "INFO", "管理服务就绪 | 地址="+address)
@@ -292,6 +296,40 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		return true, nil
 	}
 	return true, serveErr
+}
+
+// pprofHandler 返回 net/http/pprof 性能分析端点，不挂载到公开 API 与管理面
+func pprofHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
+}
+
+// servePProf 在独立监听上提供 net/http/pprof 性能分析端点，仅在 PPROF_ADDR 非空时启用
+func servePProf(ctx context.Context, address string, manager *runtimeManager) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		manager.requests.log("service", "WARN", fmt.Sprintf("pprof 监听失败 | 地址=%s | %v", address, err))
+		return
+	}
+	if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok && !tcpAddr.IP.IsLoopback() {
+		manager.requests.log("service", "WARN", fmt.Sprintf("pprof 监听在非回环地址，请确保外部无法访问 | 地址=%s", listener.Addr()))
+	}
+	server := &http.Server{Handler: pprofHandler(), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	manager.requests.log("service", "INFO", "pprof 就绪 | 地址="+listener.Addr().String())
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		manager.requests.log("service", "WARN", fmt.Sprintf("pprof 服务退出 | %v", err))
+	}
 }
 
 // portReserved 是 Windows 拒绝监听系统保留端口（Hyper-V、WSL2、Docker 的 WinNAT 保留端口段）时返回的 WSAEACCES
