@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa"
 )
 
@@ -723,7 +724,7 @@ func (runtime *goWAARuntime) startVM(ctx context.Context, challenge waa.Challeng
 	runtime.interpreterHash, runtime.interpreter = challenge.InterpreterHash, interpreter
 	cookie, _ := documentCookie(runtime.cookies())
 	profile := runtime.profile
-	location, err := time.LoadLocation(profile.TimeZone)
+	location, err := tzcache.Load(profile.TimeZone)
 	if err != nil {
 		location = time.Local
 	}

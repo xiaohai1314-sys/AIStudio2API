@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 )
 
 // DefaultAccountLocale 返回当前用户的系统语言
@@ -54,7 +56,7 @@ func normalizeSystemTimezone(value string) string {
 	if value == "" || value == "Local" {
 		return ""
 	}
-	if _, err := time.LoadLocation(value); err != nil {
+	if _, err := tzcache.Load(value); err != nil {
 		return ""
 	}
 	return value

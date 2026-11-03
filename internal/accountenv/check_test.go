@@ -79,3 +79,13 @@ func TestSplitLocale(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkZoneCountries 测量账户列表渲染时每个账户的时区校验开销
+func BenchmarkZoneCountries(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, valid := ZoneCountries("America/New_York"); !valid {
+			b.Fatal("合法时区被判为无效")
+		}
+	}
+}

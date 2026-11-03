@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 )
 
 // requestBodyLimit 是单个请求或响应正文保存的最大字节数
@@ -298,7 +300,7 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	query := UsageQuery{From: from, To: to, Location: time.UTC, Filters: parseUsageFilters(values), Stack: "model"}
 	if name := values.Get("tz"); name != "" {
-		if query.Location, err = time.LoadLocation(name); err != nil {
+		if query.Location, err = tzcache.Load(name); err != nil {
 			writeAdminError(w, http.StatusBadRequest, "invalid_request", "tz 必须是 IANA 时区名")
 			return
 		}

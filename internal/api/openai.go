@@ -11,6 +11,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1300,27 +1301,120 @@ func (choice *chatStreamChoice) emit(event aistudio.Event) error {
 	return nil
 }
 
+// chatChunkEncoder 按 field_order.json 中 chat.completion.chunk 的字段顺序直编码，跳过通用字段排序的深拷贝
+type chatChunkEncoder struct {
+	buffer []byte
+	err    error
+}
+
+func (encoder *chatChunkEncoder) raw(text string) {
+	encoder.buffer = append(encoder.buffer, text...)
+}
+
+func (encoder *chatChunkEncoder) value(value any) {
+	if encoder.err != nil {
+		return
+	}
+	switch value := value.(type) {
+	case string:
+		if buffer, ok := appendPlainJSONString(encoder.buffer, value); ok {
+			encoder.buffer = buffer
+			return
+		}
+	case int:
+		encoder.buffer = strconv.AppendInt(encoder.buffer, int64(value), 10)
+		return
+	case int64:
+		encoder.buffer = strconv.AppendInt(encoder.buffer, value, 10)
+		return
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		encoder.err = err
+		return
+	}
+	encoder.buffer = append(encoder.buffer, data...)
+}
+
+// appendPlainJSONString 在字符串无需转义时直接写入，否则返回 false 交给 encoding/json
+func appendPlainJSONString(buffer []byte, value string) ([]byte, bool) {
+	for index := 0; index < len(value); index++ {
+		if character := value[index]; character < 0x20 || character >= 0x7f || character == '"' || character == '\\' || character == '<' || character == '>' || character == '&' {
+			return buffer, false
+		}
+	}
+	buffer = append(buffer, '"')
+	buffer = append(buffer, value...)
+	return append(buffer, '"'), true
+}
+
+// field 写入一个字段，first 表示是否为对象中的第一个字段
+func (encoder *chatChunkEncoder) field(key string, value any, first *bool) {
+	if encoder.err != nil {
+		return
+	}
+	if !*first {
+		encoder.raw(",")
+	}
+	*first = false
+	encoder.value(key)
+	encoder.raw(":")
+	encoder.value(value)
+}
+
+// chatDelta 编码 delta：role、content 在前，其余字段按字母序，与 key:delta 的字段顺序一致
+func (encoder *chatChunkEncoder) chatDelta(delta map[string]any) {
+	encoder.raw("{")
+	first := true
+	for _, key := range []string{"role", "content"} {
+		if value, ok := delta[key]; ok {
+			encoder.field(key, value, &first)
+		}
+	}
+	rest := make([]string, 0, len(delta))
+	for key := range delta {
+		if key != "role" && key != "content" {
+			rest = append(rest, key)
+		}
+	}
+	slices.Sort(rest)
+	for _, key := range rest {
+		encoder.field(key, delta[key], &first)
+	}
+	encoder.raw("}")
+}
+
 func writeChatChunk(w http.ResponseWriter, id string, created int64, model string, index int, delta map[string]any, finish *string, includeUsage bool) error {
-	choice := map[string]any{
-		"index":         index,
-		"delta":         delta,
-		"finish_reason": finish,
-	}
-	if providerReason, ok := delta["provider_finish_reason"]; ok {
+	providerReason, hasProviderReason := delta["provider_finish_reason"]
+	if hasProviderReason {
 		delete(delta, "provider_finish_reason")
-		choice["provider_finish_reason"] = providerReason
 	}
-	chunk := map[string]any{
-		"id":      id,
-		"object":  "chat.completion.chunk",
-		"created": created,
-		"model":   model,
-		"choices": []any{choice},
+	encoder := chatChunkEncoder{buffer: make([]byte, 0, 192)}
+	encoder.raw(`{"id":`)
+	encoder.value(id)
+	encoder.raw(`,"object":"chat.completion.chunk","created":`)
+	encoder.value(created)
+	encoder.raw(`,"model":`)
+	encoder.value(model)
+	encoder.raw(`,"choices":[{"index":`)
+	encoder.value(index)
+	encoder.raw(`,"delta":`)
+	encoder.chatDelta(delta)
+	encoder.raw(`,"finish_reason":`)
+	encoder.value(finish)
+	if hasProviderReason {
+		encoder.raw(`,"provider_finish_reason":`)
+		encoder.value(providerReason)
 	}
+	encoder.raw(`}]`)
 	if includeUsage {
-		chunk["usage"] = nil
+		encoder.raw(`,"usage":null`)
 	}
-	return writeSSE(w, "", officialOrder("chat", chunk))
+	encoder.raw(`}`)
+	if encoder.err != nil {
+		return encoder.err
+	}
+	return writeSSEData(w, encoder.buffer)
 }
 
 func openAIFinishReason(reason string, hasTools bool) string {

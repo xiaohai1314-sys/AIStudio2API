@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 )
 
 const quotaResetTimezone = "America/Los_Angeles"
@@ -158,7 +160,7 @@ func minuteQuotaReset(windowStart string, now time.Time) time.Time {
 }
 
 func nextQuotaDay(now time.Time) time.Time {
-	location, err := time.LoadLocation(quotaResetTimezone)
+	location, err := tzcache.Load(quotaResetTimezone)
 	if err != nil {
 		panic(err)
 	}

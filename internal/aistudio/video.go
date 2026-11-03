@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 )
 
 // VideoService 定义长任务视频适配器依赖的能力
@@ -484,7 +486,7 @@ func (c *Client) saveVideoResult(ctx context.Context, account *Account, fileID s
 
 // videoResultName 与官网视频页一致，返回以账户本地时间命名的视频文件名
 func videoResultName(account *Account, now time.Time) (string, error) {
-	location, err := time.LoadLocation(account.Config.Timezone)
+	location, err := tzcache.Load(account.Config.Timezone)
 	if err != nil {
 		return "", err
 	}

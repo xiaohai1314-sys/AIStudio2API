@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 	"unicode"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 )
 
 // Warning 表示一处环境不一致，Code 供前端识别，Message 面向用户
@@ -137,7 +138,7 @@ func ZoneCountries(timezone string) ([]string, bool) {
 	if timezone == "" {
 		return nil, false
 	}
-	location, err := time.LoadLocation(timezone)
+	location, err := tzcache.Load(timezone)
 	if err != nil {
 		return nil, false
 	}

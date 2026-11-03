@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/mozjs"
 )
 
@@ -95,7 +96,7 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 	if zone == "" {
 		zone = "UTC"
 	}
-	location, err := time.LoadLocation(zone)
+	location, err := tzcache.Load(zone)
 	if err != nil {
 		return nil, err
 	}

@@ -68,6 +68,16 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	return http.NewResponseController(w).Flush()
 }
 
+// writeSSEData 写入已编码的 JSON 数据事件并传播缓冲刷新错误
+func writeSSEData(w http.ResponseWriter, data []byte) error {
+	frame := make([]byte, 0, len(data)+8)
+	frame = append(append(append(frame, "data: "...), data...), "\n\n"...)
+	if _, err := w.Write(frame); err != nil {
+		return err
+	}
+	return http.NewResponseController(w).Flush()
+}
+
 // writeSSEText 写入文本事件并刷新网络缓冲
 func writeSSEText(w http.ResponseWriter, data string) error {
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
