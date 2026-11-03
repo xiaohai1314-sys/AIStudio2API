@@ -51,6 +51,8 @@ type MakerSuiteHTTPTransport struct {
 	now         func() time.Time
 	clientsMu   sync.Mutex
 	clients     map[string]*http.Client
+	// clientUsed 记录各固定出口客户端最近一次使用的时间，用于在数量超限时淘汰
+	clientUsed map[string]time.Time
 	// driveMu 保护 driveDiscovered
 	driveMu sync.Mutex
 	// driveDiscovered 记录已按官网页面读取 Drive discovery 文档的账户
@@ -95,6 +97,7 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 		globalProxy:     strings.TrimSpace(options.GlobalProxy),
 		now:             time.Now,
 		clients:         make(map[string]*http.Client),
+		clientUsed:      make(map[string]time.Time),
 		driveDiscovered: make(map[string]bool),
 	}
 	if _, err := transport.clientForProxy(transport.globalProxy); err != nil {
@@ -316,18 +319,45 @@ func (t *MakerSuiteHTTPTransport) CloseIdleConnections() {
 	}
 }
 
+// maxProxyClients 是固定出口客户端数量上限，超出后关闭最久未使用的客户端，避免账户代理反复变更后旧客户端长期占用空闲连接
+const maxProxyClients = 256
+
 func (t *MakerSuiteHTTPTransport) clientForProxy(proxyURL string) (*http.Client, error) {
 	t.clientsMu.Lock()
 	defer t.clientsMu.Unlock()
 	if client := t.clients[proxyURL]; client != nil {
+		t.clientUsed[proxyURL] = t.now()
 		return client, nil
 	}
 	client, err := NewProxyHTTPClient(proxyURL)
 	if err != nil {
 		return nil, err
 	}
+	if len(t.clients) >= maxProxyClients {
+		t.evictClientLocked()
+	}
 	t.clients[proxyURL] = client
+	t.clientUsed[proxyURL] = t.now()
 	return client, nil
+}
+
+// evictClientLocked 关闭并移除最久未使用的固定出口客户端，在途请求结束后其连接才会关闭
+func (t *MakerSuiteHTTPTransport) evictClientLocked() {
+	oldestProxy := ""
+	var oldestUsed time.Time
+	for proxyURL, used := range t.clientUsed {
+		if oldestProxy == "" || used.Before(oldestUsed) {
+			oldestProxy, oldestUsed = proxyURL, used
+		}
+	}
+	if oldestProxy == "" {
+		return
+	}
+	if client := t.clients[oldestProxy]; client != nil {
+		client.CloseIdleConnections()
+	}
+	delete(t.clients, oldestProxy)
+	delete(t.clientUsed, oldestProxy)
 }
 
 func prepareProtocolHeaders(

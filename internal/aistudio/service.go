@@ -603,7 +603,8 @@ func (s *PooledService) CountTokens(ctx context.Context, request TokenCountReque
 	}
 	var count TokenCount
 	var requestErr error
-	for attempt := 0; attempt < accountAttemptLimit(s.pool, false); attempt++ {
+	attemptLimit := accountAttemptLimit(s.pool, false)
+	for attempt := 0; attempt < attemptLimit; attempt++ {
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
 		if err != nil {
 			if requestErr != nil && errors.Is(err, ErrNoEligibleAccount) {
@@ -690,7 +691,8 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 		pinned = true
 	}
 	var requestErr error
-	for attempt := 0; attempt < accountAttemptLimit(s.pool, pinned); attempt++ {
+	attemptLimit := accountAttemptLimit(s.pool, pinned)
+	for attempt := 0; attempt < attemptLimit; attempt++ {
 		lease, owned, err := resolveAccountLease(ctx, s.pool, selection)
 		if err != nil {
 			if requestErr != nil && errors.Is(err, ErrNoEligibleAccount) {
@@ -729,13 +731,7 @@ func accountAttemptLimit(pool *AccountPool, pinned bool) int {
 	if pinned {
 		return 1
 	}
-	eligible := 0
-	for _, status := range pool.Status() {
-		if status.Enabled && (status.State == AccountReady || status.State == AccountBusy) {
-			eligible++
-		}
-	}
-	return max(eligible, 1)
+	return max(pool.EligibleAccounts(), 1)
 }
 
 func retryableAccountError(err error) bool {

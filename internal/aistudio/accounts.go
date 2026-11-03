@@ -2764,6 +2764,30 @@ func (p *AccountPool) EnabledAccounts() ([]string, int) {
 	return ids, schedulable
 }
 
+// EligibleAccounts 返回可用账户数，用于估算单次请求的换号次数，不构建账户状态切片
+func (p *AccountPool) EligibleAccounts() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	eligible := 0
+	for _, account := range p.accounts {
+		if !account.Config.Enabled {
+			continue
+		}
+		state := account.State
+		_, cooling := accountCooldown(account, "", now)
+		if state == AccountReady && (account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active > 0) {
+			state = AccountBusy
+		} else if state == AccountReady && cooling {
+			state = AccountCooldown
+		}
+		if state == AccountReady || state == AccountBusy {
+			eligible++
+		}
+	}
+	return eligible
+}
+
 // Activity 返回账户是否存在活动租约或独占操作及最近使用时间
 func (p *AccountPool) Activity(accountID string) (bool, time.Time) {
 	p.mu.Lock()

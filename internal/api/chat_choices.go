@@ -73,6 +73,9 @@ func (s *server) startChatChoices(ctx context.Context, request aistudio.Generate
 	return choices
 }
 
+// maxRelayQueue 是转发队列的事件上限，达到后暂停读取上游，由上游通道回压
+const maxRelayQueue = 64
+
 // relayEvents 经内存队列把 source 的事件转发到 out
 func relayEvents(ctx context.Context, source <-chan aistudio.Event, out chan<- aistudio.Event) {
 	var queue []aistudio.Event
@@ -82,12 +85,16 @@ func relayEvents(ctx context.Context, source <-chan aistudio.Event, out chan<- a
 		if len(queue) > 0 {
 			send, next = out, queue[0]
 		}
+		var receive <-chan aistudio.Event
+		if source != nil && len(queue) < maxRelayQueue {
+			receive = source
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case send <- next:
 			queue = queue[1:]
-		case event, ok := <-source:
+		case event, ok := <-receive:
 			if !ok {
 				source = nil
 				continue

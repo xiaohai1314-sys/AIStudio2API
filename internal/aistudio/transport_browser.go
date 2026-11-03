@@ -29,6 +29,8 @@ const (
 	firefoxPingTimeout = 8 * time.Second
 	// firefoxTLSHandshakeTimeout 是 Firefox network.http.tls-handshake-timeout
 	firefoxTLSHandshakeTimeout = 30 * time.Second
+	// firefoxDialTimeout 是建立 TCP 连接的超时，避免代理无响应时拨号长期占用连接名额
+	firefoxDialTimeout = 30 * time.Second
 	// browserIdleConnTimeout 是 Firefox network.http.http2.timeout，空闲 HTTP/2 连接保留该时长后关闭
 	browserIdleConnTimeout = 170 * time.Second
 	// firefoxInitialStreamID 是 Firefox 在每条 HTTP/2 连接上首个请求流的 ID
@@ -397,7 +399,10 @@ func (pool *firefoxConnPool) shutdown() {
 
 // dialBrowserTLS 以 Firefox ClientHello 建立 TLS 连接并要求协商 HTTP/2
 func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, address string) (net.Conn, error) {
-	raw, err := dialer.DialContext(context.Background(), "tcp", address)
+	// 拨号在请求之外的后台完成以便连接留给后续请求复用，因此只受超时约束
+	dialCtx, cancel := context.WithTimeout(context.Background(), firefoxDialTimeout)
+	raw, err := dialer.DialContext(dialCtx, "tcp", address)
+	cancel()
 	if err != nil {
 		return nil, err
 	}
