@@ -9,6 +9,7 @@ import type {
   ChromeImportInput,
   CookieBrowser,
   CookieImportInput,
+  EnvironmentCheckResult,
   FirstEventLatency,
   ChromeImportProfile,
   PairingToken,
@@ -174,6 +175,12 @@ export const api = {
       body: jsonBody(input),
     }),
   createPairing: () => requestJSON<PairingToken>('/api/pairing', { method: 'POST' }),
+  environmentCheck: (input: AccountLoginInput) =>
+    requestJSON<EnvironmentCheckResult>('/api/environment-check', {
+      method: 'POST',
+      body: jsonBody(input),
+    }),
+  updateGeoIP: () => requestCommand('/api/geoip/update', { method: 'POST' }),
   updateAccount: (id: string, draft: AccountDraft) =>
     requestCommand(`/api/accounts/${encodeURIComponent(id)}`, {
       method: 'PUT',

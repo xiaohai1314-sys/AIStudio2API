@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/accountenv"
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
@@ -120,6 +121,86 @@ func (admin *runtimeAdmin) Accounts(context.Context) ([]api.AdminAccount, error)
 	return accounts, nil
 }
 
+// EnvironmentCheck 检查语言、时区与出口 IP 地区的一致性；GeoIP 数据库不可用时只做离线检查
+func (admin *runtimeAdmin) EnvironmentCheck(ctx context.Context, input api.EnvironmentCheckInput) (api.EnvironmentCheckResult, error) {
+	proxy := strings.TrimSpace(input.Proxy)
+	if err := config.ValidateProxy(proxy); err != nil {
+		return api.EnvironmentCheckResult{}, invalidAccount(err)
+	}
+	warnings, suggestion := accountenv.Check(input.Locale, input.Timezone)
+	result := api.EnvironmentCheckResult{
+		Warnings: adminWarnings(warnings), SuggestedLocale: suggestion.Locale, SuggestedTimezone: suggestion.Timezone,
+	}
+	geoip, err := accountenv.OpenGeoIP(admin.config.GeoIPDBPath)
+	if err != nil {
+		return result, nil
+	}
+	defer geoip.Close()
+	result.GeoIPAvailable = true
+	client, err := aistudio.NewProxyHTTPClient(admin.effectiveProxy(proxy))
+	if err != nil {
+		return api.EnvironmentCheckResult{}, err
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	address, err := accountenv.ExitIP(checkCtx, client)
+	if err != nil {
+		result.Error = err.Error()
+		return result, nil
+	}
+	country, err := geoip.Country(address)
+	if err != nil {
+		result.Error = err.Error()
+		return result, nil
+	}
+	result.ExitIP, result.Country = address.String(), country
+	warnings, suggestion = accountenv.CheckExit(input.Locale, input.Timezone, country)
+	result.Warnings, result.SuggestedLocale, result.SuggestedTimezone = adminWarnings(warnings), suggestion.Locale, suggestion.Timezone
+	return result, nil
+}
+
+// UpdateGeoIP 下载并替换 GeoIP 数据库
+func (admin *runtimeAdmin) UpdateGeoIP(ctx context.Context) error {
+	client := &http.Client{Timeout: 5 * time.Minute}
+	return accountenv.DownloadGeoIP(ctx, client, admin.config.GeoIPDBPath, time.Now())
+}
+
+// adminWarnings 把环境检查警告转换为管理端结构
+func adminWarnings(warnings []accountenv.Warning) []api.AdminWarning {
+	if len(warnings) == 0 {
+		return nil
+	}
+	result := make([]api.AdminWarning, len(warnings))
+	for index, warning := range warnings {
+		result[index] = api.AdminWarning{Code: warning.Code, Message: warning.Message}
+	}
+	return result
+}
+
+// deriveEnvironment 经代理查询出口 IP 的国家并返回该地区的建议语言与时区，任何一步失败都返回空值
+func (admin *runtimeAdmin) deriveEnvironment(ctx context.Context, proxy string) (string, string) {
+	geoip, err := accountenv.OpenGeoIP(admin.config.GeoIPDBPath)
+	if err != nil {
+		return "", ""
+	}
+	defer geoip.Close()
+	client, err := aistudio.NewProxyHTTPClient(admin.effectiveProxy(proxy))
+	if err != nil {
+		return "", ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	address, err := accountenv.ExitIP(lookupCtx, client)
+	if err != nil {
+		return "", ""
+	}
+	country, err := geoip.Country(address)
+	if err != nil {
+		return "", ""
+	}
+	return accountenv.SuggestForCountry(country)
+}
+
 func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountCreateInput, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
 	accountConfig := aistudio.DefaultAccountConfig("")
 	accountConfig.Proxy = strings.TrimSpace(input.Proxy)
@@ -131,6 +212,16 @@ func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountC
 	}
 	if err := config.ValidateProxy(accountConfig.Proxy); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
+	}
+	// 未指定语言或时区时按代理出口 IP 所在地区取默认值，避免与本机浏览器环境不一致
+	if strings.TrimSpace(input.Locale) == "" || strings.TrimSpace(input.Timezone) == "" {
+		locale, timezone := admin.deriveEnvironment(ctx, accountConfig.Proxy)
+		if strings.TrimSpace(input.Locale) == "" && locale != "" {
+			accountConfig.Locale = locale
+		}
+		if strings.TrimSpace(input.Timezone) == "" && timezone != "" {
+			accountConfig.Timezone = timezone
+		}
 	}
 	directory, err := os.MkdirTemp("", "aistudio2api-account-login-*")
 	if err != nil {
@@ -811,10 +902,12 @@ func (admin *runtimeAdmin) loginRequest(account *aistudio.Account, directory str
 }
 
 func adminAccountDTO(status aistudio.AccountStatus) api.AdminAccount {
+	warnings, _ := accountenv.Check(status.Locale, status.Timezone)
 	return api.AdminAccount{
 		ID: status.ID, Label: status.Label, Enabled: status.Enabled, State: string(status.State),
 		Proxy: status.Proxy, Egress: status.Egress, Locale: status.Locale, Timezone: status.Timezone,
 		Models: status.Models, BenefitTier: status.BenefitTier, Message: status.Message,
+		Warnings: adminWarnings(warnings),
 	}
 }
 

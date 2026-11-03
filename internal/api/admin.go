@@ -18,6 +18,8 @@ type AdminService interface {
 	Status(context.Context) (AdminStatus, error)
 	CatalogModels(context.Context) ([]aistudio.Model, error)
 	Accounts(context.Context) ([]AdminAccount, error)
+	EnvironmentCheck(context.Context, EnvironmentCheckInput) (EnvironmentCheckResult, error)
+	UpdateGeoIP(context.Context) error
 	CreateAccount(context.Context, AccountCreateInput, *camoufoxnative.LiveView) (AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]ChromeImportProfile, error)
 	CookieBrowsers(context.Context) ([]CookieBrowser, error)
@@ -159,17 +161,42 @@ type AdminAccountCounts struct {
 
 // AdminAccount 表示管理端账户摘要
 type AdminAccount struct {
-	ID          string   `json:"id"`
-	Label       string   `json:"label"`
-	Enabled     bool     `json:"enabled"`
-	State       string   `json:"state"`
-	Proxy       string   `json:"proxy"`
-	Egress      string   `json:"egress"`
-	Locale      string   `json:"locale"`
-	Timezone    string   `json:"timezone"`
-	Models      []string `json:"models"`
-	BenefitTier string   `json:"benefit_tier"`
-	Message     string   `json:"message"`
+	ID          string         `json:"id"`
+	Label       string         `json:"label"`
+	Enabled     bool           `json:"enabled"`
+	State       string         `json:"state"`
+	Proxy       string         `json:"proxy"`
+	Egress      string         `json:"egress"`
+	Locale      string         `json:"locale"`
+	Timezone    string         `json:"timezone"`
+	Models      []string       `json:"models"`
+	BenefitTier string         `json:"benefit_tier"`
+	Message     string         `json:"message"`
+	Warnings    []AdminWarning `json:"warnings,omitempty"`
+}
+
+// AdminWarning 表示账户环境的一处不一致
+type AdminWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// EnvironmentCheckInput 表示一次环境一致性检查的输入
+type EnvironmentCheckInput struct {
+	Proxy    string `json:"proxy"`
+	Locale   string `json:"locale"`
+	Timezone string `json:"timezone"`
+}
+
+// EnvironmentCheckResult 表示环境一致性检查的结果
+type EnvironmentCheckResult struct {
+	Warnings          []AdminWarning `json:"warnings"`
+	SuggestedLocale   string         `json:"suggested_locale,omitempty"`
+	SuggestedTimezone string         `json:"suggested_timezone,omitempty"`
+	ExitIP            string         `json:"exit_ip,omitempty"`
+	Country           string         `json:"country,omitempty"`
+	GeoIPAvailable    bool           `json:"geoip_available"`
+	Error             string         `json:"error,omitempty"`
 }
 
 // AdminProxy 表示代理池中一个代理的可用性与绑定账户数
@@ -331,6 +358,8 @@ type AdminEvent struct {
 func (s *server) registerAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/i18n/{locale}", handleMessages)
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
+	mux.HandleFunc("POST /api/environment-check", s.handleEnvironmentCheck)
+	mux.HandleFunc("POST /api/geoip/update", s.handleUpdateGeoIP)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
 	mux.HandleFunc("GET /api/accounts/import/chrome", s.handleChromeImportProfiles)
 	mux.HandleFunc("POST /api/accounts/import/chrome", s.handleImportChromeAccounts)
@@ -385,6 +414,28 @@ func (s *server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string][]AdminAccount{"accounts": accounts})
+}
+
+func (s *server) handleEnvironmentCheck(w http.ResponseWriter, r *http.Request) {
+	var input EnvironmentCheckInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := s.config.Admin.EnvironmentCheck(r.Context(), input)
+	if err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) handleUpdateGeoIP(w http.ResponseWriter, r *http.Request) {
+	if err := s.config.Admin.UpdateGeoIP(r.Context()); err != nil {
+		writeAdminUpstreamError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {

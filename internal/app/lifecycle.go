@@ -28,6 +28,8 @@ type generationAdmin interface {
 	Status(context.Context) (api.AdminStatus, error)
 	CatalogModels(context.Context) ([]aistudio.Model, error)
 	Accounts(context.Context) ([]api.AdminAccount, error)
+	EnvironmentCheck(context.Context, api.EnvironmentCheckInput) (api.EnvironmentCheckResult, error)
+	UpdateGeoIP(context.Context) error
 	CreateAccount(context.Context, api.AccountCreateInput, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error)
 	CookieBrowsers(context.Context) ([]api.CookieBrowser, error)
@@ -445,6 +447,20 @@ func (manager *runtimeManager) CreateAccount(ctx context.Context, input api.Acco
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.CreateAccount(ctx, input, view)
+}
+
+// EnvironmentCheck 在当前生成服务检查账户环境一致性
+func (manager *runtimeManager) EnvironmentCheck(ctx context.Context, input api.EnvironmentCheckInput) (api.EnvironmentCheckResult, error) {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.EnvironmentCheck(ctx, input)
+}
+
+// UpdateGeoIP 在当前生成服务下载并替换 GeoIP 数据库
+func (manager *runtimeManager) UpdateGeoIP(ctx context.Context) error {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.current.admin.UpdateGeoIP(ctx)
 }
 
 // ChromeImportProfiles 返回当前生成服务可导入的 Chrome 账号

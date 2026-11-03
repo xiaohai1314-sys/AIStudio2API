@@ -28,6 +28,7 @@ const (
 	defaultAccountConcurrency = 2
 	defaultPublicRateLimit    = 120
 	defaultPublicRateBurst    = 30
+	defaultGeoIPDBPath        = "runtime/geoip/dbip-country-lite.mmdb"
 )
 
 var configKeys = [...]string{
@@ -64,6 +65,7 @@ var configKeys = [...]string{
 	"ENCRYPT_CREDENTIALS",
 	"TRUSTED_PROXY_CIDRS",
 	"PPROF_ADDR",
+	"GEOIP_DB_PATH",
 	"BUILD_NATIVE_NONSTREAM",
 	"NONSTREAM_KEEPALIVE",
 	"FAKE_STREAM",
@@ -132,6 +134,7 @@ type Config struct {
 	ListenAddr             string
 	PreviewListenAddr      string
 	PProfAddr              string
+	GeoIPDBPath            string
 	ProxyAPIKey            string
 	PublicRateLimit        int
 	PublicRateBurst        int
@@ -181,6 +184,7 @@ func Default() Config {
 		PerAccountConcurrency:  defaultAccountConcurrency,
 		PublicRateLimit:        defaultPublicRateLimit,
 		PublicRateBurst:        defaultPublicRateBurst,
+		GeoIPDBPath:            defaultGeoIPDBPath,
 		AuthFailurePause:       true,
 		RoutingStrategy:        "round-robin",
 		UpstreamChannels:       []string{"playground"},
@@ -242,6 +246,12 @@ var configSetters = map[string]func(*Config, string) error{
 	"LISTEN_ADDR":              textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
 	"PREVIEW_LISTEN_ADDR":      textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
 	"PPROF_ADDR":               textSetter(func(c *Config) *string { return &c.PProfAddr }, strings.TrimSpace),
+	"GEOIP_DB_PATH": func(c *Config, value string) error {
+		if path := strings.TrimSpace(value); path != "" {
+			c.GeoIPDBPath = path
+		}
+		return nil
+	},
 	"PROXY_API_KEY":            textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
 	"PROXY":                    textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
 	"ROUTING_STRATEGY":         textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),

@@ -265,6 +265,7 @@ docker compose up -d
    - “浏览器登录”会打开独立 Camoufox 窗口，登录完成后自动识别邮箱、授权 Google Drive 并保存；Google 要求验证身份时，在该窗口或手机上确认
    - 服务器没有图形界面，或从其他电脑、经反向代理打开管理页面时，“浏览器登录”与“重新登录”的 Camoufox 在服务器上无头运行，画面显示在管理页面的全屏登录窗口中，在其中点击、输入与粘贴，点“取消”结束登录
    - 账户代理、语言区域与时区在对话框的“更多设置”中填写
+   - 点“检查环境”可校验语言与时区的格式及地区是否自洽；装好本地 GeoIP 数据库后，还会经账户代理查询出口 IP 所在国家并一并比对。不一致只给出警告和建议值，点“采用建议”才会改写表单；新建账户时若未填语言与时区，默认按代理出口 IP 推导
 
 4. **启动 API**:
    - 点击“启动服务”启动数据面
@@ -604,6 +605,7 @@ cp .env.example .env
 | `ENCRYPT_CREDENTIALS` | `false` | 用 Windows DPAPI 加密保存账户认证状态与管理会话文件；仅 Windows 支持，开启后这些文件不能复制到其他机器或用户 |
 | `TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理的逗号分隔 CIDR，例如 `127.0.0.1/32`；仅这些来源的 `X-Forwarded-Proto` 可使管理会话 Cookie 标记为 Secure |
 | `PPROF_ADDR` | 空 | 性能分析监听地址，例如 `127.0.0.1:6060`；留空不启用，启用后可在 `/debug/pprof/` 获取 CPU、内存与 goroutine 剖析 |
+| `GEOIP_DB_PATH` | `runtime/geoip/dbip-country-lite.mmdb` | 本地 GeoIP 数据库路径，供账户环境检查比对出口 IP 所在国家；缺省文件时可在账户页一键下载 DB-IP 免费库（CC BY 4.0） |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
 | `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 |

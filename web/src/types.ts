@@ -18,6 +18,11 @@ export type AccountState =
   | 'unavailable'
   | 'disabled'
 
+export interface AccountWarning {
+  code: string
+  message: string
+}
+
 export interface Account {
   id: string
   label: string
@@ -30,6 +35,17 @@ export interface Account {
   models: string[]
   benefit_tier: string
   message: string
+  warnings?: AccountWarning[]
+}
+
+export interface EnvironmentCheckResult {
+  warnings: AccountWarning[]
+  suggested_locale?: string
+  suggested_timezone?: string
+  exit_ip?: string
+  country?: string
+  geoip_available: boolean
+  error?: string
 }
 
 interface ProxyPoolEntry {

@@ -265,6 +265,7 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
    - "Sign in with browser" opens an isolated Camoufox window, detects the email after login, authorizes Google Drive, and saves the account; when Google asks to verify your identity, confirm it in that window or on your phone
    - When the server has no graphical display, or the console is opened from another computer or through a reverse proxy, Camoufox for "Sign in with browser" and "Sign in again" runs headless on the server and its screen appears in a full-screen sign-in window in the console, where you click, type and paste; Cancel ends the sign-in
    - Account proxy, locale and time zone are under "More settings" in the dialog
+   - "Check environment" validates the locale and time zone format and whether their regions agree; once the local GeoIP database is installed it also resolves the exit IP of the account proxy and compares its country. Mismatches only produce warnings and suggested values, and "Apply suggestions" rewrites the form. When a new account leaves locale or time zone empty, they are derived from the proxy exit IP
 
 4. **Start the API**:
    - Click "Start service" to start the data plane
@@ -604,6 +605,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ENCRYPT_CREDENTIALS` | `false` | Encrypt account auth states and the console session file with Windows DPAPI; Windows only, and encrypted files cannot be copied to another machine or user |
 | `TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of trusted reverse proxies, such as `127.0.0.1/32`; only their `X-Forwarded-Proto` may mark a console-session cookie Secure |
 | `PPROF_ADDR` | empty | Listen address for profiling, such as `127.0.0.1:6060`; empty disables it, and when enabled `/debug/pprof/` serves CPU, memory and goroutine profiles |
+| `GEOIP_DB_PATH` | `runtime/geoip/dbip-country-lite.mmdb` | Local GeoIP database used by the account environment check to compare the exit IP country; when missing, the Accounts page can download the free DB-IP database (CC BY 4.0) |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
 | `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |

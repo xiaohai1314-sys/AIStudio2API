@@ -852,6 +852,20 @@ async function refreshAllAccounts(): Promise<void> {
             >
               {{ t('accounts.refreshFailed') }}
             </button>
+            <button
+              v-if="account.warnings?.length"
+              type="button"
+              class="rounded border border-amber-900/50 bg-amber-900/20 px-1.5 py-0.5 text-xs whitespace-nowrap text-amber-300 transition hover:bg-amber-900/40"
+              @click="
+                reason = {
+                  account,
+                  kind: t('accounts.envWarnings'),
+                  text: (account.warnings ?? []).map((warning) => warning.message).join('\n'),
+                }
+              "
+            >
+              {{ t('accounts.envWarnings') }}
+            </button>
           </div>
           <div class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
             <button
