@@ -226,7 +226,7 @@ func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s.minisig: %w", name, err)
 	}
-	if err := verifyMinisign(archive, sigData); err != nil {
+	if err := verifyMinisign(archive, sigData, updateSigningPublicKey); err != nil {
 		return nil, fmt.Errorf("发行包 %s 签名校验失败: %w", name, err)
 	}
 	expected, ok := strings.CutPrefix(asset.Digest, "sha256:")
@@ -239,11 +239,11 @@ func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name
 	return archive, nil
 }
 
-// verifyMinisign 用 updateSigningPublicKey 验证 data 的 minisign 签名文件。
+// verifyMinisign 用 pubKey 验证 data 的 minisign 签名文件。
 // 只校验"签名行"（对文件内容本身的 Ed25519 签名），不校验可信注释的时间戳行。
-func verifyMinisign(data, sigFile []byte) error {
+func verifyMinisign(data, sigFile []byte, pubKey string) error {
 	const sigAlgEd25519 = "\x45\x64" // minisign 的 Ed25519 算法标识 "Ed"
-	pubRaw, err := base64.StdEncoding.DecodeString(updateSigningPublicKey)
+	pubRaw, err := base64.StdEncoding.DecodeString(pubKey)
 	if err != nil || len(pubRaw) != 2+8+ed25519.PublicKeySize || string(pubRaw[:2]) != sigAlgEd25519 {
 		return fmt.Errorf("内嵌签名公钥格式错误")
 	}

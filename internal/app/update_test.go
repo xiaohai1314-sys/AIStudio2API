@@ -33,27 +33,21 @@ func TestVerifyMinisign(t *testing.T) {
 	data := []byte("fake-release-binary")
 	sigFile, pubKey := signTestData(t, data)
 
-	// 临时替换内嵌公钥为测试密钥
-	old := updateSigningPublicKey
-	updateSigningPublicKey = pubKey
-	defer func() { updateSigningPublicKey = old }()
-
-	if err := verifyMinisign(data, sigFile); err != nil {
+	if err := verifyMinisign(data, sigFile, pubKey); err != nil {
 		t.Fatalf("合法签名未通过: %v", err)
 	}
 	tampered := append(append([]byte{}, data...), 'x')
-	if err := verifyMinisign(tampered, sigFile); err == nil {
+	if err := verifyMinisign(tampered, sigFile, pubKey); err == nil {
 		t.Fatal("篡改后的内容通过了校验")
 	}
-	if err := verifyMinisign(data, []byte("not a signature")); err == nil {
+	if err := verifyMinisign(data, []byte("not a signature"), pubKey); err == nil {
 		t.Fatal("非法签名文件通过了校验")
 	}
 	// 密钥 ID 不匹配
-	otherSig, otherPub := signTestData(t, data)
-	_ = otherPub
+	otherSig, _ := signTestData(t, data)
 	lines := strings.Split(string(otherSig), "\n")
 	badKeySig := []byte("untrusted comment: x\n" + lines[1] + "\n")
-	if err := verifyMinisign(data, badKeySig); err == nil {
+	if err := verifyMinisign(data, badKeySig, pubKey); err == nil {
 		t.Fatal("密钥 ID 不匹配的签名通过了校验")
 	}
 }
