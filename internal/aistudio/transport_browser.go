@@ -43,6 +43,8 @@ const (
 	firefoxWindowUpdateThreshold = 4 << 20
 	// firefoxMaxPersistentConns 是 Firefox network.http.max-persistent-connections-per-server：一类请求对一个主机的已建立与建立中连接数上限
 	firefoxMaxPersistentConns = 6
+	// firefoxPoolWaitRetry 是等待连接名额时重新检查已有连接是否空闲的间隔，流结束不会主动唤醒等待者
+	firefoxPoolWaitRetry = time.Second
 )
 
 // firefoxHTTP2Settings 是 Firefox 152 在每条 HTTP/2 连接开头发送的 SETTINGS
@@ -243,11 +245,15 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 	for conn == nil && len(pool.conns[key])+pool.dialing[key] >= firefoxMaxPersistentConns {
 		added := pool.added
 		pool.mu.Unlock()
+		retry := time.NewTimer(firefoxPoolWaitRetry)
 		select {
 		case <-added:
+		case <-retry.C:
 		case <-ctx.Done():
+			retry.Stop()
 			return nil, ctx.Err()
 		}
+		retry.Stop()
 		pool.mu.Lock()
 		conn = pool.availableLocked(key, inverted, dispatch)
 	}

@@ -300,9 +300,13 @@ func (h3 *firefoxHTTP3) route(request *fhttp.Request, host string, anonymous boo
 		return nil, false, false, nil
 	}
 	if class.conn != nil {
-		conn = class.conn
-		h3.mu.Unlock()
-		return conn, true, false, nil
+		if class.conn.quic.Context().Err() == nil {
+			conn = class.conn
+			h3.mu.Unlock()
+			return conn, true, false, nil
+		}
+		// 连接已关闭但 adopt 的清理协程尚未执行，这里直接丢弃以便重试重新拨号
+		class.conn = nil
 	}
 	dial := class.dial
 	if dial == nil {

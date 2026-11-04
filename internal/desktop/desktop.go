@@ -45,22 +45,23 @@ const messagePrefix = "aistudio2api:"
 
 // App 为桌面应用的窗口、托盘与托盘菜单，没有窗口时 window 为 nil，Windows 缺少 WebView2 运行时时 webview 为 false
 type App struct {
-	app     *application.App
-	webview bool
-	window  *application.WebviewWindow
-	open    bool
-	origin  string
-	url     string
-	target  string
-	loaded  bool
-	busy    bool
-	closing bool
-	bounds  application.Rect
-	maxed   bool
-	mu      sync.Mutex
-	menu    *application.WebviewWindow
-	locale  string
-	theme   string
+	app      *application.App
+	webview  bool
+	window   *application.WebviewWindow
+	open     bool
+	origin   string
+	url      string
+	target   string
+	loaded   bool
+	busy     bool
+	closing  bool
+	bounds   application.Rect
+	maxed    bool
+	mu       sync.Mutex
+	createMu sync.Mutex
+	menu     *application.WebviewWindow
+	locale   string
+	theme    string
 }
 
 // HandleUpdateHelper 在更新器辅助进程中完成文件替换并退出，其他进程直接返回
@@ -114,6 +115,8 @@ func New(show bool, webviewDir string) *App {
 
 // createWindow 返回主窗口，没有时以上次销毁前的位置、大小与最大化状态创建
 func (s *App) createWindow() *application.WebviewWindow {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
 	s.mu.Lock()
 	window, target, bounds, maxed := s.window, s.target, s.bounds, s.maxed
 	s.mu.Unlock()
@@ -404,17 +407,24 @@ var trayLabels = map[string][4]string{
 // slot 为 Wails 更新器的唯一更新来源，转交每次安装传入的来源
 var slot = &providerSlot{}
 
-// configure 保证 Wails 更新器只配置一次
-var configure sync.Once
+// configureMu 保证 Wails 更新器初始化串行，失败后允许下次重试
+var (
+	configureMu sync.Mutex
+	configured  bool
+)
 
 // Install 以 provider 检查、下载、校验并暂存新版本，version 为当前版本号
 func Install(ctx context.Context, version string, provider updater.Provider) error {
 	app := application.Get()
 	slot.set(provider)
 	var err error
-	configure.Do(func() {
-		err = app.Updater.Init(updater.Config{CurrentVersion: version, Providers: []updater.Provider{slot}, Window: updater.WindowNone})
-	})
+	configureMu.Lock()
+	if !configured {
+		if err = app.Updater.Init(updater.Config{CurrentVersion: version, Providers: []updater.Provider{slot}, Window: updater.WindowNone}); err == nil {
+			configured = true
+		}
+	}
+	configureMu.Unlock()
 	if err != nil {
 		return err
 	}

@@ -78,14 +78,17 @@ func newRuntime(
 	}
 	if len(proxyList) > 1 {
 		if _, err := proxies.Probe(launchCtx, checkProxy); err != nil {
+			_ = proxies.Close()
 			return nil, nil, nil, err
 		}
 	}
 	if _, err := proxies.Assign(); err != nil {
+		_ = proxies.Close()
 		return nil, nil, nil, err
 	}
 	headers, err := newAccountHeaderProvider(accounts, globalProxy)
 	if err != nil {
+		_ = proxies.Close()
 		return nil, nil, nil, err
 	}
 	transport, err := aistudio.NewMakerSuiteHTTPTransport(aistudio.HTTPTransportOptions{
@@ -93,6 +96,7 @@ func newRuntime(
 	})
 	if err != nil {
 		headers.Close()
+		_ = proxies.Close()
 		return nil, nil, nil, err
 	}
 	workers := newAccountWorkerManager(

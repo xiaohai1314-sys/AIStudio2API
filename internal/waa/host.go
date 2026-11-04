@@ -31,6 +31,9 @@ var smHostJavaScript string
 // hostScriptName 是宿主脚本的来源名，SpiderMonkey 按自托管脚本把它们排除在调用栈与调用方定位之外
 const hostScriptName = "self-hosted"
 
+// maxRandomBytes 是宿主 randomBytes 一次生成的最大字节数
+const maxRandomBytes = 1 << 20
+
 // gunzip 解压内嵌的 gzip 数据
 func gunzip(data []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
@@ -463,7 +466,11 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 			return nil
 		}},
 		"randomBytes": {1, func(call *mozjs.Call) error {
-			data := make([]byte, max(0, int(call.ArgNumber(0))))
+			size := int(call.ArgNumber(0))
+			if size < 0 || size > maxRandomBytes {
+				return fmt.Errorf("randomBytes 长度 %d 超出范围", size)
+			}
+			data := make([]byte, size)
 			_, _ = cryptorand.Read(data)
 			call.ReturnBytes(data)
 			return nil

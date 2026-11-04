@@ -195,6 +195,10 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	if err != nil {
 		return nil, err
 	}
+	fail := func(err error) (*goWAARuntime, error) {
+		runtime.client.CloseIdleConnections()
+		return nil, err
+	}
 	runtime.pageURL += "?model=" + url.QueryEscape(options.Model)
 	if options.TemporaryChat {
 		runtime.pageURL += "&temporary=true"
@@ -216,11 +220,11 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	reportGoStartup(options, camoufoxnative.StartupLoadingAIStudio)
 	apiKey, err := runtime.loadPage(ctx)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	visitID, err := newVisitID()
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	reportGoStartup(options, camoufoxnative.StartupLocatingWAA)
 	type loggingContext struct {
@@ -240,10 +244,10 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	logging := <-loggingDone
 	startup := <-pageDone
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if logging.err != nil {
-		return nil, logging.err
+		return fail(logging.err)
 	}
 	extension := logging.extension
 	runtime.headers = http.Header{}
@@ -264,15 +268,15 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	vm, err := runtime.startVM(ctx, challenge)
 	<-followupDone
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if err := vm.FillPrompt(ctx, options.BootstrapPrompt, true); err != nil {
 		vm.Close()
-		return nil, fmt.Errorf("填写 bootstrap 提示词失败: %w", err)
+		return fail(fmt.Errorf("填写 bootstrap 提示词失败: %w", err))
 	}
 	if err := vm.Settle(ctx); err != nil {
 		vm.Close()
-		return nil, err
+		return fail(err)
 	}
 	runtime.vm = vm
 	runtime.scheduleRefresh()
@@ -439,6 +443,7 @@ func CheckSession(ctx context.Context, options camoufoxnative.Options) error {
 	if err != nil {
 		return err
 	}
+	defer runtime.client.CloseIdleConnections()
 	_, err = runtime.loadPage(ctx)
 	return err
 }
@@ -866,7 +871,7 @@ func (runtime *goWAARuntime) State() camoufoxnative.State {
 	}
 }
 
-// Close 结束 VM 生命周期
+// Close 结束 VM 生命周期并释放 HTTP 连接
 func (runtime *goWAARuntime) Close() error {
 	runtime.vmMu.Lock()
 	defer runtime.vmMu.Unlock()
@@ -877,6 +882,9 @@ func (runtime *goWAARuntime) Close() error {
 	if runtime.vm != nil {
 		runtime.vm.Close()
 		runtime.vm = nil
+	}
+	if runtime.client != nil {
+		runtime.client.CloseIdleConnections()
 	}
 	return nil
 }

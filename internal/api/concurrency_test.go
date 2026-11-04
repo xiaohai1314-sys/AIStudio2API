@@ -35,7 +35,7 @@ func TestPublicConcurrencyLimit(t *testing.T) {
 }
 
 func TestPublicRateLimitPerAPIKey(t *testing.T) {
-	handler := publicRateLimitMiddleware("key-a,key-b", 2, 1, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := publicRateLimitMiddleware("key-a,key-b", 2, 1, nil, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	request := func(key string) *httptest.ResponseRecorder {
@@ -107,7 +107,7 @@ func TestPublicRateLimiterEvictsRefilledBuckets(t *testing.T) {
 
 // TestPublicRateLimitPerKeyOverride 验证个别 key 使用自己的上限，其他 key 沿用全局上限
 func TestPublicRateLimitPerKeyOverride(t *testing.T) {
-	handler := publicRateLimitMiddleware("key-a,key-b", 60, 30, map[string]KeyRateLimit{"key-a": {PerMinute: 1}}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := publicRateLimitMiddleware("key-a,key-b", 60, 30, map[string]KeyRateLimit{"key-a": {PerMinute: 1}}, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	request := func(key string) *httptest.ResponseRecorder {

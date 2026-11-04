@@ -88,7 +88,9 @@ func (update *accountHeaderUpdate) Commit() {
 	current := update.provider.accounts[update.accountID]
 	update.provider.accounts[update.accountID] = update.state
 	update.provider.mu.Unlock()
-	current.client.CloseIdleConnections()
+	if current != nil {
+		current.client.CloseIdleConnections()
+	}
 }
 
 // Discard 关闭未发布的账户固定出口

@@ -276,18 +276,22 @@ func (entry *proxyEntry) recordLocked(good, forbidden bool, now time.Time) {
 	}
 }
 
-// scoreLocked 合并短窗口与近 24 小时的评分，短窗口没有样本时使用长期评分
+// scoreLocked 合并短窗口与近 24 小时的评分，短窗口没有有效样本时使用长期评分
 func (entry *proxyEntry) scoreLocked(now time.Time) int {
+	shortGood, shortBad := entry.good, entry.bad
+	if now.Sub(entry.scoreSince) >= proxyScoreWindow {
+		shortGood, shortBad = 0, 0
+	}
 	longGood, longBad, _ := entry.historyTotals(now)
 	switch {
-	case entry.good+entry.bad == 0 && longGood+longBad == 0:
+	case shortGood+shortBad == 0 && longGood+longBad == 0:
 		return 100
-	case entry.good+entry.bad == 0:
+	case shortGood+shortBad == 0:
 		return proxyScore(longGood, longBad)
 	case longGood+longBad == 0:
-		return proxyScore(entry.good, entry.bad)
+		return proxyScore(shortGood, shortBad)
 	}
-	short := float64(proxyScore(entry.good, entry.bad))
+	short := float64(proxyScore(shortGood, shortBad))
 	long := float64(proxyScore(longGood, longBad))
 	return int(math.Round(0.6*short + 0.4*long))
 }

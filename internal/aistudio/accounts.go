@@ -935,6 +935,7 @@ func (p *AccountPool) Remove(accountID string, deleteDirectory func(*Account) er
 		}
 	}
 	delete(p.byID, accountID)
+	delete(p.risk, accountID)
 	for index, candidate := range p.accounts {
 		if candidate.ID == accountID {
 			p.accounts = append(p.accounts[:index], p.accounts[index+1:]...)
@@ -2030,6 +2031,10 @@ func (p *AccountPool) MarkCooldownIfGeneration(
 			return false, nil, nil
 		}
 		next := CooldownState{Until: until.UTC(), Reason: reason}
+		// 仍在生效的长冷却不被后到的短冷却缩短
+		if previous, exists := runtimeState.Cooldowns[modelAccessScope]; exists && previous.Until.After(next.Until) && previous.Until.After(time.Now()) {
+			next = previous
+		}
 		currentAccess.CheckedAt = checkedAt
 		runtimeState.ModelAccess[modelAccessScope] = currentAccess
 		runtimeState.Cooldowns[modelAccessScope] = next

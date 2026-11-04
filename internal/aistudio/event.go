@@ -181,8 +181,8 @@ func turnResponseID(token string) string {
 
 // excludeSystemRole 从上游用量的输入、总量与 TEXT 输入模态中减去系统指令的角色 token
 func excludeSystemRole(usage Usage, tokens int64) Usage {
-	usage.InputTokens -= tokens
-	usage.TotalTokens -= tokens
+	usage.InputTokens = max(0, usage.InputTokens-tokens)
+	usage.TotalTokens = max(0, usage.TotalTokens-tokens)
 	if usage.Details != nil {
 		details := *usage.Details
 		details.PromptTokensDetails = subtractTextTokens(details.PromptTokensDetails, tokens)

@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -457,12 +458,22 @@ func browserOriginMiddleware(requiredKey string, next http.Handler) http.Handler
 // maxPublicBodyBytes 为公开接口请求体上限，可容纳 Base64 编码后的最大文件
 const maxPublicBodyBytes = openAIFileMaxBytes/3*4 + openAIFileRequestOverhead
 
+// maxGeminiJSONBodyBytes 是 Gemini JSON 请求体上限：解码时整包读入内存，更大的内联媒体应改用 Files API
+const maxGeminiJSONBodyBytes int64 = 64 << 20
+
 // bodyLimitMiddleware 限制公开接口请求体大小
 func bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxPublicBodyBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, publicBodyLimit(r.URL.Path))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func publicBodyLimit(path string) int64 {
+	if strings.HasPrefix(path, "/v1beta/") {
+		return min(maxPublicBodyBytes, maxGeminiJSONBodyBytes)
+	}
+	return maxPublicBodyBytes
 }
 
 const maxPublicRateLimitBuckets = 4096
@@ -531,9 +542,9 @@ func (limiter *publicRateLimiter) evict(now time.Time) {
 	}
 }
 
-// publicRateLimitMiddleware 对每个已认证 API key 限制请求速率；没有 API key 时回退到直接对端地址。
+// publicRateLimitMiddleware 对每个已认证 API key 限制请求速率；没有 API key 时回退到客户端地址。
 // keyLimits 可为个别 key 指定更严格的速率，未列出的 key 使用 perMinute。
-func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, keyLimits map[string]KeyRateLimit, next http.Handler) http.Handler {
+func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, keyLimits map[string]KeyRateLimit, trusted []netip.Prefix, next http.Handler) http.Handler {
 	keys := apiKeys(configuredKeys)
 	limiter := newPublicRateLimiter(perMinute, burst)
 	perKey := make(map[string]*publicRateLimiter, len(keyLimits))
@@ -547,7 +558,7 @@ func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, keyL
 				limiterFor = custom
 			}
 		}
-		identity := publicRateLimitIdentity(r, keys)
+		identity := publicRateLimitIdentity(r, keys, trusted)
 		if retryAfter, allowed := limiterFor.allow(identity, time.Now()); !allowed {
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			writePublicRateLimitError(w, r)
@@ -557,16 +568,12 @@ func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, keyL
 	})
 }
 
-func publicRateLimitIdentity(r *http.Request, keys []string) string {
+func publicRateLimitIdentity(r *http.Request, keys []string, trusted []netip.Prefix) string {
 	if key := matchedAPIKey(r, keys); key != "" {
 		digest := sha256.Sum256([]byte(key))
 		return "key:" + string(digest[:])
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil || host == "" {
-		return "peer:unknown"
-	}
-	return "peer:" + host
+	return "peer:" + clientAddress(r, trusted)
 }
 
 // publicConcurrencyMiddleware 限制执行中的公开 API 请求。流式响应、上传与后台生成均在其完成前占用一个名额，避免突发流量把 Worker 与账户队列耗尽。

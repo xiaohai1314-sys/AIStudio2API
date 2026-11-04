@@ -46,6 +46,7 @@ type Worker struct {
 	page      pageHandle
 	state     State
 	closed    bool
+	closing   bool
 	cacheLock *flock.Flock
 }
 
@@ -183,7 +184,14 @@ func (worker *Worker) placeWindow(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	window := result["clientWindows"].([]any)[0].(map[string]any)
+	windows, ok := result["clientWindows"].([]any)
+	if !ok || len(windows) == 0 {
+		return fmt.Errorf("browser.getClientWindows 未返回窗口")
+	}
+	window, ok := windows[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("browser.getClientWindows 返回的窗口格式无效")
+	}
 	_, err = worker.client.command(ctx, "browser.setClientWindowState", map[string]any{
 		"clientWindow": window["clientWindow"], "state": "normal", "x": windowsWindowPosition, "y": windowsWindowPosition + windowsChromeHeight - hostChromeHeight,
 	})
@@ -196,7 +204,18 @@ func (worker *Worker) stopRendering(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	chrome := tree["contexts"].([]any)[0].(map[string]any)["context"].(string)
+	contexts, ok := tree["contexts"].([]any)
+	if !ok || len(contexts) == 0 {
+		return fmt.Errorf("browsingContext.getTree 未返回上下文")
+	}
+	context, ok := contexts[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("browsingContext.getTree 返回的上下文格式无效")
+	}
+	chrome, ok := context["context"].(string)
+	if !ok || chrome == "" {
+		return fmt.Errorf("browsingContext.getTree 未返回上下文 ID")
+	}
 	_, err = worker.client.evaluate(ctx, chrome, "gBrowser.selectedBrowser.renderLayers = false")
 	return err
 }
@@ -289,14 +308,20 @@ func (worker *Worker) Close() error {
 		return nil
 	}
 	worker.mu.Lock()
-	if worker.closed {
+	if worker.closed || worker.closing {
 		worker.mu.Unlock()
 		return nil
 	}
+	worker.closing = true
 	client := worker.client
 	connection := worker.connection
 	process := worker.process
 	worker.mu.Unlock()
+	defer func() {
+		worker.mu.Lock()
+		worker.closing = false
+		worker.mu.Unlock()
+	}()
 	if client != nil && connection != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_, _ = client.command(closeCtx, "session.end", map[string]any{})

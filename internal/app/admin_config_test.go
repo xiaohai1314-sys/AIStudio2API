@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,7 +21,18 @@ func TestAdminConfig(t *testing.T) {
 	cfg.AdminAuthEnabled = true
 	cfg.AdminUsername = "operator"
 	cfg.AdminPassword = "test-password"
+	cfg.EncryptCredentials = true
+	cfg.PProfAddr = "127.0.0.1:6060"
+	cfg.GeoIPDBPath = "custom-geoip.mmdb"
 	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	// .env.example 显式写了 AUTH_FAILURE_PAUSE=true，这里模拟同样的文件
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, []byte("AUTH_FAILURE_PAUSE=true\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,6 +61,9 @@ func TestAdminConfig(t *testing.T) {
 	}
 	if !saved.AutoStart {
 		t.Fatal("auto_start was not saved")
+	}
+	if !saved.AuthFailurePause || !saved.EncryptCredentials || saved.PProfAddr != cfg.PProfAddr || saved.GeoIPDBPath != cfg.GeoIPDBPath {
+		t.Fatalf("environment-only config changed: auth=%v encrypt=%v pprof=%q geoip=%q", saved.AuthFailurePause, saved.EncryptCredentials, saved.PProfAddr, saved.GeoIPDBPath)
 	}
 	manager := &runtimeManager{activeManagement: cfg}
 	password := "new-test-password"

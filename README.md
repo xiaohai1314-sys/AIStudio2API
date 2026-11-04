@@ -594,6 +594,7 @@ cp .env.example .env
 | `PUBLIC_RATE_LIMIT` | `120` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数；超限返回 429 |
 | `PUBLIC_RATE_BURST` | `30` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` |
 | `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
+| `API_KEY_RATE_LIMITS` | 空 | 为个别 API key 指定每分钟请求上限，每项写成 `key:每分钟`，未列出的 key 使用 `PUBLIC_RATE_LIMIT`；也可在设置页填写 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `REQUEST_BODY_LOG` | `false` | 保存公开 API 请求与响应正文，各截断到 64 KiB，保留最近 1000 条 |
 | `AUTH_FAILURE_PAUSE` | `true` | 遇到 401、403 等认证或账户受限错误时暂停对应账户等待人工检查，不自动续签；关闭后恢复自动续签与调度 |
@@ -613,6 +614,11 @@ cp .env.example .env
 | `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=spidermonkey` 时不限制 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
+| `MAX_ACCOUNTS_PER_PROXY` | `3` | 同一代理最多绑定的账户数，`0` 表示不限制；调低后重新均衡已有绑定，设置页保存后立即生效 |
+| `MAX_CONCURRENCY_PER_PROXY` | `6` | 同一出口最多同时发出的请求数，`0` 表示不限制；达到上限的请求排队等待，设置页保存后立即生效 |
+| `ACCOUNT_RATE_LIMIT` | `60` | 单账户每分钟最多发出的上游请求数，`0` 表示不限制；修改 `.env` 后重启生成服务生效 |
+| `ACCOUNT_RATE_JITTER` | `25` | 请求间隔的随机抖动百分比，取值 `0` 到 `90`；修改 `.env` 后重启生成服务生效 |
+| `ENVIRONMENT_BINDING` | `true` | 账户认证绑定出口代理与浏览器指纹，二者变化后需要重新登录；修改 `.env` 后重启生成服务生效 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |

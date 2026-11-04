@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -69,27 +70,35 @@ func (s *server) resolveMCPTools(ctx context.Context, request aistudio.GenerateR
 	return request, nil
 }
 
-// connectMCP 经出口代理以服务器的 URL 与头连接 MCP 服务器，连接错误以随后调用的方法名说明
+// connectMCP 只连接解析到公网地址的 MCP 服务器，避免公开 API 把服务端当作访问内网的跳板
 func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, method string) (*mcp.ClientSession, error) {
-	base := http.DefaultTransport.(*http.Transport).Clone()
-	base.Proxy = nil
+	endpoint, err := validatePublicHTTPURL(ctx, server.URL)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q url: %w", server.Name, err)
+	}
+	base := newPublicOutboundTransport()
 	if s.config.EgressProxy != nil {
 		if proxy := s.config.EgressProxy(); proxy != "" {
 			proxyURL, err := url.Parse(proxy)
 			if err != nil {
 				return nil, fmt.Errorf("mcp server %q egress proxy: %w", server.Name, err)
 			}
+			base = http.DefaultTransport.(*http.Transport).Clone()
 			base.Proxy = http.ProxyURL(proxyURL)
 		}
 	}
-	endpoint, err := url.Parse(server.URL)
-	if err != nil {
-		return nil, fmt.Errorf("mcp server %q url: %w", server.Name, err)
-	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "aistudio2api"}, nil)
 	transport := &mcp.StreamableClientTransport{
-		Endpoint:             server.URL,
-		HTTPClient:           &http.Client{Transport: mcpHeaderTransport{base: base, host: endpoint.Host, headers: server.Headers}},
+		Endpoint: endpoint.String(),
+		HTTPClient: &http.Client{
+			Transport: mcpHeaderTransport{base: base, host: endpoint.Host, headers: server.Headers},
+			CheckRedirect: func(request *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return errors.New("stopped after 10 redirects")
+				}
+				return checkRemoteMediaHost(request.Context(), request.URL.Hostname())
+			},
+		},
 		DisableStandaloneSSE: true,
 	}
 	session, err := client.Connect(ctx, transport, nil)

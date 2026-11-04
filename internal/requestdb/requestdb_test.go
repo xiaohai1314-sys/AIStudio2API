@@ -65,3 +65,20 @@ func TestLedgerUsageAndBodies(t *testing.T) {
 		t.Fatalf("body=%+v err=%v", body, err)
 	}
 }
+
+// TestCloseConcurrent 验证并发关闭等待同一次关闭完成并返回相同结果
+func TestCloseConcurrent(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "requests.db"), func(string, string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() { results <- store.Close() }()
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("Close() = %v", err)
+		}
+	}
+}

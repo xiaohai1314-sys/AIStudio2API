@@ -130,3 +130,19 @@ func TestTrustedProxyForwardedHTTPS(t *testing.T) {
 		t.Fatalf("trusted proxy origin = %q", origin)
 	}
 }
+
+// TestEvictOldestLoginAttempt 验证来源达到上限时淘汰最早过期的记录而不是拒绝所有登录
+func TestEvictOldestLoginAttempt(t *testing.T) {
+	now := time.Now()
+	attempts := map[string]loginAttempt{
+		"a": {until: now.Add(time.Minute)},
+		"b": {until: now.Add(time.Second)},
+	}
+	evictOldestLoginAttempt(attempts)
+	if _, ok := attempts["b"]; ok {
+		t.Fatal("最早过期的记录未淘汰")
+	}
+	if _, ok := attempts["a"]; !ok {
+		t.Fatal("其他记录被误删")
+	}
+}

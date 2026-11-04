@@ -239,7 +239,7 @@ func decryptV20Token(masterKey []byte, encrypted []byte) (string, error) {
 		return "", fmt.Errorf("refresh token 解密失败")
 	}
 	token := string(plaintext)
-	if len(token) != 103 || !strings.HasPrefix(token, "1//0") {
+	if !strings.HasPrefix(token, "1//0") || len(token) < 40 || len(token) > 4096 {
 		return "", fmt.Errorf("refresh token 解密结果格式异常")
 	}
 	return token, nil

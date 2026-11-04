@@ -46,6 +46,8 @@ type Config struct {
 	WaitLaunch func(context.Context)
 	// EgressProxy 返回服务连接外部 MCP 服务器所用的出口代理，空串为直连
 	EgressProxy func() string
+	// Lifecycle 是 webhook 重试等后台任务的存活上下文，为空时使用 context.Background()
+	Lifecycle context.Context
 }
 
 // KeyRateLimit 是单个 API key 的请求速率上限
@@ -147,7 +149,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public))))))))
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, config.TrustedProxyCIDRs, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public))))))))
 	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
 	root.Handle("/v1/", loggedHandler)
 	root.Handle("/v1beta/", loggedHandler)

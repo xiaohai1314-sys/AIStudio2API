@@ -165,7 +165,7 @@ func subtractTextTokens(details []ModalityTokenCount, tokens int64) []ModalityTo
 	result := slices.Clone(details)
 	for index := range result {
 		if result[index].Modality == "TEXT" {
-			result[index].TokenCount -= tokens
+			result[index].TokenCount = max(0, result[index].TokenCount-tokens)
 		}
 	}
 	return result

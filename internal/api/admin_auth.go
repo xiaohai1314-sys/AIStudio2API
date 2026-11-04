@@ -53,6 +53,23 @@ type loginAttempt struct {
 	until time.Time
 }
 
+// maxLoginAttemptSources 是登录失败来源记录的上限，达到上限时淘汰最早过期的来源
+const maxLoginAttemptSources = 1024
+
+// evictOldestLoginAttempt 淘汰最早过期的登录失败记录，避免来源过多时拒绝所有来源登录
+func evictOldestLoginAttempt(attempts map[string]loginAttempt) {
+	oldest := ""
+	var until time.Time
+	for address, attempt := range attempts {
+		if oldest == "" || attempt.until.Before(until) {
+			oldest, until = address, attempt.until
+		}
+	}
+	if oldest != "" {
+		delete(attempts, oldest)
+	}
+}
+
 // adminAuth 管理独立于生成 API 密钥的登录会话
 type adminAuth struct {
 	mu       sync.Mutex
@@ -216,7 +233,7 @@ func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", "Invalid login request")
 		return
 	}
-	peer, _, _ := net.SplitHostPort(r.RemoteAddr)
+	peer := clientAddress(r, auth.config.TrustedProxyCIDRs)
 	now := time.Now()
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -225,7 +242,10 @@ func (auth *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 			delete(auth.attempts, address)
 		}
 	}
-	if auth.attempts[peer].count >= 5 || len(auth.attempts) >= 1024 {
+	for len(auth.attempts) >= maxLoginAttemptSources {
+		evictOldestLoginAttempt(auth.attempts)
+	}
+	if auth.attempts[peer].count >= 5 {
 		w.Header().Set("Retry-After", "60")
 		writeAdminError(w, http.StatusTooManyRequests, "login_rate_limited", "Too many attempts; try again in a minute")
 		return

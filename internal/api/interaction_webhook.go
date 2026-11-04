@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -24,9 +25,13 @@ var interactionWebhookClient = &http.Client{
 
 // interactionWebhookWindow 是 webhook 事件投递失败后继续重试的时长
 const (
-	interactionWebhookWindow  = 24 * time.Hour
-	maxInteractionWebhookURIs = 8
+	interactionWebhookWindow     = 24 * time.Hour
+	maxInteractionWebhookURIs    = 8
+	maxInteractionWebhookWorkers = 64
 )
+
+// interactionWebhookSlots 限制同时进行的 webhook 投递，避免大量后台交互积累长生命周期 goroutine
+var interactionWebhookSlots = make(chan struct{}, maxInteractionWebhookWorkers)
 
 // interactionWebhookConfig 是请求级 webhook 的地址与随事件返回的用户元数据
 type interactionWebhookConfig struct {
@@ -73,7 +78,10 @@ func (config interactionWebhookConfig) validate(ctx context.Context, background 
 }
 
 // sendInteractionWebhook 向每个地址发送交互终态事件，failure 为后台请求写出的 Gemini 错误
-func sendInteractionWebhook(config interactionWebhookConfig, id, status string, failure []byte) {
+func sendInteractionWebhook(ctx context.Context, config interactionWebhookConfig, id, status string, failure []byte) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	event := interactionWebhookEvent{Type: interactionWebhookEvents[status], Version: "v1", Timestamp: time.Now().UTC().Format(time.RFC3339), Data: interactionWebhookData{ID: id}}
 	var written struct {
 		Error struct {
@@ -90,16 +98,30 @@ func sendInteractionWebhook(config interactionWebhookConfig, id, status string, 
 	body, _ := json.Marshal(event)
 	messageID := newID("msg")
 	for _, uri := range config.URIs {
-		go deliverInteractionWebhook(uri, messageID, body)
+		select {
+		case interactionWebhookSlots <- struct{}{}:
+			go func(uri string) {
+				defer func() { <-interactionWebhookSlots }()
+				deliverInteractionWebhook(ctx, uri, messageID, body)
+			}(uri)
+		default:
+			slog.Warn("webhook 投递队列已满，丢弃事件", "id", id, "status", status)
+		}
 	}
 }
 
-// deliverInteractionWebhook 以 webhook-id 与 webhook-timestamp 请求头 POST 事件，非 2xx 时指数退避重试，直到成功或超过重试时长
-func deliverInteractionWebhook(uri, messageID string, body []byte) {
+// deliverInteractionWebhook 以 webhook-id 与 webhook-timestamp 请求头 POST 事件，非 2xx 时指数退避重试，直到成功、超过重试时长或服务关闭
+func deliverInteractionWebhook(ctx context.Context, uri, messageID string, body []byte) {
 	deadline := time.Now().Add(interactionWebhookWindow)
 	for delay := time.Second; ; delay = min(delay*2, time.Hour) {
-		request, _ := http.NewRequest(http.MethodPost, uri, bytes.NewReader(body))
-		if err := checkRemoteMediaHost(context.Background(), request.URL.Hostname()); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, uri, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		if err := checkRemoteMediaHost(ctx, request.URL.Hostname()); err != nil {
 			return
 		}
 		request.Header.Set("Content-Type", "application/json")
@@ -114,6 +136,12 @@ func deliverInteractionWebhook(uri, messageID string, body []byte) {
 		if time.Now().Add(delay).After(deadline) {
 			return
 		}
-		time.Sleep(delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		}
 	}
 }

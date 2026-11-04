@@ -57,3 +57,22 @@ func TestPacerCanceledContext(t *testing.T) {
 		t.Fatalf("取消后应返回 context.Canceled，实际 %v", err)
 	}
 }
+
+// TestPacerCancelReleasesReservation 验证取消的请求不额外占用一个间隔
+func TestPacerCancelReleasesReservation(t *testing.T) {
+	pacer := newPacer(1, 0)
+	now := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
+	pacer.now = func() time.Time { return now }
+	if err := pacer.Wait(context.Background(), "account"); err != nil {
+		t.Fatalf("首次请求不应等待: %v", err)
+	}
+	first := pacer.next["account"]
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := pacer.Wait(ctx, "account"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消后应返回 context.Canceled，实际 %v", err)
+	}
+	if got := pacer.next["account"]; !got.Equal(first) {
+		t.Fatalf("取消的请求占用了额外间隔: %s, want %s", got, first)
+	}
+}

@@ -30,6 +30,15 @@ const geminiFilesURIPrefix = "https://generativelanguage.googleapis.com/v1beta/f
 // geminiUploadTTL 为可续传上传会话在两次请求之间的保留时长
 const geminiUploadTTL = time.Hour
 
+// geminiUploadMaxSessions 是同时保留的可续传上传会话数上限
+const geminiUploadMaxSessions = 32
+
+// geminiUploadMaxBufferedBytes 是所有会话在临时目录中缓存的总字节数上限
+const geminiUploadMaxBufferedBytes int64 = 2 << 30
+
+// errGeminiUploadCapacity 表示可续传上传的会话数或临时空间已满
+var errGeminiUploadCapacity = errors.New("upload capacity is exhausted")
+
 // geminiFileNames 把 Drive 文件 ID 编码为 Files API 资源 ID 允许的小写字母与数字
 var geminiFileNames = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -116,15 +125,27 @@ type geminiUploadSession struct {
 type geminiUploads struct {
 	mu       sync.Mutex
 	sessions map[string]*geminiUploadSession
+	// buffered 是所有会话已写入临时文件的总字节数
+	buffered    int64
+	maxSessions int
+	maxBuffered int64
 }
 
 func newGeminiUploads() *geminiUploads {
-	return &geminiUploads{sessions: make(map[string]*geminiUploadSession)}
+	return &geminiUploads{
+		sessions:    make(map[string]*geminiUploadSession),
+		maxSessions: geminiUploadMaxSessions, maxBuffered: geminiUploadMaxBufferedBytes,
+	}
 }
 
-// start 登记新的上传会话并返回会话 ID，会话闲置超过保留时长后删除
-func (uploads *geminiUploads) start(session *geminiUploadSession) string {
+// start 登记新的上传会话并返回会话 ID，会话数达到上限时拒绝，会话闲置超过保留时长后删除
+func (uploads *geminiUploads) start(session *geminiUploadSession) (string, error) {
 	id := rand.Text()
+	uploads.mu.Lock()
+	if uploads.maxSessions > 0 && len(uploads.sessions) >= uploads.maxSessions {
+		uploads.mu.Unlock()
+		return "", errGeminiUploadCapacity
+	}
 	session.expires = time.Now().Add(geminiUploadTTL)
 	session.timer = time.AfterFunc(geminiUploadTTL, func() {
 		session.mu.Lock()
@@ -133,10 +154,9 @@ func (uploads *geminiUploads) start(session *geminiUploadSession) string {
 			uploads.discard(id, session)
 		}
 	})
-	uploads.mu.Lock()
 	uploads.sessions[id] = session
 	uploads.mu.Unlock()
-	return id
+	return id, nil
 }
 
 func (uploads *geminiUploads) get(id string) *geminiUploadSession {
@@ -147,13 +167,22 @@ func (uploads *geminiUploads) get(id string) *geminiUploadSession {
 
 // discard 结束会话并删除已缓存的分块，调用方持有会话锁
 func (uploads *geminiUploads) discard(id string, session *geminiUploadSession) {
+	if session.done {
+		return
+	}
 	uploads.mu.Lock()
 	if uploads.sessions[id] == session {
 		delete(uploads.sessions, id)
 	}
+	uploads.buffered -= session.received
+	if uploads.buffered < 0 {
+		uploads.buffered = 0
+	}
 	uploads.mu.Unlock()
 	session.done = true
-	session.timer.Stop()
+	if session.timer != nil {
+		session.timer.Stop()
+	}
 	if session.buffer != nil {
 		_ = session.buffer.Close()
 		_ = os.Remove(session.buffer.Name())
@@ -257,7 +286,11 @@ func (s *server) startGeminiUpload(w http.ResponseWriter, r *http.Request) {
 		alias: alias, name: geminiUploadName(metadata, "", r),
 		mime: firstMediaType(r.Header.Get("X-Goog-Upload-Header-Content-Type"), metadata.File.MIMEType),
 	}
-	id := s.uploads.start(session)
+	id, err := s.uploads.start(session)
+	if err != nil {
+		writeGeminiError(w, http.StatusTooManyRequests, "RESOURCE_EXHAUSTED", err.Error())
+		return
+	}
 	w.Header().Set("X-Goog-Upload-URL", s.requestOrigin(r)+"/upload/v1beta/files?upload_id="+url.QueryEscape(id)+"&upload_protocol=resumable")
 	w.Header().Set("X-Goog-Upload-Status", "active")
 	w.WriteHeader(http.StatusOK)
@@ -265,7 +298,7 @@ func (s *server) startGeminiUpload(w http.ResponseWriter, r *http.Request) {
 
 // geminiUploadHandler 让携带 upload_id 的分块请求凭上传会话鉴权，其余上传请求交给公开路由
 func (s *server) geminiUploadHandler(public http.Handler) http.Handler {
-	chunks := bodyLimitMiddleware(http.HandlerFunc(s.handleGeminiUploadChunk))
+	chunks := bodyLimitMiddleware(publicConcurrencyMiddleware(s.config.MaxPublicInFlight, http.HandlerFunc(s.handleGeminiUploadChunk)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Has("upload_id") {
 			chunks.ServeHTTP(w, r)
@@ -325,7 +358,7 @@ func (s *server) handleGeminiUploadChunk(w http.ResponseWriter, r *http.Request)
 		content = http.NoBody
 	}
 	if !commands["finalize"] || session.buffer != nil {
-		if err := bufferGeminiUpload(session, content); err != nil {
+		if err := bufferGeminiUpload(s.uploads, session, content); err != nil {
 			s.uploads.discard(id, session)
 			writeGeminiUploadFailure(w, err, "final")
 			return
@@ -355,8 +388,39 @@ func (s *server) handleGeminiUploadChunk(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, officialOrder("gemini", map[string]any{"file": geminiFileObject(metadata)}))
 }
 
-// bufferGeminiUpload 把分块追加到会话的临时文件
-func bufferGeminiUpload(session *geminiUploadSession, content io.Reader) error {
+// uploadBudgetWriter 把分块写入会话临时文件，每次写入前同时检查文件大小与所有会话共享的临时空间
+type uploadBudgetWriter struct {
+	uploads *geminiUploads
+	session *geminiUploadSession
+	file    *os.File
+}
+
+func (writer uploadBudgetWriter) Write(data []byte) (int, error) {
+	if writer.session.received+int64(len(data)) > openAIFileMaxBytes {
+		return 0, &http.MaxBytesError{Limit: openAIFileMaxBytes}
+	}
+	writer.uploads.mu.Lock()
+	if writer.uploads.buffered+int64(len(data)) > writer.uploads.maxBuffered {
+		writer.uploads.mu.Unlock()
+		return 0, errGeminiUploadCapacity
+	}
+	writer.uploads.buffered += int64(len(data))
+	writer.uploads.mu.Unlock()
+	written, err := writer.file.Write(data)
+	writer.session.received += int64(written)
+	if written < len(data) {
+		writer.uploads.mu.Lock()
+		writer.uploads.buffered -= int64(len(data) - written)
+		writer.uploads.mu.Unlock()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+	}
+	return written, err
+}
+
+// bufferGeminiUpload 把分块追加到会话的临时文件，文件大小或临时空间超过上限时返回错误
+func bufferGeminiUpload(uploads *geminiUploads, session *geminiUploadSession, content io.Reader) error {
 	if session.buffer == nil {
 		buffer, err := os.CreateTemp("", "aistudio2api-upload-*")
 		if err != nil {
@@ -364,15 +428,8 @@ func bufferGeminiUpload(session *geminiUploadSession, content io.Reader) error {
 		}
 		session.buffer = buffer
 	}
-	written, err := io.Copy(session.buffer, io.LimitReader(content, openAIFileMaxBytes-session.received+1))
-	session.received += written
-	if err != nil {
-		return err
-	}
-	if session.received > openAIFileMaxBytes {
-		return &http.MaxBytesError{Limit: openAIFileMaxBytes}
-	}
-	return nil
+	_, err := io.Copy(uploadBudgetWriter{uploads: uploads, session: session, file: session.buffer}, content)
+	return err
 }
 
 // uploadGeminiMultipart 处理元数据与文件内容位于同一 multipart 请求体的上传
@@ -544,6 +601,8 @@ func writeGeminiUploadFailure(w http.ResponseWriter, err error, uploadStatus str
 	var maxBytes *http.MaxBytesError
 	if errors.As(err, &maxBytes) || status == http.StatusRequestEntityTooLarge {
 		status, statusName = http.StatusRequestEntityTooLarge, "INVALID_ARGUMENT"
+	} else if errors.Is(err, errGeminiUploadCapacity) {
+		status, statusName = http.StatusTooManyRequests, "RESOURCE_EXHAUSTED"
 	}
 	if uploadStatus != "" {
 		w.Header().Set("X-Goog-Upload-Status", uploadStatus)

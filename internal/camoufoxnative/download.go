@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -115,16 +116,40 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := os.RemoveAll(root); err != nil {
-		return "", fmt.Errorf("清理旧 Camoufox 目录: %w", err)
-	}
-	if err := os.Rename(staging, root); err != nil {
-		return "", fmt.Errorf("发布 Camoufox 目录: %w", err)
+	if err := replaceCamoufoxRoot(root, staging); err != nil {
+		return "", err
 	}
 	os.Remove(archivePath)
 	executable := filepath.Join(root, executableName)
 	slog.Info("Camoufox 已就绪", "path", executable)
 	return executable, nil
+}
+
+// replaceCamoufoxRoot 用 staging 替换 root：先把旧目录改名备份，发布失败时恢复，避免升级中断后失去可用版本
+func replaceCamoufoxRoot(root, staging string) error {
+	backup := root + ".old"
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("清理旧 Camoufox 备份: %w", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("检查 Camoufox 目录: %w", err)
+		}
+		return os.Rename(staging, root)
+	}
+	if err := os.Rename(root, backup); err != nil {
+		return fmt.Errorf("移动旧 Camoufox 目录: %w；旧版本可能仍在运行，请退出 Camoufox 后重试", err)
+	}
+	if err := os.Rename(staging, root); err != nil {
+		if restoreErr := os.Rename(backup, root); restoreErr != nil {
+			return fmt.Errorf("发布 Camoufox 目录: %w；恢复旧目录失败: %v，旧目录在 %s", err, restoreErr, backup)
+		}
+		return fmt.Errorf("发布 Camoufox 目录: %w", err)
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		slog.Warn("清理旧 Camoufox 目录失败", "path", backup, "error", err)
+	}
+	return nil
 }
 
 // downloadCamoufoxArchive 经出口代理把发行包写入 archivePath，文件已有部分内容时从末尾续传

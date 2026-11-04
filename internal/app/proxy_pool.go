@@ -33,7 +33,20 @@ func checkProxy(ctx context.Context, proxy string) error {
 	if err != nil {
 		return err
 	}
-	return response.Body.Close()
+	defer response.Body.Close()
+	return proxyProbeStatus(response.StatusCode)
+}
+
+// proxyProbeStatus 把探测响应映射为代理可用性：407 表示代理凭据错误，429 与 5xx 表示代理或上游不可用
+func proxyProbeStatus(status int) error {
+	switch {
+	case status == http.StatusProxyAuthRequired:
+		return fmt.Errorf("代理要求认证 (HTTP %d)", status)
+	case status == http.StatusTooManyRequests || status >= http.StatusInternalServerError:
+		return fmt.Errorf("代理探测返回 HTTP %d", status)
+	default:
+		return nil
+	}
 }
 
 // proxyNetworkError 判断请求失败是否为经代理的网络错误

@@ -242,6 +242,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
 		ResponseModes: manager.responseModes, WaitLaunch: manager.WaitLaunch,
 		SearchSettings: manager.searchSettings, EgressProxy: manager.egressProxy,
+		Lifecycle: ctx,
 	})
 	server := &http.Server{
 		Handler:           rootHandler(apiHandler),

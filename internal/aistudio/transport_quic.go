@@ -105,39 +105,45 @@ func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumptio
 	if len(addresses) == 0 {
 		return nil, nil, fmt.Errorf("%s 没有可用地址", host)
 	}
-	address := addresses[0].Unmap()
-	network, datagram := "udp4", neqoIPv4Datagram
-	if address.Is6() {
-		network, datagram = "udp6", neqoIPv6Datagram
+	var lastErr error
+	for _, candidate := range addresses {
+		address := candidate.Unmap()
+		network, datagram := "udp4", neqoIPv4Datagram
+		if address.Is6() {
+			network, datagram = "udp6", neqoIPv6Datagram
+		}
+		socket, err := net.ListenUDP(network, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		psk, settings := resumption.lookup(host)
+		transport := &quic.UTransport{Transport: &quic.Transport{Conn: socket}, QUICSpec: firefoxQUICSpec(datagram, psk, settings != nil)}
+		dial := transport.Dial
+		if settings != nil {
+			dial = transport.DialEarly
+		}
+		connection, err := dial(ctx, net.UDPAddrFromAddrPort(netip.AddrPortFrom(address, 443)), &utls.Config{
+			ServerName:         host,
+			NextProtos:         []string{"h3"},
+			MinVersion:         utls.VersionTLS13,
+			ClientSessionCache: resumption.sessions,
+			OmitEmptyPsk:       true,
+		}, firefoxQUICConfig(datagram, resumption.tokens))
+		if err != nil {
+			_ = transport.Close()
+			_ = socket.Close()
+			lastErr = err
+			continue
+		}
+		go func() {
+			<-connection.Context().Done()
+			_ = transport.Close()
+			_ = socket.Close()
+		}()
+		return connection, settings, nil
 	}
-	socket, err := net.ListenUDP(network, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	psk, settings := resumption.lookup(host)
-	transport := &quic.UTransport{Transport: &quic.Transport{Conn: socket}, QUICSpec: firefoxQUICSpec(datagram, psk, settings != nil)}
-	dial := transport.Dial
-	if settings != nil {
-		dial = transport.DialEarly
-	}
-	connection, err := dial(ctx, net.UDPAddrFromAddrPort(netip.AddrPortFrom(address, 443)), &utls.Config{
-		ServerName:         host,
-		NextProtos:         []string{"h3"},
-		MinVersion:         utls.VersionTLS13,
-		ClientSessionCache: resumption.sessions,
-		OmitEmptyPsk:       true,
-	}, firefoxQUICConfig(datagram, resumption.tokens))
-	if err != nil {
-		_ = transport.Close()
-		_ = socket.Close()
-		return nil, nil, err
-	}
-	go func() {
-		<-connection.Context().Done()
-		_ = transport.Close()
-		_ = socket.Close()
-	}()
-	return connection, settings, nil
+	return nil, nil, lastErr
 }
 
 // firefoxQUICConfig 返回 Firefox 152 的 QUIC 连接配置：空闲超时 30 秒，与 neqo 一样只在请求流尚未完成时每半个空闲超时发送保活 PING

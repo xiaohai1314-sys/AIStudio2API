@@ -1007,15 +1007,17 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err))
 	}
 	cfg := config.Config{
-		AutoStart:      value.AutoStart,
-		RequestBodyLog: value.RequestBodyLog,
-		LogFile:        value.LogFile, LogMaxTotalMB: value.LogMaxTotalMB,
-		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password, TrustedProxyCIDRs: saved.TrustedProxyCIDRs,
+		AutoStart:        value.AutoStart,
+		RequestBodyLog:   value.RequestBodyLog,
+		AuthFailurePause: saved.AuthFailurePause,
+		LogFile:          value.LogFile, LogMaxTotalMB: value.LogMaxTotalMB,
+		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password, EncryptCredentials: saved.EncryptCredentials, TrustedProxyCIDRs: saved.TrustedProxyCIDRs,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
 		SearchModelAliases: value.SearchModelAliases, GoogleSearch: value.GoogleSearch,
 		ContinuationRewrite: value.ContinuationRewrite, ContinuationPrompt: strings.TrimSpace(value.ContinuationPrompt),
 		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), FirstEventHedgeModels: strings.TrimSpace(value.FirstEventHedgeModels), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
+		PProfAddr: saved.PProfAddr, GeoIPDBPath: saved.GeoIPDBPath,
 		ProxyAPIKey: value.APIKey, PublicRateLimit: saved.PublicRateLimit, PublicRateBurst: saved.PublicRateBurst, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,

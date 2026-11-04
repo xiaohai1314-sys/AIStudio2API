@@ -4,6 +4,7 @@ package securefile
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -34,5 +35,16 @@ func TestAESRequiresKeyPath(t *testing.T) {
 	defer Configure(false)
 	if _, err := Encrypt([]byte("secret")); err == nil {
 		t.Fatal("缺少密钥文件时仍然加密成功")
+	}
+}
+
+// TestReadExistingKeyRejectsWrongLength 验证长度错误的已有密钥文件被拒绝
+func TestReadExistingKeyRejectsWrongLength(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.key")
+	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readExistingKey(path); err == nil {
+		t.Fatal("长度错误的密钥文件未被拒绝")
 	}
 }

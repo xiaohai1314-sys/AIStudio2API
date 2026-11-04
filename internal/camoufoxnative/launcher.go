@@ -41,6 +41,7 @@ type browserProcess struct {
 	cacheDirectory string
 	mu             sync.Mutex
 	closed         bool
+	closing        bool
 }
 
 // launchBrowser 启动 Camoufox 并返回原生 WebDriver BiDi 端点
@@ -245,11 +246,17 @@ func (process *browserProcess) close(timeout time.Duration, terminate browserPro
 		return nil
 	}
 	process.mu.Lock()
-	if process.closed {
+	if process.closed || process.closing {
 		process.mu.Unlock()
 		return nil
 	}
+	process.closing = true
 	process.mu.Unlock()
+	defer func() {
+		process.mu.Lock()
+		process.closing = false
+		process.mu.Unlock()
+	}()
 	if timeout <= 0 {
 		timeout = browserProcessCloseTimeout
 	}

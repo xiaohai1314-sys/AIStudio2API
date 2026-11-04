@@ -43,11 +43,13 @@ func (p *pacer) Wait(ctx context.Context, accountID string) error {
 	}
 	p.mu.Lock()
 	now := p.now()
-	next := p.next[accountID]
+	previous := p.next[accountID]
+	next := previous
 	if next.Before(now) {
 		next = now
 	}
-	p.next[accountID] = next.Add(p.spacing())
+	reserved := next.Add(p.spacing())
+	p.next[accountID] = reserved
 	p.mu.Unlock()
 	delay := next.Sub(now)
 	if delay <= 0 {
@@ -57,6 +59,12 @@ func (p *pacer) Wait(ctx context.Context, accountID string) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+		// 取消的请求不占用它预留的间隔；后面已有请求排队时保留更晚的预留
+		p.mu.Lock()
+		if p.next[accountID] == reserved {
+			p.next[accountID] = previous
+		}
+		p.mu.Unlock()
 		return ctx.Err()
 	case <-timer.C:
 		return nil

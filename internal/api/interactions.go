@@ -168,7 +168,7 @@ func (s *server) endBackgroundInteraction(ctx context.Context, request interacti
 		s.storeInteraction(request, previous, current, generationResult{}, interactionObject(generate, created, stored.Status, nil))
 	}
 	if request.WebhookConfig != nil {
-		sendInteractionWebhook(*request.WebhookConfig, generate.ID, stored.Status, failure.Bytes())
+		sendInteractionWebhook(s.config.Lifecycle, *request.WebhookConfig, generate.ID, stored.Status, failure.Bytes())
 	}
 }
 

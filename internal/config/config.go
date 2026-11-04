@@ -610,6 +610,8 @@ func (c Config) envValues() map[string]string {
 		"ADMIN_PASSWORD":            c.AdminPassword,
 		"ENCRYPT_CREDENTIALS":       strconv.FormatBool(c.EncryptCredentials),
 		"TRUSTED_PROXY_CIDRS":       c.TrustedProxyCIDRs,
+		"PPROF_ADDR":                c.PProfAddr,
+		"GEOIP_DB_PATH":             c.GeoIPDBPath,
 		"BUILD_NATIVE_NONSTREAM":    strconv.FormatBool(c.BuildNativeNonstream),
 		"NONSTREAM_KEEPALIVE":       strconv.FormatBool(c.NonstreamKeepalive),
 		"FAKE_STREAM":               strconv.FormatBool(c.FakeStream),
