@@ -61,6 +61,7 @@ type goWAARuntime struct {
 	pageFlags      pageFlags
 	headers        http.Header
 	cacheDirectory string
+	pageCache      *pageCache
 
 	storageMu sync.Mutex
 	storage   StorageState
@@ -72,6 +73,7 @@ type goWAARuntime struct {
 	interpreter     string
 	closed          bool
 	refreshTimer    *time.Timer
+	incidentsTimer  *time.Timer
 }
 
 // pageRPC 是官网页面自身发出的 MakerSuite 请求方法与正文
@@ -80,13 +82,19 @@ type pageRPC struct {
 	body   string
 }
 
+// incidentsRPC 是官网页面打开期间按 incidentsPollInterval 轮询的服务事件请求
+var incidentsRPC = pageRPC{"ListIncidentsHistory", "[]"}
+
+// incidentsPollInterval 是官网页面从启动时的第一次 ListIncidentsHistory 算起的固定轮询周期
+const incidentsPollInterval = 10 * time.Minute
+
 // pageStartupRPCs 是官网页面启动时与 GetLoggingContext、Waa/Create 并发发出的请求
 var pageStartupRPCs = []pageRPC{
 	{"GetUserPreferences", "[]"},
 	{"GetAiStudioBenefitTier", "[]"},
 	{"ListModels", "[]"},
 	{"GenerateAccessToken", `["users/me"]`},
-	{"ListIncidentsHistory", "[]"},
+	incidentsRPC,
 	{"ListPromos", "[]"},
 	{"GenerateAccessToken", `["users/me"]`},
 }
@@ -219,10 +227,17 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	}
 	runtime.cacheDirectory = filepath.Join(filepath.Dir(filepath.Dir(options.StorageStatePath)), ".waa-interpreters")
 	reportGoStartup(options, camoufoxnative.StartupLoadingAIStudio)
-	apiKey, err := runtime.loadPage(ctx)
+	apiKey, document, err := runtime.loadPage(ctx)
 	if err != nil {
 		return fail(err)
 	}
+	if err := runtime.loadDocumentResources(ctx, document); err != nil {
+		return fail(err)
+	}
+	runtime.loadPageIcons(ctx, document)
+	paniclog.Go("runtime_go.go:236", func() {
+		runtime.authWarmup(context.WithoutCancel(ctx))
+	})
 	visitID, err := newVisitID()
 	if err != nil {
 		return fail(err)
@@ -240,6 +255,7 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 		}()
 	})
 	pageDone := make(chan [][]byte, 1)
+	pageStarted := time.Now()
 	paniclog.Go("runtime_go.go:240", func() {
 		func() {
 			pageDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, pageStartupRPCs)
@@ -287,7 +303,22 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	}
 	runtime.vm = vm
 	runtime.scheduleRefresh()
+	runtime.scheduleIncidents(pageStarted.Add(incidentsPollInterval), apiKey, visitID)
 	return runtime, nil
+}
+
+// scheduleIncidents 在 at 时刻以官网页面的请求头发出 ListIncidentsHistory，并按 incidentsPollInterval 安排下一次，直到 runtime 关闭
+func (runtime *goWAARuntime) scheduleIncidents(at time.Time, apiKey string, visitID string) {
+	runtime.incidentsTimer = time.AfterFunc(time.Until(at), func() {
+		runtime.vmMu.Lock()
+		if runtime.closed {
+			runtime.vmMu.Unlock()
+			return
+		}
+		runtime.scheduleIncidents(at.Add(incidentsPollInterval), apiKey, visitID)
+		runtime.vmMu.Unlock()
+		runtime.sendPageRPCs(context.Background(), apiKey, visitID, []pageRPC{incidentsRPC})
+	})
 }
 
 // scheduleRefresh 在 VM 生命周期到期时按官网流程后台重建 VM
@@ -434,7 +465,11 @@ func newGoPageRuntime(options camoufoxnative.Options) (*goWAARuntime, map[string
 	if err != nil {
 		return nil, nil, err
 	}
-	runtime := &goWAARuntime{options: options, client: client, storage: storage}
+	cache, err := loadPageCache(options.StorageStatePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	runtime := &goWAARuntime{options: options, client: client, storage: storage, pageCache: cache}
 	runtime.profile, runtime.userAgent, runtime.acceptLanguage = profileFromFingerprint(fingerprint)
 	pagePath := "/prompts/new_chat"
 	if options.AuthUser > 0 {
@@ -451,12 +486,12 @@ func CheckSession(ctx context.Context, options camoufoxnative.Options) error {
 		return err
 	}
 	defer runtime.client.CloseIdleConnections()
-	_, err = runtime.loadPage(ctx)
+	_, _, err = runtime.loadPage(ctx)
 	return err
 }
 
-// loadPage 以浏览器导航形状请求官网页面并返回页面公开 API Key
-func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, error) {
+// loadPage 以浏览器导航形状请求官网页面，返回页面公开 API Key 与文档引用的子资源
+func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument, error) {
 	headers := http.Header{}
 	headers.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	headers.Set("Upgrade-Insecure-Requests", "1")
@@ -470,39 +505,39 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, error) {
 	for redirect := 0; redirect < 5; redirect++ {
 		response, err := runtime.do(ctx, http.MethodGet, target, nil, headers)
 		if err != nil {
-			return "", fmt.Errorf("载入 AI Studio 页面: %w", err)
+			return "", pageDocument{}, fmt.Errorf("载入 AI Studio 页面: %w", err)
 		}
 		body, readErr := io.ReadAll(response.Body)
 		_ = response.Body.Close()
 		if readErr != nil {
-			return "", fmt.Errorf("读取 AI Studio 页面: %w", readErr)
+			return "", pageDocument{}, fmt.Errorf("读取 AI Studio 页面: %w", readErr)
 		}
 		if response.StatusCode >= 300 && response.StatusCode < 400 {
 			location, err := response.Location()
 			if err != nil {
-				return "", fmt.Errorf("AI Studio 页面跳转无效: %w", err)
+				return "", pageDocument{}, fmt.Errorf("AI Studio 页面跳转无效: %w", err)
 			}
 			if location.Hostname() == "accounts.google.com" {
-				return "", fmt.Errorf("%w url=%s", camoufoxnative.ErrAuthenticationRequired, location.String())
+				return "", pageDocument{}, fmt.Errorf("%w url=%s", camoufoxnative.ErrAuthenticationRequired, location.String())
 			}
 			target = location.String()
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("AI Studio 页面返回 HTTP %d", response.StatusCode)
+			return "", pageDocument{}, fmt.Errorf("AI Studio 页面返回 HTTP %d", response.StatusCode)
 		}
 		match := makerSuiteAPIKeyPattern.FindSubmatch(body)
 		if len(match) != 2 || len(match[1]) == 0 {
-			return "", fmt.Errorf("AI Studio 页面缺少 WIu0Nc")
+			return "", pageDocument{}, fmt.Errorf("AI Studio 页面缺少 WIu0Nc")
 		}
 		runtime.pageLoaded = time.Now()
 		runtime.profile.Globals = pageGlobals(body)
 		runtime.pageFlags = parsePageFlags(body)
 		runtime.profile.NavigationStart = navigationStart
 		runtime.profile.TrustedTypes = requiresTrustedScripts(response.Header.Values("Content-Security-Policy"))
-		return string(match[1]), nil
+		return string(match[1]), parsePageDocument(body, target), nil
 	}
-	return "", errors.New("AI Studio 页面跳转次数过多")
+	return "", pageDocument{}, errors.New("AI Studio 页面跳转次数过多")
 }
 
 // requiresTrustedScripts 判断页面 CSP 是否含 require-trusted-types-for 'script'
@@ -888,6 +923,9 @@ func (runtime *goWAARuntime) Close() error {
 	runtime.closed = true
 	if runtime.refreshTimer != nil {
 		runtime.refreshTimer.Stop()
+	}
+	if runtime.incidentsTimer != nil {
+		runtime.incidentsTimer.Stop()
 	}
 	if runtime.vm != nil {
 		runtime.vm.Close()
