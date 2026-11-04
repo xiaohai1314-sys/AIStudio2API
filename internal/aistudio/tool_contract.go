@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/dlclark/regexp2/v2"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -205,54 +206,56 @@ func (contract *toolContract) forward(ctx context.Context, source <-chan Event) 
 		return source
 	}
 	destination := make(chan Event, 8)
-	go func() {
-		defer close(destination)
-		calls := 0
-		serverSideUsed := false
-		failed := false
-		for event := range source {
-			if failed {
-				continue
-			}
-			var err error
-			if event.Kind == EventGrounding || event.Kind == EventExecutableCode || event.Kind == EventCodeExecutionResult || event.Kind == EventServerToolCall {
-				serverSideUsed = true
-			}
-			if event.Kind == EventToolCall && event.FunctionCall != nil {
-				calls++
-				call := event.FunctionCall
-				switch {
-				case !contract.names[call.Name]:
-					err = fmt.Errorf("上游返回了未选择的函数 %q", call.Name)
-				case contract.parallel != nil && !*contract.parallel && calls > 1:
-					err = fmt.Errorf("上游违反单次工具调用约束")
-				default:
-					if schema := contract.schemas[call.Name]; schema != nil {
-						value, decodeErr := jsonschema.UnmarshalJSON(bytes.NewReader(call.Arguments))
-						if decodeErr != nil {
-							err = decodeErr
-						} else {
-							err = schema.Validate(value)
-						}
-						if err != nil {
-							err = fmt.Errorf("上游 function %q 参数违反 strict Schema: %w", call.Name, err)
+	paniclog.Go("tool_contract.go:208", func() {
+		func() {
+			defer close(destination)
+			calls := 0
+			serverSideUsed := false
+			failed := false
+			for event := range source {
+				if failed {
+					continue
+				}
+				var err error
+				if event.Kind == EventGrounding || event.Kind == EventExecutableCode || event.Kind == EventCodeExecutionResult || event.Kind == EventServerToolCall {
+					serverSideUsed = true
+				}
+				if event.Kind == EventToolCall && event.FunctionCall != nil {
+					calls++
+					call := event.FunctionCall
+					switch {
+					case !contract.names[call.Name]:
+						err = fmt.Errorf("上游返回了未选择的函数 %q", call.Name)
+					case contract.parallel != nil && !*contract.parallel && calls > 1:
+						err = fmt.Errorf("上游违反单次工具调用约束")
+					default:
+						if schema := contract.schemas[call.Name]; schema != nil {
+							value, decodeErr := jsonschema.UnmarshalJSON(bytes.NewReader(call.Arguments))
+							if decodeErr != nil {
+								err = decodeErr
+							} else {
+								err = schema.Validate(value)
+							}
+							if err != nil {
+								err = fmt.Errorf("上游 function %q 参数违反 strict Schema: %w", call.Name, err)
+							}
 						}
 					}
 				}
+				if event.Kind == EventFinish && contract.required && calls == 0 && !(contract.serverSide && serverSideUsed) {
+					err = fmt.Errorf("上游未返回 required tool call")
+				}
+				if err != nil {
+					event = Event{Kind: EventError, Err: err}
+					failed = true
+				}
+				select {
+				case destination <- event:
+				case <-ctx.Done():
+					return
+				}
 			}
-			if event.Kind == EventFinish && contract.required && calls == 0 && !(contract.serverSide && serverSideUsed) {
-				err = fmt.Errorf("上游未返回 required tool call")
-			}
-			if err != nil {
-				event = Event{Kind: EventError, Err: err}
-				failed = true
-			}
-			select {
-			case destination <- event:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+		}()
+	})
 	return destination
 }

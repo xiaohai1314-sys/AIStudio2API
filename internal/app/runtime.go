@@ -20,6 +20,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // newRuntime 装配单个生成服务实例
@@ -135,7 +136,7 @@ func newRuntime(
 	workers.proxyFailed = service.reportProxyFailure
 	probeCtx, stopProbe := context.WithCancel(lifecycle)
 	if len(proxyList) > 1 {
-		go admin.probeProxies(probeCtx)
+		paniclog.Go("runtime.go:138", func() { admin.probeProxies(probeCtx) })
 	}
 	requests.log("service", "INFO", fmt.Sprintf(
 		"协议运行时就绪 | 账户=%d | 耗时=%s",
@@ -464,20 +465,22 @@ func (service *trackedService) markModelAccessVerifiedAsync(
 	accessGeneration uint64,
 	checkedAt time.Time,
 ) {
-	go func() {
-		changed, err := service.pool.MarkModelAccessVerifiedIfGeneration(
-			accountID, modelID, accessGeneration, checkedAt,
-		)
-		if err != nil {
-			service.requests.log(accountLabel, "ERROR", fmt.Sprintf(
-				"模型资格保存失败 | 模型=%s | 错误=%s", modelID, strings.TrimSpace(err.Error()),
-			))
-			return
-		}
-		if changed {
-			service.publishModelAccess()
-		}
-	}()
+	paniclog.Go("runtime.go:467", func() {
+		func() {
+			changed, err := service.pool.MarkModelAccessVerifiedIfGeneration(
+				accountID, modelID, accessGeneration, checkedAt,
+			)
+			if err != nil {
+				service.requests.log(accountLabel, "ERROR", fmt.Sprintf(
+					"模型资格保存失败 | 模型=%s | 错误=%s", modelID, strings.TrimSpace(err.Error()),
+				))
+				return
+			}
+			if changed {
+				service.publishModelAccess()
+			}
+		}()
+	})
 }
 
 // Stop 停止公开生成服务并释放活动 worker
@@ -539,7 +542,7 @@ func (service *trackedService) Stop() (bool, error) {
 	modelRefreshDone := service.modelRefreshDone
 	service.lifecycleMu.Unlock()
 	dataCancel()
-	go service.finishStop(transitionDone, modelRefreshDone)
+	paniclog.Go("runtime.go:542", func() { service.finishStop(transitionDone, modelRefreshDone) })
 	transitionErr := waitServiceTransition(transitionDone, serviceTransitionShutdownTimeout, "生成服务停止")
 	service.lifecycleMu.Lock()
 	cleanupErr := service.transitionErr
@@ -674,57 +677,59 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 	synced := make(chan struct{})
 	done := make(chan struct{})
 	accountIDs := service.modelCatalogAccountIDs()
-	go func() {
-		defer close(done)
-		startedAt := time.Now()
-		firstReady := false
-		synchronized := 0
-		refreshed := 0
-		failures := make([]error, 0)
-		authRequiredBefore := service.authRequiredAccountIDs()
-		for result := range service.refreshAccountModelCatalogs(ctx, accountIDs, false) {
-			if result.err != nil {
-				failures = append(failures, fmt.Errorf("账户 %s: %w", result.accountID, result.err))
-				continue
+	paniclog.Go("runtime.go:677", func() {
+		func() {
+			defer close(done)
+			startedAt := time.Now()
+			firstReady := false
+			synchronized := 0
+			refreshed := 0
+			failures := make([]error, 0)
+			authRequiredBefore := service.authRequiredAccountIDs()
+			for result := range service.refreshAccountModelCatalogs(ctx, accountIDs, false) {
+				if result.err != nil {
+					failures = append(failures, fmt.Errorf("账户 %s: %w", result.accountID, result.err))
+					continue
+				}
+				synchronized++
+				if len(result.models) == 0 {
+					continue
+				}
+				refreshed++
+				if ctx.Err() == nil {
+					service.applyCachedModelCatalog()
+					service.publishModelAccess()
+				}
+				if !firstReady && ctx.Err() == nil {
+					ready <- nil
+					firstReady = true
+				}
 			}
-			synchronized++
-			if len(result.models) == 0 {
-				continue
+			if !firstReady {
+				launchErr := ctx.Err()
+				if launchErr == nil && len(failures) > 0 {
+					launchErr = errors.Join(failures...)
+				}
+				if launchErr == nil {
+					launchErr = aistudio.ErrNoEligibleAccount
+				}
+				ready <- launchErr
 			}
-			refreshed++
-			if ctx.Err() == nil {
-				service.applyCachedModelCatalog()
+			close(ready)
+			close(synced)
+			if ctx.Err() != nil {
+				return
+			}
+			if !maps.Equal(service.authRequiredAccountIDs(), authRequiredBefore) {
 				service.publishModelAccess()
 			}
-			if !firstReady && ctx.Err() == nil {
-				ready <- nil
-				firstReady = true
-			}
-		}
-		if !firstReady {
-			launchErr := ctx.Err()
-			if launchErr == nil && len(failures) > 0 {
-				launchErr = errors.Join(failures...)
-			}
-			if launchErr == nil {
-				launchErr = aistudio.ErrNoEligibleAccount
-			}
-			ready <- launchErr
-		}
-		close(ready)
-		close(synced)
-		if ctx.Err() != nil {
-			return
-		}
-		if !maps.Equal(service.authRequiredAccountIDs(), authRequiredBefore) {
-			service.publishModelAccess()
-		}
-		service.requests.log("service", "INFO", fmt.Sprintf(
-			"模型目录后台同步完成 | 同步=%d | 非空=%d | 模型=%d | 待重试账户=%d | 耗时=%s",
-			synchronized, refreshed, len(service.modelSnapshot()), service.pendingModelRetryCount(), time.Since(startedAt).Round(time.Millisecond),
-		))
-		service.retryModelCatalogs(ctx)
-	}()
+			service.requests.log("service", "INFO", fmt.Sprintf(
+				"模型目录后台同步完成 | 同步=%d | 非空=%d | 模型=%d | 待重试账户=%d | 耗时=%s",
+				synchronized, refreshed, len(service.modelSnapshot()), service.pendingModelRetryCount(), time.Since(startedAt).Round(time.Millisecond),
+			))
+			service.retryModelCatalogs(ctx)
+		}()
+	})
 	return ready, synced, done
 }
 
@@ -749,20 +754,24 @@ func (service *trackedService) refreshAccountModelCatalogs(
 	var refreshes sync.WaitGroup
 	for _, accountID := range accountIDs {
 		refreshes.Add(1)
-		go func(accountID string) {
-			defer refreshes.Done()
-			if pendingOnly && !service.modelRetryPending(accountID) {
-				results <- accountModelRefreshResult{accountID: accountID, skipped: true}
-				return
-			}
-			models, err := service.refreshAccountModelCatalog(ctx, accountID)
-			results <- accountModelRefreshResult{accountID: accountID, models: models, err: err}
-		}(accountID)
+		paniclog.Go("runtime.go:752", func() {
+			func(accountID string) {
+				defer refreshes.Done()
+				if pendingOnly && !service.modelRetryPending(accountID) {
+					results <- accountModelRefreshResult{accountID: accountID, skipped: true}
+					return
+				}
+				models, err := service.refreshAccountModelCatalog(ctx, accountID)
+				results <- accountModelRefreshResult{accountID: accountID, models: models, err: err}
+			}(accountID)
+		})
 	}
-	go func() {
-		refreshes.Wait()
-		close(results)
-	}()
+	paniclog.Go("runtime.go:762", func() {
+		func() {
+			refreshes.Wait()
+			close(results)
+		}()
+	})
 	return results
 }
 
@@ -904,7 +913,7 @@ func (service *trackedService) refreshAccountStateAfterLimit(accountID string) {
 	}
 	service.stateRefreshAt[accountID] = now
 	service.stateRefreshMu.Unlock()
-	go func() { _, _ = service.refreshAccountState(service.lifecycle, accountID, false) }()
+	paniclog.Go("runtime.go:907", func() { func() { _, _ = service.refreshAccountState(service.lifecycle, accountID, false) }() })
 }
 
 func (service *trackedService) retryAccountModelCatalogs(ctx context.Context) bool {
@@ -1497,21 +1506,23 @@ type waitReporter struct {
 func startWaitReporter(report func(waited time.Duration)) *waitReporter {
 	reporter := &waitReporter{stop: make(chan struct{}), done: make(chan struct{})}
 	started := time.Now()
-	go func() {
-		defer close(reporter.done)
-		timer := time.NewTimer(streamStallThreshold)
-		defer timer.Stop()
-		for {
-			select {
-			case <-reporter.stop:
-				return
-			case <-timer.C:
-				reporter.reported = true
-				report(time.Since(started).Round(time.Second))
-				timer.Reset(waitReportInterval)
+	paniclog.Go("runtime.go:1500", func() {
+		func() {
+			defer close(reporter.done)
+			timer := time.NewTimer(streamStallThreshold)
+			defer timer.Stop()
+			for {
+				select {
+				case <-reporter.stop:
+					return
+				case <-timer.C:
+					reporter.reported = true
+					report(time.Since(started).Round(time.Second))
+					timer.Reset(waitReportInterval)
+				}
 			}
-		}
-	}()
+		}()
+	})
 	return reporter
 }
 
@@ -1660,7 +1671,9 @@ func (service *trackedService) Generate(ctx context.Context, request aistudio.Ge
 		return nil, err
 	}
 	events := make(chan aistudio.Event, 8)
-	go service.generateWithRetry(ctx, requestCtx, cancel, generationStartedAt, request, resourceID, events)
+	paniclog.Go("runtime.go:1663", func() {
+		service.generateWithRetry(ctx, requestCtx, cancel, generationStartedAt, request, resourceID, events)
+	})
 	return events, nil
 }
 
@@ -2012,10 +2025,12 @@ func (service *trackedService) startAttempt(
 	}
 	attemptCtx, cancel := context.WithCancel(requestCtx)
 	attempt.cancel = cancel
-	go func() {
-		defer close(attempt.done)
-		service.runAttempt(attemptCtx, request, resourceID, modelID, fallbackReason, attempt)
-	}()
+	paniclog.Go("runtime.go:2015", func() {
+		func() {
+			defer close(attempt.done)
+			service.runAttempt(attemptCtx, request, resourceID, modelID, fallbackReason, attempt)
+		}()
+	})
 	return attempt
 }
 

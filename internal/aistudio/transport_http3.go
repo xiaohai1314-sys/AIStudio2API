@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	fhttp "github.com/Mag1cFall/fhttp"
 )
 
@@ -140,26 +141,28 @@ func (h3 *firefoxHTTP3) observe(host string, header fhttp.Header) {
 	origin.validated = false
 	validation := h3.startDial(host, false)
 	origin.validation = validation
-	go func() {
-		<-validation.done
-		h3.mu.Lock()
-		defer h3.mu.Unlock()
-		if h3.origins[host] != origin {
-			if validation.conn != nil {
-				validation.conn.close()
+	paniclog.Go("transport_http3.go:143", func() {
+		func() {
+			<-validation.done
+			h3.mu.Lock()
+			defer h3.mu.Unlock()
+			if h3.origins[host] != origin {
+				if validation.conn != nil {
+					validation.conn.close()
+				}
+				return
 			}
-			return
-		}
-		origin.validation = nil
-		if validation.err != nil {
-			delete(h3.origins, host)
-			return
-		}
-		origin.validated = true
-		origin.expires = time.Now().Add(maxAge)
-		h3.adopt(host, origin, false, validation.conn)
-		h3.pool.retire(net.JoinHostPort(host, "443"), requestClass{})
-	}()
+			origin.validation = nil
+			if validation.err != nil {
+				delete(h3.origins, host)
+				return
+			}
+			origin.validated = true
+			origin.expires = time.Now().Add(maxAge)
+			h3.adopt(host, origin, false, validation.conn)
+			h3.pool.retire(net.JoinHostPort(host, "443"), requestClass{})
+		}()
+	})
 }
 
 // parseAltSvcH3 返回 Alt-Svc 中第一个指向同主机 443 端口的 h3 条目的有效期，clear 表示清除映射
@@ -196,34 +199,38 @@ func (h3 *firefoxHTTP3) startDial(host string, anonymous bool) *http3Dial {
 	ctx, cancel := context.WithCancel(context.Background())
 	dial := &http3Dial{done: make(chan struct{}), cancel: cancel}
 	resumption := h3.resumption[classIndex(anonymous)]
-	go func() {
-		defer close(dial.done)
-		connection, settings, err := dialFirefoxQUIC(ctx, host, resumption)
-		if err != nil {
-			dial.err = err
-			return
-		}
-		dial.conn, dial.err = newHTTP3Conn(connection, settings, func(capacity uint64, blocked uint64) {
-			resumption.rememberSettings(host, capacity, blocked)
-		})
-	}()
+	paniclog.Go("transport_http3.go:199", func() {
+		func() {
+			defer close(dial.done)
+			connection, settings, err := dialFirefoxQUIC(ctx, host, resumption)
+			if err != nil {
+				dial.err = err
+				return
+			}
+			dial.conn, dial.err = newHTTP3Conn(connection, settings, func(capacity uint64, blocked uint64) {
+				resumption.rememberSettings(host, capacity, blocked)
+			})
+		}()
+	})
 	return dial
 }
 
 // adopt 把建立好的连接放进主机对应类别，连接关闭或收到 GOAWAY 后自动移出
 func (h3 *firefoxHTTP3) adopt(host string, origin *altSvcOrigin, anonymous bool, conn *http3Conn) {
 	origin.classes[classIndex(anonymous)].conn = conn
-	go func() {
-		select {
-		case <-conn.quic.Context().Done():
-		case <-conn.goaway:
-		}
-		h3.mu.Lock()
-		defer h3.mu.Unlock()
-		if class := &origin.classes[classIndex(anonymous)]; class.conn == conn {
-			class.conn = nil
-		}
-	}()
+	paniclog.Go("transport_http3.go:216", func() {
+		func() {
+			select {
+			case <-conn.quic.Context().Done():
+			case <-conn.goaway:
+			}
+			h3.mu.Lock()
+			defer h3.mu.Unlock()
+			if class := &origin.classes[classIndex(anonymous)]; class.conn == conn {
+				class.conn = nil
+			}
+		}()
+	})
 }
 
 // send 按 Firefox 的连接选择发送请求：返回 HTTP/3 响应，或返回改走 HTTP/2 的请求（备用连接已在请求 context 中标记）
@@ -312,7 +319,7 @@ func (h3 *firefoxHTTP3) route(request *fhttp.Request, host string, anonymous boo
 	if dial == nil {
 		dial = h3.startDial(host, anonymous)
 		class.dial = dial
-		go h3.finishDial(host, origin, anonymous, dial)
+		paniclog.Go("transport_http3.go:315", func() { h3.finishDial(host, origin, anonymous, dial) })
 	}
 	idle := h3.pool.idle(address, requestClass{anonymous: anonymous})
 	h3.mu.Unlock()
@@ -392,10 +399,12 @@ func (h3 *firefoxHTTP3) finishDial(host string, origin *altSvcOrigin, anonymous 
 // http2Ready 在后台取得一条该类别的 HTTP/2 连接，返回的 channel 交付取得结果
 func (h3 *firefoxHTTP3) http2Ready(ctx context.Context, address string, class requestClass) <-chan error {
 	ready := make(chan error, 1)
-	go func() {
-		_, err := h3.pool.get(withRequestClass(context.WithoutCancel(ctx), class), address, false)
-		ready <- err
-	}()
+	paniclog.Go("transport_http3.go:395", func() {
+		func() {
+			_, err := h3.pool.get(withRequestClass(context.WithoutCancel(ctx), class), address, false)
+			ready <- err
+		}()
+	})
 	return ready
 }
 

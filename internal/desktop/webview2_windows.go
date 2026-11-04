@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"golang.org/x/sys/windows"
 )
 
@@ -38,10 +39,12 @@ func installWebView2() bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	downloaded := make(chan bootstrapper, 1)
-	go func() {
-		path, err := downloadWebView2Bootstrapper(ctx)
-		downloaded <- bootstrapper{path, err}
-	}()
+	paniclog.Go("webview2_windows.go:41", func() {
+		func() {
+			path, err := downloadWebView2Bootstrapper(ctx)
+			downloaded <- bootstrapper{path, err}
+		}()
+	})
 	accepted := messageBox("AIStudio2API needs the Microsoft Edge WebView2 Runtime to open its window. Press OK to download and install it from Microsoft; the Microsoft installer shows its progress. Press Cancel to use the default browser instead.", windows.MB_OKCANCEL|windows.MB_ICONINFORMATION) == idOK
 	if !accepted {
 		cancel()

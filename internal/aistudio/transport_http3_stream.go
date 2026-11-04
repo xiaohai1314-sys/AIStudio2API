@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	fhttp "github.com/Mag1cFall/fhttp"
 	quic "github.com/Mag1cFall/uquic"
 	"github.com/Mag1cFall/uquic/quicvarint"
@@ -96,7 +97,7 @@ func (conn *http3Conn) exchange(request *fhttp.Request, fields []qpackField) (*f
 	conn.decoderMu.Unlock()
 	body.stopWatch = context.AfterFunc(ctx, body.abort)
 	if request.Body != nil && request.Body != fhttp.NoBody {
-		go body.writeRequest(request.Body)
+		paniclog.Go("transport_http3_stream.go:99", func() { body.writeRequest(request.Body) })
 	} else {
 		_ = stream.Close()
 	}

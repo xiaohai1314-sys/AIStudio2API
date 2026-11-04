@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	quic "github.com/Mag1cFall/uquic"
 	"github.com/Mag1cFall/uquic/quicvarint"
 	utls "github.com/Mag1cFall/utls"
@@ -136,11 +137,13 @@ func dialFirefoxQUIC(ctx context.Context, host string, resumption *quicResumptio
 			lastErr = err
 			continue
 		}
-		go func() {
-			<-connection.Context().Done()
-			_ = transport.Close()
-			_ = socket.Close()
-		}()
+		paniclog.Go("transport_quic.go:139", func() {
+			func() {
+				<-connection.Context().Done()
+				_ = transport.Close()
+				_ = socket.Close()
+			}()
+		})
 		return connection, settings, nil
 	}
 	return nil, nil, lastErr

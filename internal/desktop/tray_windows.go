@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/w32"
 	"golang.org/x/sys/windows"
@@ -295,7 +296,7 @@ func (m *trayMenu) highlight(index int) {
 func (m *trayMenu) choose(index int) {
 	run := m.entries[index].run
 	w32.DestroyWindow(m.hwnd)
-	go run()
+	paniclog.Go("tray_windows.go:298", func() { run() })
 }
 
 // menuProc 为自绘菜单的窗口过程：鼠标悬停高亮、点击执行，方向键、Home、End 移动高亮，回车或空格执行，Esc 或失去焦点时关闭

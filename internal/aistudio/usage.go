@@ -2,6 +2,7 @@ package aistudio
 
 import (
 	"encoding/json"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 func localCompleteUsage(request GenerateRequest, output Output) *Usage {
@@ -50,12 +51,14 @@ func StartInputTokenEstimate(request GenerateRequest) <-chan int64 {
 		texts = append(texts, tools)
 	}
 	result := make(chan int64, 1)
-	go func() {
-		for _, text := range texts {
-			inputTokens += localTextTokens(text)
-		}
-		result <- inputTokens
-	}()
+	paniclog.Go("usage.go:53", func() {
+		func() {
+			for _, text := range texts {
+				inputTokens += localTextTokens(text)
+			}
+			result <- inputTokens
+		}()
+	})
 	return result
 }
 

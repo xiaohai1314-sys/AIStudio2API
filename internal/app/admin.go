@@ -21,6 +21,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // runtimeAdmin 投影运行时权威状态
@@ -1190,77 +1191,79 @@ func openAdminEvents(
 		[]api.AdminEvent{{Type: "cooldowns", Data: cooldowns}},
 	)
 	events := make(chan api.AdminEvent, 16)
-	go func() {
-		defer stopLifecycle()
-		defer cancel()
-		defer close(events)
-		var refreshTimer *time.Timer
-		var refresh <-chan time.Time
-		refreshAccounts := false
-		refreshCooldowns := false
-		defer func() {
-			if refreshTimer != nil {
-				refreshTimer.Stop()
+	paniclog.Go("admin.go:1193", func() {
+		func() {
+			defer stopLifecycle()
+			defer cancel()
+			defer close(events)
+			var refreshTimer *time.Timer
+			var refresh <-chan time.Time
+			refreshAccounts := false
+			refreshCooldowns := false
+			defer func() {
+				if refreshTimer != nil {
+					refreshTimer.Stop()
+				}
+			}()
+			send := func(event api.AdminEvent) bool {
+				select {
+				case events <- event:
+					return true
+				case <-eventCtx.Done():
+					return false
+				}
 			}
-		}()
-		send := func(event api.AdminEvent) bool {
-			select {
-			case events <- event:
-				return true
-			case <-eventCtx.Done():
-				return false
-			}
-		}
-		scheduleRequestRefresh := func(event api.AdminEvent) {
-			request := event.Data.(api.AdminRequest)
-			if request.State != "queued" {
-				refreshAccounts = true
-			}
-			if request.State != "queued" && request.State != "running" {
-				refreshCooldowns = true
-			}
-			if refresh != nil {
-				return
-			}
-			if refreshTimer == nil {
-				refreshTimer = time.NewTimer(adminRequestRefreshLatency)
-			} else {
-				refreshTimer.Reset(adminRequestRefreshLatency)
-			}
-			refresh = refreshTimer.C
-		}
-		for {
-			select {
-			case event, ok := <-live:
-				if !ok {
+			scheduleRequestRefresh := func(event api.AdminEvent) {
+				request := event.Data.(api.AdminRequest)
+				if request.State != "queued" {
+					refreshAccounts = true
+				}
+				if request.State != "queued" && request.State != "running" {
+					refreshCooldowns = true
+				}
+				if refresh != nil {
 					return
 				}
-				if !send(event) {
-					return
+				if refreshTimer == nil {
+					refreshTimer = time.NewTimer(adminRequestRefreshLatency)
+				} else {
+					refreshTimer.Reset(adminRequestRefreshLatency)
 				}
-				if event.Type == "request" {
-					scheduleRequestRefresh(event)
-				}
-			case <-refresh:
-				refresh = nil
-				accountsChanged := refreshAccounts
-				cooldownsChanged := refreshCooldowns
-				refreshAccounts = false
-				refreshCooldowns = false
-				updates, err := adminRequestStateUpdates(eventCtx, source, accountsChanged, cooldownsChanged)
-				if err != nil {
-					return
-				}
-				for _, update := range updates {
-					if !send(update) {
+				refresh = refreshTimer.C
+			}
+			for {
+				select {
+				case event, ok := <-live:
+					if !ok {
 						return
 					}
+					if !send(event) {
+						return
+					}
+					if event.Type == "request" {
+						scheduleRequestRefresh(event)
+					}
+				case <-refresh:
+					refresh = nil
+					accountsChanged := refreshAccounts
+					cooldownsChanged := refreshCooldowns
+					refreshAccounts = false
+					refreshCooldowns = false
+					updates, err := adminRequestStateUpdates(eventCtx, source, accountsChanged, cooldownsChanged)
+					if err != nil {
+						return
+					}
+					for _, update := range updates {
+						if !send(update) {
+							return
+						}
+					}
+				case <-eventCtx.Done():
+					return
 				}
-			case <-eventCtx.Done():
-				return
 			}
-		}
-	}()
+		}()
+	})
 	return events, nil
 }
 

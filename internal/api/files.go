@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 const (
@@ -179,10 +180,12 @@ func uploadOpenAIFileBeforePurpose(
 		}
 	}
 	done := make(chan openAIFileUploadResult, 1)
-	go func() {
-		ref, err := service.UploadFile(uploadCtx, request)
-		done <- openAIFileUploadResult{ref: ref, err: err}
-	}()
+	paniclog.Go("files.go:182", func() {
+		func() {
+			ref, err := service.UploadFile(uploadCtx, request)
+			done <- openAIFileUploadResult{ref: ref, err: err}
+		}()
+	})
 	select {
 	case result := <-done:
 		return result.ref, result.err

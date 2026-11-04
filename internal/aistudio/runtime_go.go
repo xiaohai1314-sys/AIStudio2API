@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa"
 )
@@ -232,14 +233,18 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 		err       error
 	}
 	loggingDone := make(chan loggingContext, 1)
-	go func() {
-		extension, err := runtime.loggingContextHeader(ctx, apiKey, visitID)
-		loggingDone <- loggingContext{extension, err}
-	}()
+	paniclog.Go("runtime_go.go:235", func() {
+		func() {
+			extension, err := runtime.loggingContextHeader(ctx, apiKey, visitID)
+			loggingDone <- loggingContext{extension, err}
+		}()
+	})
 	pageDone := make(chan [][]byte, 1)
-	go func() {
-		pageDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, pageStartupRPCs)
-	}()
+	paniclog.Go("runtime_go.go:240", func() {
+		func() {
+			pageDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, pageStartupRPCs)
+		}()
+	})
 	challenge, err := runtime.createChallenge(ctx, nil)
 	logging := <-loggingDone
 	startup := <-pageDone
@@ -261,10 +266,12 @@ func newGoWAARuntime(ctx context.Context, options camoufoxnative.Options) (*goWA
 	}
 	reportGoStartup(options, camoufoxnative.StartupBootstrappingWAA)
 	followupDone := make(chan struct{})
-	go func() {
-		runtime.sendFollowupRPCs(ctx, apiKey, visitID, startup)
-		close(followupDone)
-	}()
+	paniclog.Go("runtime_go.go:264", func() {
+		func() {
+			runtime.sendFollowupRPCs(ctx, apiKey, visitID, startup)
+			close(followupDone)
+		}()
+	})
 	vm, err := runtime.startVM(ctx, challenge)
 	<-followupDone
 	if err != nil {

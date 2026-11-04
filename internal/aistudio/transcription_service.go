@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"io"
 	"log/slog"
 	"net"
@@ -117,13 +118,15 @@ func (s *PooledService) Transcribe(ctx context.Context, request TranscriptionReq
 				return result, stateErr
 			}
 			if transcriptionVerifiesModelAccess(result) {
-				go func() {
-					if _, err := s.pool.MarkModelAccessVerifiedIfGeneration(
-						accountID, modelID, accessGeneration, checkedAt,
-					); err != nil {
-						slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
-					}
-				}()
+				paniclog.Go("transcription_service.go:120", func() {
+					func() {
+						if _, err := s.pool.MarkModelAccessVerifiedIfGeneration(
+							accountID, modelID, accessGeneration, checkedAt,
+						); err != nil {
+							slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
+						}
+					}()
+				})
 			}
 			return result, nil
 		}

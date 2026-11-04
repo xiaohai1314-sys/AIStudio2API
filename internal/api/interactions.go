@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // handleInteraction 将公开 Interactions 请求接入规范生成流程
@@ -185,24 +186,26 @@ func (w discardResponseWriter) WriteHeader(int)                {}
 // jpegImageEvents 将非 JPEG 的图片输出转码为 JPEG
 func jpegImageEvents(ctx context.Context, events <-chan aistudio.Event) <-chan aistudio.Event {
 	converted := make(chan aistudio.Event)
-	go func() {
-		defer close(converted)
-		for event := range events {
-			if media := event.InlineData; event.Kind == aistudio.EventMedia && media != nil && strings.HasPrefix(media.MIME, "image/") {
-				converted, err := convertImage(*media, "image/jpeg")
-				if err != nil {
-					event = aistudio.Event{Kind: aistudio.EventError, Err: err}
-				} else {
-					event.InlineData = &converted
+	paniclog.Go("interactions.go:188", func() {
+		func() {
+			defer close(converted)
+			for event := range events {
+				if media := event.InlineData; event.Kind == aistudio.EventMedia && media != nil && strings.HasPrefix(media.MIME, "image/") {
+					converted, err := convertImage(*media, "image/jpeg")
+					if err != nil {
+						event = aistudio.Event{Kind: aistudio.EventError, Err: err}
+					} else {
+						event.InlineData = &converted
+					}
+				}
+				select {
+				case converted <- event:
+				case <-ctx.Done():
+					return
 				}
 			}
-			select {
-			case converted <- event:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+		}()
+	})
 	return converted
 }
 

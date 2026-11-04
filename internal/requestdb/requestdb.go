@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/sqlitedb"
 	"github.com/klauspost/compress/gzip"
 )
@@ -130,7 +131,7 @@ func Open(path string, log Logger) (*Store, error) {
 	if err := store.alignDays(); err != nil {
 		return nil, errors.Join(fmt.Errorf("重建本地日汇总: %w", err), db.Close())
 	}
-	go store.run()
+	paniclog.Go("requestdb.go:133", func() { store.run() })
 	return store, nil
 }
 

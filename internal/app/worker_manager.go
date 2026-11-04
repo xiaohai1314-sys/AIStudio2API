@@ -13,6 +13,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // accountWorkerManager 管理每账户的长驻 WAA worker
@@ -185,8 +186,8 @@ func newAccountWorkerManager(
 	for _, account := range accounts {
 		manager.accounts[account.ID] = manager.newAccountWorker(account)
 	}
-	go manager.forwardPoolChanges()
-	go manager.reapIdleWorkers()
+	paniclog.Go("worker_manager.go:188", func() { manager.forwardPoolChanges() })
+	paniclog.Go("worker_manager.go:189", func() { manager.reapIdleWorkers() })
 	return manager
 }
 
@@ -194,10 +195,12 @@ func newAccountWorkerManager(
 func (manager *accountWorkerManager) SetCapacity(warmTarget int, maxActive int, startupConcurrency int) {
 	manager.setLimits(warmTarget, maxActive, startupConcurrency)
 	manager.dispatch.wakeHeads()
-	go func() {
-		for manager.reapIdleWorker(time.Now().Add(-workerIdleTimeout)) {
-		}
-	}()
+	paniclog.Go("worker_manager.go:197", func() {
+		func() {
+			for manager.reapIdleWorker(time.Now().Add(-workerIdleTimeout)) {
+			}
+		}()
+	})
 }
 
 // setLimits 保存 Worker 数量上限，纯 Go 后端同时启动的 Worker 数只受峰值上限约束
@@ -223,18 +226,20 @@ func (manager *accountWorkerManager) activeLimit() int {
 // expandInBackground 在后台为账户启动 Worker，就绪后由调度信号唤醒排队请求
 func (manager *accountWorkerManager) expandInBackground(accountID string, modelID string) {
 	ctx := manager.backgroundContext()
-	go func() {
-		_, err := manager.ensureWorker(ctx, accountID, modelID, false)
-		if err == nil || ctx.Err() != nil || errors.Is(err, errAccountWorkerOpening) ||
-			errors.Is(err, errAccountWorkerCapacity) || errors.Is(err, errAccountRuntimeBusy) {
-			return
-		}
-		manager.requests.log(accountID, "WARN", fmt.Sprintf("WAA Worker 后台扩容失败 | 错误=%v", err))
-		var startup *accountWorkerInitError
-		if manager.proxyFailed != nil && errors.As(err, &startup) && proxyNetworkError(ctx, err) {
-			manager.proxyFailed(startup.proxy, accountID, err)
-		}
-	}()
+	paniclog.Go("worker_manager.go:226", func() {
+		func() {
+			_, err := manager.ensureWorker(ctx, accountID, modelID, false)
+			if err == nil || ctx.Err() != nil || errors.Is(err, errAccountWorkerOpening) ||
+				errors.Is(err, errAccountWorkerCapacity) || errors.Is(err, errAccountRuntimeBusy) {
+				return
+			}
+			manager.requests.log(accountID, "WARN", fmt.Sprintf("WAA Worker 后台扩容失败 | 错误=%v", err))
+			var startup *accountWorkerInitError
+			if manager.proxyFailed != nil && errors.As(err, &startup) && proxyNetworkError(ctx, err) {
+				manager.proxyFailed(startup.proxy, accountID, err)
+			}
+		}()
+	})
 }
 
 // backgroundContext 返回后台扩容使用的 context，ResetAll 时取消
@@ -547,10 +552,12 @@ func (manager *accountWorkerManager) ResetAll() error {
 	var resets sync.WaitGroup
 	for _, accountID := range accountIDs {
 		resets.Add(1)
-		go func(accountID string) {
-			defer resets.Done()
-			resetResults <- manager.Reset(accountID)
-		}(accountID)
+		paniclog.Go("worker_manager.go:550", func() {
+			func(accountID string) {
+				defer resets.Done()
+				resetResults <- manager.Reset(accountID)
+			}(accountID)
+		})
 	}
 	resets.Wait()
 	close(resetResults)
@@ -1304,14 +1311,16 @@ func (manager *accountWorkerManager) detachStartup(
 		err      error
 	}
 	done := make(chan startResult, 1)
-	go func() {
-		defer func() {
-			stop()
-			cancel()
+	paniclog.Go("worker_manager.go:1307", func() {
+		func() {
+			defer func() {
+				stop()
+				cancel()
+			}()
+			preparer, err := start(startupCtx)
+			done <- startResult{preparer: preparer, err: err}
 		}()
-		preparer, err := start(startupCtx)
-		done <- startResult{preparer: preparer, err: err}
-	}()
+	})
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -1393,9 +1402,11 @@ func (manager *accountWorkerManager) StartPrewarm(ctx context.Context) <-chan er
 	}
 	fillContext, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(manager.lifecycle, cancel)
-	go manager.fillWarm(fillContext, first, func() {
-		stop()
-		cancel()
+	paniclog.Go("worker_manager.go:1396", func() {
+		manager.fillWarm(fillContext, first, func() {
+			stop()
+			cancel()
+		})
 	})
 	return first
 }
@@ -1498,10 +1509,12 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 			for _, accountID := range ready {
 				starting[accountID] = struct{}{}
 				launched++
-				go func() {
-					_, err := manager.Worker(workerCtx, accountID, "")
-					results <- warmResult{accountID: accountID, err: err}
-				}()
+				paniclog.Go("worker_manager.go:1501", func() {
+					func() {
+						_, err := manager.Worker(workerCtx, accountID, "")
+						results <- warmResult{accountID: accountID, err: err}
+					}()
+				})
 			}
 		}
 		if len(starting) > 0 {
@@ -1595,16 +1608,18 @@ func (manager *accountWorkerManager) Close() error {
 	var closes sync.WaitGroup
 	for _, account := range accounts {
 		closes.Add(1)
-		go func(account *accountWorker) {
-			defer closes.Done()
-			account.startupMu.Lock()
-			defer account.startupMu.Unlock()
-			account.mu.Lock()
-			defer account.mu.Unlock()
-			if account.worker != nil || account.cleanupWorker != nil || account.runtimeLease != nil || account.cleanupLease != nil {
-				closeResults <- manager.closeAccountWorker(account)
-			}
-		}(account)
+		paniclog.Go("worker_manager.go:1598", func() {
+			func(account *accountWorker) {
+				defer closes.Done()
+				account.startupMu.Lock()
+				defer account.startupMu.Unlock()
+				account.mu.Lock()
+				defer account.mu.Unlock()
+				if account.worker != nil || account.cleanupWorker != nil || account.runtimeLease != nil || account.cleanupLease != nil {
+					closeResults <- manager.closeAccountWorker(account)
+				}
+			}(account)
+		})
 	}
 	closes.Wait()
 	close(closeResults)

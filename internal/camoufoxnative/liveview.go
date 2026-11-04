@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/gorilla/websocket"
 )
 
@@ -171,10 +172,12 @@ func (view *LiveView) Serve(ctx context.Context, connection *websocket.Conn) err
 	signal(viewer.wake)
 	signal(view.capture)
 	received := make(chan error, 1)
-	go func() {
-		received <- view.receive(connection)
-		cancel()
-	}()
+	paniclog.Go("liveview.go:174", func() {
+		func() {
+			received <- view.receive(connection)
+			cancel()
+		}()
+	})
 	err := view.push(ctx, connection, viewer)
 	_ = connection.Close()
 	return errors.Join(err, <-received)

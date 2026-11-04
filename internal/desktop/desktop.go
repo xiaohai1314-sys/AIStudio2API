@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/updater"
@@ -206,17 +207,19 @@ func pageAddress(address *url.URL) string {
 // Run 运行窗口与托盘，启动画面显示到 start 返回管理页面地址；start 出错时以系统语言显示错误对话框后退出，运行到用户从托盘退出或 ctx 结束
 func (s *App) Run(ctx context.Context, start func() (string, error)) error {
 	s.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-		go func() {
-			pageURL, err := start()
-			if err != nil {
-				if ctx.Err() == nil {
-					s.app.Dialog.Error().SetTitle("AIStudio2API").SetMessage(i18n.Translate(i18n.Console, err.Error())).Show()
+		paniclog.Go("desktop.go:209", func() {
+			func() {
+				pageURL, err := start()
+				if err != nil {
+					if ctx.Err() == nil {
+						s.app.Dialog.Error().SetTitle("AIStudio2API").SetMessage(i18n.Translate(i18n.Console, err.Error())).Show()
+					}
+					s.app.Quit()
+					return
 				}
-				s.app.Quit()
-				return
-			}
-			s.navigate(pageURL)
-		}()
+				s.navigate(pageURL)
+			}()
+		})
 	})
 	stop := context.AfterFunc(ctx, s.app.Quit)
 	defer stop()

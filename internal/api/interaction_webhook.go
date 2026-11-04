@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -100,10 +101,12 @@ func sendInteractionWebhook(ctx context.Context, config interactionWebhookConfig
 	for _, uri := range config.URIs {
 		select {
 		case interactionWebhookSlots <- struct{}{}:
-			go func(uri string) {
-				defer func() { <-interactionWebhookSlots }()
-				deliverInteractionWebhook(ctx, uri, messageID, body)
-			}(uri)
+			paniclog.Go("interaction_webhook.go:103", func() {
+				func(uri string) {
+					defer func() { <-interactionWebhookSlots }()
+					deliverInteractionWebhook(ctx, uri, messageID, body)
+				}(uri)
+			})
 		default:
 			slog.Warn("webhook 投递队列已满，丢弃事件", "id", id, "status", status)
 		}

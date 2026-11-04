@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"io"
 	"net/http"
 	"sort"
@@ -357,7 +358,7 @@ func (body *protectedResponseBody) Close() error {
 // abandonProtectedRequest 在受保护请求出错时中止页面请求并返回 err，请求已取消时在后台中止，不等待忙碌的页面
 func (worker *Worker) abandonProtectedRequest(ctx context.Context, requestID string, err error) error {
 	if ctx.Err() != nil {
-		go func() { _ = worker.cancelProtectedRequest(requestID) }()
+		paniclog.Go("protected.go:360", func() { func() { _ = worker.cancelProtectedRequest(requestID) }() })
 		return err
 	}
 	return errors.Join(err, worker.cancelProtectedRequest(requestID))

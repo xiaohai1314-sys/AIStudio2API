@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/gorilla/websocket"
 )
 
@@ -122,7 +123,7 @@ func (s *server) serveBidi(w http.ResponseWriter, r *http.Request, mode aistudio
 	defer cancel()
 	clientMessages := make(chan bidiClientMessage, 8)
 	readerDone := make(chan struct{})
-	go readBidiClientMessages(ctx, cancel, connection, clientMessages, readerDone)
+	paniclog.Go("live.go:125", func() { readBidiClientMessages(ctx, cancel, connection, clientMessages, readerDone) })
 	session, err := service.OpenBidi(ctx, request)
 	if err != nil {
 		SetAccessLogError(r.Context(), err)
@@ -135,12 +136,16 @@ func (s *server) serveBidi(w http.ResponseWriter, r *http.Request, mode aistudio
 	clientErrors := make(chan error, 1)
 	writerDone := make(chan struct{})
 	senderDone := make(chan struct{})
-	go s.writeBidiEvents(
-		ctx, connection, r, session, startedAt, request.ModelAccessScope != "", clientErrors, writerDone,
-	)
-	go sendBidiClientMessages(
-		ctx, cancel, session, inputModalities, len(request.Tools) > 0, clientMessages, clientErrors, senderDone,
-	)
+	paniclog.Go("live.go:138", func() {
+		s.writeBidiEvents(
+			ctx, connection, r, session, startedAt, request.ModelAccessScope != "", clientErrors, writerDone,
+		)
+	})
+	paniclog.Go("live.go:141", func() {
+		sendBidiClientMessages(
+			ctx, cancel, session, inputModalities, len(request.Tools) > 0, clientMessages, clientErrors, senderDone,
+		)
+	})
 	<-writerDone
 	cancel()
 	if closeErr := session.Close(); closeErr != nil {

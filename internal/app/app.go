@@ -21,6 +21,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
 	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/promptdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/requestdb"
 	"github.com/Mag1cFall/AIStudio2API/internal/securefile"
@@ -94,13 +95,15 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 	defer stopShell()
 	var restarting atomic.Bool
 	result := make(chan error, 1)
-	go func() {
-		started, err := runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready)
-		result <- err
-		if started {
-			stopShell()
-		}
-	}()
+	paniclog.Go("app.go:97", func() {
+		func() {
+			started, err := runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready)
+			result <- err
+			if started {
+				stopShell()
+			}
+		}()
+	})
 	shellErr := shell.run(shellCtx, func() (serviceReady, error) {
 		select {
 		case service := <-ready:
@@ -257,21 +260,25 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		MaxHeaderBytes:    16 << 10,
 	}
 	serveError := make(chan error, 2)
-	go func() {
-		serveError <- server.Serve(listener)
-	}()
-	go func() {
-		serveError <- previewServer.Serve(previewListener)
-	}()
+	paniclog.Go("app.go:260", func() {
+		func() {
+			serveError <- server.Serve(listener)
+		}()
+	})
+	paniclog.Go("app.go:263", func() {
+		func() {
+			serveError <- previewServer.Serve(previewListener)
+		}()
+	})
 	if cfg.PProfAddr != "" {
-		go servePProf(ctx, cfg.PProfAddr, manager)
+		paniclog.Go("app.go:267", func() { servePProf(ctx, cfg.PProfAddr, manager) })
 	}
 
 	address := "http://" + browserAddress(listener.Addr().String())
 	manager.requests.log("service", "INFO", "管理服务就绪 | 地址="+address)
 	onReady(address)
 	if cfg.AutoStart {
-		go autoStartService(ctx, manager)
+		paniclog.Go("app.go:274", func() { autoStartService(ctx, manager) })
 	}
 
 	var serveErr error
@@ -322,12 +329,14 @@ func servePProf(ctx context.Context, address string, manager *runtimeManager) {
 		manager.requests.log("service", "WARN", fmt.Sprintf("pprof 监听在非回环地址，请确保外部无法访问 | 地址=%s", listener.Addr()))
 	}
 	server := &http.Server{Handler: pprofHandler(), ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-	}()
+	paniclog.Go("app.go:325", func() {
+		func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		}()
+	})
 	manager.requests.log("service", "INFO", "pprof 就绪 | 地址="+listener.Addr().String())
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		manager.requests.log("service", "WARN", fmt.Sprintf("pprof 服务退出 | %v", err))

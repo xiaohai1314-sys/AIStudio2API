@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -81,10 +82,12 @@ func (s *PooledService) generateOmniVideo(ctx context.Context, request VideoRequ
 		return VideoOperation{}, err
 	}
 	s.omniVideos.Store(operationID, nil)
-	go func() {
-		defer cancelTask()
-		s.runOmniVideo(taskCtx, operationID, generate)
-	}()
+	paniclog.Go("video_omni.go:84", func() {
+		func() {
+			defer cancelTask()
+			s.runOmniVideo(taskCtx, operationID, generate)
+		}()
+	})
 	operation := VideoOperation{ID: operationID}
 	applyVideoOperationBinding(&operation, binding)
 	return operation, nil

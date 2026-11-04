@@ -458,8 +458,8 @@ func browserOriginMiddleware(requiredKey string, next http.Handler) http.Handler
 // maxPublicBodyBytes 为公开接口请求体上限，可容纳 Base64 编码后的最大文件
 const maxPublicBodyBytes = openAIFileMaxBytes/3*4 + openAIFileRequestOverhead
 
-// maxGeminiJSONBodyBytes 是 Gemini JSON 请求体上限：解码时整包读入内存，更大的内联媒体应改用 Files API
-const maxGeminiJSONBodyBytes int64 = 64 << 20
+// maxJSONBodyBytes 是整包解码的 JSON 请求体上限，更大的内联媒体应改用 Files API 或文件上传接口
+const maxJSONBodyBytes int64 = 64 << 20
 
 // bodyLimitMiddleware 限制公开接口请求体大小
 func bodyLimitMiddleware(next http.Handler) http.Handler {
@@ -470,10 +470,24 @@ func bodyLimitMiddleware(next http.Handler) http.Handler {
 }
 
 func publicBodyLimit(path string) int64 {
-	if strings.HasPrefix(path, "/v1beta/") {
-		return min(maxPublicBodyBytes, maxGeminiJSONBodyBytes)
+	if jsonBodyPath(path) {
+		return min(maxPublicBodyBytes, maxJSONBodyBytes)
 	}
 	return maxPublicBodyBytes
+}
+
+// jsonBodyPath 判断请求体是否会被整包读入内存解码
+func jsonBodyPath(path string) bool {
+	switch {
+	case strings.HasPrefix(path, "/v1beta/"):
+		return true
+	case path == "/v1/chat/completions", path == "/v1/embeddings":
+		return true
+	case strings.HasPrefix(path, "/v1/responses"), strings.HasPrefix(path, "/v1/messages"):
+		return true
+	default:
+		return false
+	}
 }
 
 const maxPublicRateLimitBuckets = 4096

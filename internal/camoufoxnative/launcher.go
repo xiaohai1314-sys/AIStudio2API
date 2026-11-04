@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
 	"github.com/gofrs/flock"
 )
@@ -190,19 +191,21 @@ func launchBrowser(ctx context.Context, options Options, config map[string]any) 
 		cacheDirectory: options.CacheDirectory,
 	}
 	launched = true
-	go func() {
-		waitErr := command.Wait()
-		if relay != nil {
-			_ = relay.Close()
-		}
-		if display != nil {
-			stopVirtualDisplay(display)
-		}
-		process.mu.Lock()
-		process.waitErr = waitErr
-		process.mu.Unlock()
-		close(process.done)
-	}()
+	paniclog.Go("launcher.go:193", func() {
+		func() {
+			waitErr := command.Wait()
+			if relay != nil {
+				_ = relay.Close()
+			}
+			if display != nil {
+				stopVirtualDisplay(display)
+			}
+			process.mu.Lock()
+			process.waitErr = waitErr
+			process.mu.Unlock()
+			close(process.done)
+		}()
+	})
 	endpoints := make(chan string, 2)
 	output := &browserOutput{}
 	var scanned sync.WaitGroup

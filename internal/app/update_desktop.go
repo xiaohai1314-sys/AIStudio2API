@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/updater"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/desktop"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // platformUpdateMode 返回桌面版的更新方式：Windows 与 macOS 原地更新，Linux 桌面包下载新版本安装
@@ -32,11 +33,13 @@ func (u *selfUpdater) install(ctx context.Context, release *githubRelease) error
 // updateRestart 返回在线更新完成后的重启动作：更新器启动辅助进程并退出桌面应用，辅助进程替换文件后启动新版本
 func updateRestart(_ func(), _ *atomic.Bool, log func(level, message string)) func() {
 	return func() {
-		go func() {
-			if err := desktop.Restart(); err != nil {
-				log("ERROR", "在线更新重启失败 | 错误="+err.Error())
-			}
-		}()
+		paniclog.Go("update_desktop.go:35", func() {
+			func() {
+				if err := desktop.Restart(); err != nil {
+					log("ERROR", "在线更新重启失败 | 错误="+err.Error())
+				}
+			}()
+		})
 	}
 }
 

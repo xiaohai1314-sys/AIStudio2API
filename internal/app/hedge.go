@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // firstEventSampleLimit 是每个模型与通道保留的近期原请求首事件样本数
@@ -264,21 +265,23 @@ func (service *trackedService) supersede(requestCtx context.Context, requestID s
 		Account: loser.accountLabel, Channel: string(loser.lease.Channel()), Error: reason,
 		DurationMS: time.Since(loser.startedAt).Milliseconds(), Hedge: loser.hedge, Superseded: true,
 	})
-	go func() {
-		<-loser.done
-		if loser.source != nil {
-			for range loser.source {
+	paniclog.Go("hedge.go:267", func() {
+		func() {
+			<-loser.done
+			if loser.source != nil {
+				for range loser.source {
+				}
 			}
-		}
-		if loser.copies != nil {
-			if err := loser.copies.Cleanup(); err != nil {
-				service.requests.log(loser.accountLabel, "WARN", "临时文件清理失败 | 错误="+err.Error())
+			if loser.copies != nil {
+				if err := loser.copies.Cleanup(); err != nil {
+					service.requests.log(loser.accountLabel, "WARN", "临时文件清理失败 | 错误="+err.Error())
+				}
 			}
-		}
-		if err := loser.lease.Release(); err != nil {
-			service.requests.logRequestProgress(requestID, loser.accountLabel, "WARN", "账户租约释放失败 | 错误="+err.Error())
-		}
-	}()
+			if err := loser.lease.Release(); err != nil {
+				service.requests.logRequestProgress(requestID, loser.accountLabel, "WARN", "账户租约释放失败 | 错误="+err.Error())
+			}
+		}()
+	})
 }
 
 // seedFirstEvents 从请求账本读取 firstEventSampleAge 内的全部记录补入首事件样本

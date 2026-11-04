@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
 	fhttp "github.com/Mag1cFall/fhttp"
 	"github.com/Mag1cFall/fhttp/http2"
@@ -269,24 +270,26 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 		err  error
 	}
 	result := make(chan dialed, 1)
-	go func() {
-		var conn *http2.ClientConn
-		raw, err := pool.dial(address)
-		if err == nil {
-			conn, err = pool.transport.NewClientConn(raw)
-			if err != nil {
-				_ = raw.Close()
+	paniclog.Go("transport_browser.go:272", func() {
+		func() {
+			var conn *http2.ClientConn
+			raw, err := pool.dial(address)
+			if err == nil {
+				conn, err = pool.transport.NewClientConn(raw)
+				if err != nil {
+					_ = raw.Close()
+				}
 			}
-		}
-		pool.mu.Lock()
-		pool.dialing[key]--
-		if err == nil {
-			pool.conns[key] = append(pool.conns[key], conn)
-		}
-		result <- dialed{conn: conn, err: err}
-		pool.notifyLocked()
-		pool.mu.Unlock()
-	}()
+			pool.mu.Lock()
+			pool.dialing[key]--
+			if err == nil {
+				pool.conns[key] = append(pool.conns[key], conn)
+			}
+			result <- dialed{conn: conn, err: err}
+			pool.notifyLocked()
+			pool.mu.Unlock()
+		}()
+	})
 	for {
 		select {
 		case own := <-result:
@@ -368,7 +371,7 @@ func (pool *firefoxConnPool) retire(address string, class requestClass) {
 	pool.notifyLocked()
 	pool.mu.Unlock()
 	for _, conn := range conns {
-		go func() { _ = conn.Shutdown(context.Background()) }()
+		paniclog.Go("transport_browser.go:371", func() { func() { _ = conn.Shutdown(context.Background()) }() })
 	}
 }
 
@@ -398,7 +401,7 @@ func (pool *firefoxConnPool) shutdown() {
 	pool.mu.Unlock()
 	for _, list := range conns {
 		for _, conn := range list {
-			go func() { _ = conn.Shutdown(context.Background()) }()
+			paniclog.Go("transport_browser.go:401", func() { func() { _ = conn.Shutdown(context.Background()) }() })
 		}
 	}
 }
@@ -496,19 +499,23 @@ func (transport *browserRoundTripper) roundTripHTTP2(request *fhttp.Request) (*f
 		err      error
 	}
 	done := make(chan result, 1)
-	go func() {
-		response, err := transport.transport.RoundTrip(request)
-		done <- result{response, err}
-	}()
+	paniclog.Go("transport_browser.go:499", func() {
+		func() {
+			response, err := transport.transport.RoundTrip(request)
+			done <- result{response, err}
+		}()
+	})
 	select {
 	case value := <-done:
 		return value.response, value.err
 	case <-request.Context().Done():
-		go func() {
-			if value := <-done; value.response != nil {
-				_ = value.response.Body.Close()
-			}
-		}()
+		paniclog.Go("transport_browser.go:507", func() {
+			func() {
+				if value := <-done; value.response != nil {
+					_ = value.response.Body.Close()
+				}
+			}()
+		})
 		return nil, request.Context().Err()
 	}
 }

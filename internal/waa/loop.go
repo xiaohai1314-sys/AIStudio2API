@@ -1,6 +1,7 @@
 package waa
 
 import (
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"runtime"
 	"sync"
 	"time"
@@ -21,7 +22,7 @@ type eventLoop struct {
 
 func newEventLoop() *eventLoop {
 	loop := &eventLoop{wake: make(chan struct{}, 1), done: make(chan struct{}), exited: make(chan struct{}), timers: make(map[*time.Timer]struct{})}
-	go loop.run()
+	paniclog.Go("loop.go:24", func() { loop.run() })
 	return loop
 }
 

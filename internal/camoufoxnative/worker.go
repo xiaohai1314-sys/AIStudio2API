@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/proxydial"
 	"github.com/gofrs/flock"
 	"github.com/gorilla/websocket"
@@ -125,26 +126,28 @@ func watchProxy(ctx context.Context, proxy string) (context.Context, func()) {
 		return watchCtx, stop
 	}
 	address := proxydial.Address(parsed)
-	go func() {
-		ticker := time.NewTicker(proxyWatchInterval)
-		defer ticker.Stop()
-		dialer := net.Dialer{Timeout: proxyWatchInterval}
-		for {
-			select {
-			case <-watchCtx.Done():
-				return
-			case <-ticker.C:
-			}
-			connection, err := dialer.DialContext(watchCtx, "tcp", address)
-			if err != nil {
-				if watchCtx.Err() == nil {
-					cancel(fmt.Errorf("%w %s: %v", ErrProxyUnreachable, address, err))
+	paniclog.Go("worker.go:128", func() {
+		func() {
+			ticker := time.NewTicker(proxyWatchInterval)
+			defer ticker.Stop()
+			dialer := net.Dialer{Timeout: proxyWatchInterval}
+			for {
+				select {
+				case <-watchCtx.Done():
+					return
+				case <-ticker.C:
 				}
-				return
+				connection, err := dialer.DialContext(watchCtx, "tcp", address)
+				if err != nil {
+					if watchCtx.Err() == nil {
+						cancel(fmt.Errorf("%w %s: %v", ErrProxyUnreachable, address, err))
+					}
+					return
+				}
+				_ = connection.Close()
 			}
-			_ = connection.Close()
-		}
-	}()
+		}()
+	})
 	return watchCtx, stop
 }
 

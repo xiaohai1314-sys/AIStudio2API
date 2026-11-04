@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/mozjs"
 )
@@ -330,10 +331,12 @@ func experimentSignals(cx *mozjs.Context, global mozjs.Handle, blob string) (moz
 // Settle 等待 VM 发出的页面资源请求完成
 func (runtime *Runtime) Settle(ctx context.Context) error {
 	done := make(chan struct{})
-	go func() {
-		runtime.pending.Wait()
-		close(done)
-	}()
+	paniclog.Go("runtime.go:333", func() {
+		func() {
+			runtime.pending.Wait()
+			close(done)
+		}()
+	})
 	select {
 	case <-done:
 		return nil

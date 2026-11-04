@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	quic "github.com/Mag1cFall/uquic"
 	"github.com/Mag1cFall/uquic/quicvarint"
 )
@@ -44,7 +45,7 @@ func newHTTP3Conn(connection *quic.Conn, settings *[2]uint64, remember func(capa
 	if settings == nil {
 		close(conn.ready)
 	} else {
-		go conn.awaitHandshake()
+		paniclog.Go("transport_http3_conn.go:47", func() { conn.awaitHandshake() })
 	}
 	return conn, nil
 }
@@ -80,7 +81,7 @@ func (conn *http3Conn) open(settings *[2]uint64) error {
 		err = conn.flushDecoder()
 	}
 	if err == nil {
-		go conn.acceptUniStreams(encoder, decoder)
+		paniclog.Go("transport_http3_conn.go:83", func() { conn.acceptUniStreams(encoder, decoder) })
 	}
 	return err
 }
@@ -168,27 +169,29 @@ func (conn *http3Conn) acceptUniStreams(encoder *qpackEncoder, decoder *qpackDec
 		if err != nil {
 			return
 		}
-		go func() {
-			reader := bufio.NewReader(stream)
-			kind, err := quicvarint.Read(reader)
-			if err != nil {
-				return
-			}
-			switch kind {
-			case h3ControlStreamType:
-				err = conn.readControlStream(reader, encoder)
-			case qpackEncoderStreamType:
-				err = decoder.readEncoderStream(reader, conn.scheduleDecoderFlush)
-			case qpackDecoderStreamType:
-				err = encoder.readDecoderStream(reader, &conn.mu)
-			default:
-				stream.CancelRead(h3StreamCreationError)
-				return
-			}
-			if err != nil && conn.quic.Context().Err() == nil {
-				_ = conn.quic.CloseWithError(0x0104, "")
-			}
-		}()
+		paniclog.Go("transport_http3_conn.go:171", func() {
+			func() {
+				reader := bufio.NewReader(stream)
+				kind, err := quicvarint.Read(reader)
+				if err != nil {
+					return
+				}
+				switch kind {
+				case h3ControlStreamType:
+					err = conn.readControlStream(reader, encoder)
+				case qpackEncoderStreamType:
+					err = decoder.readEncoderStream(reader, conn.scheduleDecoderFlush)
+				case qpackDecoderStreamType:
+					err = encoder.readDecoderStream(reader, &conn.mu)
+				default:
+					stream.CancelRead(h3StreamCreationError)
+					return
+				}
+				if err != nil && conn.quic.Context().Err() == nil {
+					_ = conn.quic.CloseWithError(0x0104, "")
+				}
+			}()
+		})
 	}
 }
 

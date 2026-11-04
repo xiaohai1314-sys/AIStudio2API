@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"io"
 	"log/slog"
 	"maps"
@@ -287,90 +288,92 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 	}
 	events := make(chan Event, 8)
 	ready := make(chan error, 1)
-	go func() {
-		defer close(events)
-		defer cancelTokenCount()
-		stopClose := context.AfterFunc(ctx, func() {
-			_ = response.Body.Close()
-		})
-		defer stopClose()
-		committed := false
-		send := func(event Event) error {
-			if request.Config.HideThinking && event.Kind == EventReasoning {
-				if event.ThoughtSignature == "" {
-					return nil
-				}
-				event.Kind, event.Text = EventThoughtSignature, ""
-			}
-			if !committed {
-				committed = true
-				ready <- nil
-			}
-			event.ProviderModel = entry.model.ID
-			select {
-			case events <- event:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		var output Output
-		var usage *Event
-		finished := false
-		matchedStopSequence := ""
-		// forward 暂存用量，在补发 stop sequence 暂存文本后随终态发送
-		forward := func(event Event) error {
-			switch event.Kind {
-			case EventUsage:
-				usage = &event
-				return nil
-			case EventFinish:
-				finished = true
-				if usage != nil {
-					if err := send(*usage); err != nil {
-						return err
+	paniclog.Go("interaction.go:290", func() {
+		func() {
+			defer close(events)
+			defer cancelTokenCount()
+			stopClose := context.AfterFunc(ctx, func() {
+				_ = response.Body.Close()
+			})
+			defer stopClose()
+			committed := false
+			send := func(event Event) error {
+				if request.Config.HideThinking && event.Kind == EventReasoning {
+					if event.ThoughtSignature == "" {
+						return nil
 					}
+					event.Kind, event.Text = EventThoughtSignature, ""
 				}
-			default:
-				output.Add(event)
+				if !committed {
+					committed = true
+					ready <- nil
+				}
+				event.ProviderModel = entry.model.ID
+				select {
+				case events <- event:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
-			return send(event)
-		}
-		emit := func(event Event) error {
-			if event.Kind == EventFinish {
-				finished = true
+			var output Output
+			var usage *Event
+			finished := false
+			matchedStopSequence := ""
+			// forward 暂存用量，在补发 stop sequence 暂存文本后随终态发送
+			forward := func(event Event) error {
+				switch event.Kind {
+				case EventUsage:
+					usage = &event
+					return nil
+				case EventFinish:
+					finished = true
+					if usage != nil {
+						if err := send(*usage); err != nil {
+							return err
+						}
+					}
+				default:
+					output.Add(event)
+				}
+				return send(event)
 			}
-			return send(event)
-		}
-		if matcher != nil {
-			emit = stopSequenceEmitter(matcher, forward, &matchedStopSequence)
-		}
-		var err error
-		defer func() {
-			if !finished && aborted != nil && (ctx.Err() != nil || err != nil) {
-				aborted()
+			emit := func(event Event) error {
+				if event.Kind == EventFinish {
+					finished = true
+				}
+				return send(event)
 			}
-		}()
-		err = DecodeInteractionStream(method, observeStreamActivity(ctx, response.Body), emit)
-		if errors.Is(err, errStopSequenceMatched) {
-			_ = response.Body.Close()
-			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
-			err = ctx.Err()
-		} else if closeErr := response.Body.Close(); err == nil && ctx.Err() == nil {
-			err = closeErr
-		}
-		if err == nil || ctx.Err() != nil {
+			if matcher != nil {
+				emit = stopSequenceEmitter(matcher, forward, &matchedStopSequence)
+			}
+			var err error
+			defer func() {
+				if !finished && aborted != nil && (ctx.Err() != nil || err != nil) {
+					aborted()
+				}
+			}()
+			err = DecodeInteractionStream(method, observeStreamActivity(ctx, response.Body), emit)
+			if errors.Is(err, errStopSequenceMatched) {
+				_ = response.Body.Close()
+				finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
+				err = ctx.Err()
+			} else if closeErr := response.Body.Close(); err == nil && ctx.Err() == nil {
+				err = closeErr
+			}
+			if err == nil || ctx.Err() != nil {
+				if !committed {
+					ready <- ctx.Err()
+				}
+				return
+			}
 			if !committed {
-				ready <- ctx.Err()
+				ready <- err
+				return
 			}
-			return
-		}
-		if !committed {
-			ready <- err
-			return
-		}
-		_ = send(Event{Kind: EventError, Err: err})
-	}()
+			_ = send(Event{Kind: EventError, Err: err})
+		}()
+	})
 	select {
 	case err := <-ready:
 		if err != nil {
@@ -671,18 +674,20 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 	}
 	// cancel 在后台以该账户发送 CancelInteraction，调用方仍持有的账户租约释放后才取得请求槽位
 	cancel := func() {
-		go func() {
-			body, _ := json.Marshal([]any{"interactions/" + id})
-			cancelCtx, stop := context.WithTimeout(context.Background(), interactionCancelTimeout)
-			defer stop()
-			response, err := c.do(cancelCtx, "CancelInteraction", accountID, "", body, false)
-			if err == nil {
-				err = response.Body.Close()
-			}
-			if err != nil {
-				slog.Warn("Deep Research 任务取消失败", "account", accountID, "interaction", id, "error", err)
-			}
-		}()
+		paniclog.Go("interaction.go:674", func() {
+			func() {
+				body, _ := json.Marshal([]any{"interactions/" + id})
+				cancelCtx, stop := context.WithTimeout(context.Background(), interactionCancelTimeout)
+				defer stop()
+				response, err := c.do(cancelCtx, "CancelInteraction", accountID, "", body, false)
+				if err == nil {
+					err = response.Body.Close()
+				}
+				if err != nil {
+					slog.Warn("Deep Research 任务取消失败", "account", accountID, "interaction", id, "error", err)
+				}
+			}()
+		})
 	}
 	streamBody, err := EncodeGetInteractionStreamRequest(id, request.Model)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/godbus/dbus/v5"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -32,25 +33,27 @@ func (s *App) bindTray(tray *application.SystemTray, click func(), popup func(in
 	}
 	signals := make(chan *dbus.Signal, 10)
 	conn.Signal(signals)
-	go func() {
-		defer conn.RemoveSignal(signals)
-		name := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
-		for signal := range signals {
-			if signal.Name != "org.freedesktop.DBus.NameAcquired" || signal.Body[0] != name {
-				continue
+	paniclog.Go("tray_linux.go:35", func() {
+		func() {
+			defer conn.RemoveSignal(signals)
+			name := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
+			for signal := range signals {
+				if signal.Name != "org.freedesktop.DBus.NameAcquired" || signal.Body[0] != name {
+					continue
+				}
+				err := conn.ExportMethodTable(map[string]interface{}{
+					"Activate":          func(int32, int32) *dbus.Error { click(); return nil },
+					"ContextMenu":       func(x, y int32) *dbus.Error { popup(int(x), int(y)); return nil },
+					"SecondaryActivate": func(int32, int32) *dbus.Error { return nil },
+					"Scroll":            func(int32, string) *dbus.Error { return nil },
+				}, "/StatusNotifierItem", "org.kde.StatusNotifierItem")
+				if err != nil {
+					slog.Error("托盘事件接口注册失败", "error", err)
+				}
+				return
 			}
-			err := conn.ExportMethodTable(map[string]interface{}{
-				"Activate":          func(int32, int32) *dbus.Error { click(); return nil },
-				"ContextMenu":       func(x, y int32) *dbus.Error { popup(int(x), int(y)); return nil },
-				"SecondaryActivate": func(int32, int32) *dbus.Error { return nil },
-				"Scroll":            func(int32, string) *dbus.Error { return nil },
-			}, "/StatusNotifierItem", "org.kde.StatusNotifierItem")
-			if err != nil {
-				slog.Error("托盘事件接口注册失败", "error", err)
-			}
-			return
-		}
-	}()
+		}()
+	})
 }
 
 // positionTrayMenu 将菜单放在点击坐标旁，并限制在显示器的工作区内

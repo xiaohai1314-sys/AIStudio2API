@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // maxChatChoices 是 Chat n 的上限
@@ -39,26 +40,28 @@ func (s *server) startChatChoices(ctx context.Context, request aistudio.Generate
 		events := make(chan aistudio.Event)
 		choices.events[index] = events
 		choices.running.Add(1)
-		go func() {
-			defer choices.running.Done()
-			upstream, err := s.service.Generate(choices.ctx, choice)
-			source := upstream
-			if err == nil && stream {
-				source, err = awaitStreamStart(choices.ctx, upstream)
-			}
-			started <- err
-			if err != nil {
-				failed := make(chan aistudio.Event, 1)
-				failed <- aistudio.Event{Kind: aistudio.EventError, Err: err}
-				close(failed)
-				source = failed
-			}
-			relayEvents(choices.ctx, source, events)
-			if upstream != nil {
-				for range upstream {
+		paniclog.Go("chat_choices.go:42", func() {
+			func() {
+				defer choices.running.Done()
+				upstream, err := s.service.Generate(choices.ctx, choice)
+				source := upstream
+				if err == nil && stream {
+					source, err = awaitStreamStart(choices.ctx, upstream)
 				}
-			}
-		}()
+				started <- err
+				if err != nil {
+					failed := make(chan aistudio.Event, 1)
+					failed <- aistudio.Event{Kind: aistudio.EventError, Err: err}
+					close(failed)
+					source = failed
+				}
+				relayEvents(choices.ctx, source, events)
+				if upstream != nil {
+					for range upstream {
+					}
+				}
+			}()
+		})
 	}
 	waits := count
 	if stream {
@@ -119,14 +122,16 @@ func (choices *chatChoices) run(consume func(int, <-chan aistudio.Event) (genera
 	var wait sync.WaitGroup
 	for index, events := range choices.events {
 		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			result, err := consume(index, events)
-			if err != nil {
-				choices.fail(err)
-			}
-			results[index] = result
-		}()
+		paniclog.Go("chat_choices.go:122", func() {
+			func() {
+				defer wait.Done()
+				result, err := consume(index, events)
+				if err != nil {
+					choices.fail(err)
+				}
+				results[index] = result
+			}()
+		})
 	}
 	wait.Wait()
 	return results, choices.err

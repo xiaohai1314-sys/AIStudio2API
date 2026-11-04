@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // backgroundRun 是进行中后台响应的取消函数与生成结束信号
@@ -97,12 +98,14 @@ func (s *server) streamBackground(w http.ResponseWriter, r *http.Request, reques
 	stream := newStreamLog()
 	prepared.stream = stream
 	following := make(chan struct{})
-	go func() {
-		defer close(following)
-		if streamHeaders(w) == nil {
-			_ = stream.follow(r.Context(), w, -1)
-		}
-	}()
+	paniclog.Go("responses_background.go:100", func() {
+		func() {
+			defer close(following)
+			if streamHeaders(w) == nil {
+				_ = stream.follow(r.Context(), w, -1)
+			}
+		}()
+	})
 	defer func() {
 		stream.finish()
 		<-following

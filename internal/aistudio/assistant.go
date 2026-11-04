@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/google/uuid"
 )
 
@@ -512,14 +513,16 @@ type assistantCleanup struct {
 // run 在后台以独立期限执行一次清理
 func (cleanup *assistantCleanup) run() {
 	cleanup.once.Do(func() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), assistantCleanupTimeout)
-			defer cancel()
-			if cleanup.generation != "" && !cleanup.completed.Load() {
-				cleanup.call(ctx, "CancelCodeAssistantOfflineGeneration", []any{cleanup.generation, cleanup.applet})
-			}
-			cleanup.call(ctx, "DeleteApplet", []any{cleanup.applet})
-		}()
+		paniclog.Go("assistant.go:515", func() {
+			func() {
+				ctx, cancel := context.WithTimeout(context.Background(), assistantCleanupTimeout)
+				defer cancel()
+				if cleanup.generation != "" && !cleanup.completed.Load() {
+					cleanup.call(ctx, "CancelCodeAssistantOfflineGeneration", []any{cleanup.generation, cleanup.applet})
+				}
+				cleanup.call(ctx, "DeleteApplet", []any{cleanup.applet})
+			}()
+		})
 	})
 }
 

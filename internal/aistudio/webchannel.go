@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"io"
 	"log/slog"
 	"net"
@@ -437,7 +438,7 @@ func (t *WorkerProtectedTransport) OpenBidiProtected(
 		return nil, err
 	}
 	ready := make(chan error, 1)
-	go session.runBackchannel(ready)
+	paniclog.Go("webchannel.go:440", func() { session.runBackchannel(ready) })
 	select {
 	case err = <-ready:
 	case <-setupCtx.Done():
@@ -471,7 +472,7 @@ func (s *BidiSession) awaitSetup(ctx context.Context) error {
 			pending = append(pending, event)
 			switch event.Kind {
 			case BidiEventSetupComplete:
-				go s.forwardEvents(pending)
+				paniclog.Go("webchannel.go:474", func() { s.forwardEvents(pending) })
 				s.forwarding <- true
 				return nil
 			case BidiEventError:
@@ -588,7 +589,7 @@ func (s *BidiSession) sendProtected(ctx context.Context, body []byte, binding st
 func (s *BidiSession) enqueueMessage(ctx context.Context, payload []byte, qualifies bool, wait bool) error {
 	s.outboxOnce.Do(func() {
 		s.outboxWake = make(chan struct{}, 1)
-		go s.runForwardChannel()
+		paniclog.Go("webchannel.go:591", func() { s.runForwardChannel() })
 	})
 	entry := bidiOutgoing{payload: payload, qualifies: qualifies}
 	if wait {
@@ -980,18 +981,20 @@ func (s *BidiSession) recordScopedModelAccess(event *BidiEvent) {
 	accountID := s.accountID
 	accessScope := s.lease.CooldownScope(s.modelAccessScope)
 	generation := s.lease.ModelAccessGeneration()
-	go func() {
-		changed, err := s.lease.pool.MarkModelAccessVerifiedIfGeneration(
-			accountID, accessScope, generation, checkedAt,
-		)
-		if err != nil {
-			slog.Error("Bidi 媒体资格保存失败", "account", accountID, "model", s.model, "error", err)
-			return
-		}
-		if changed {
-			s.notifyModelAccessChanged()
-		}
-	}()
+	paniclog.Go("webchannel.go:983", func() {
+		func() {
+			changed, err := s.lease.pool.MarkModelAccessVerifiedIfGeneration(
+				accountID, accessScope, generation, checkedAt,
+			)
+			if err != nil {
+				slog.Error("Bidi 媒体资格保存失败", "account", accountID, "model", s.model, "error", err)
+				return
+			}
+			if changed {
+				s.notifyModelAccessChanged()
+			}
+		}()
+	})
 }
 
 // beginQualificationAttempt 登记当前双向轮次中的资格请求

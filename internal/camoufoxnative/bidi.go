@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/gorilla/websocket"
 )
 
@@ -72,7 +73,7 @@ func newBiDiClient(connection *websocket.Conn) *bidiClient {
 		done:       make(chan struct{}),
 		blocked:    make(chan blockedRequest, 1),
 	}
-	go client.read()
+	paniclog.Go("bidi.go:75", func() { client.read() })
 	return client
 }
 

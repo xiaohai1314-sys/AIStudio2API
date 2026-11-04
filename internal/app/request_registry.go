@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // requestRegistry 保存活动请求与事件订阅
@@ -57,7 +58,7 @@ func newRequestRegistry(ctx context.Context) *requestRegistry {
 		console:     make(chan api.AdminLog, 256),
 		firstEvents: newFirstEventStats(),
 	}
-	go registry.writeConsole(ctx)
+	paniclog.Go("request_registry.go:60", func() { registry.writeConsole(ctx) })
 	return registry
 }
 
@@ -344,12 +345,14 @@ func (registry *requestRegistry) subscribe(ctx context.Context) *eventSubscriber
 	registry.mu.Lock()
 	registry.subscribers[subscriber] = struct{}{}
 	registry.mu.Unlock()
-	go func() {
-		<-ctx.Done()
-		registry.mu.Lock()
-		delete(registry.subscribers, subscriber)
-		registry.mu.Unlock()
-	}()
+	paniclog.Go("request_registry.go:347", func() {
+		func() {
+			<-ctx.Done()
+			registry.mu.Lock()
+			delete(registry.subscribers, subscriber)
+			registry.mu.Unlock()
+		}()
+	})
 	return subscriber
 }
 
@@ -382,7 +385,7 @@ func (registry *requestRegistry) activateSubscriber(
 	}
 	subscriber.activate(initial)
 	registry.mu.Unlock()
-	go subscriber.run()
+	paniclog.Go("request_registry.go:385", func() { subscriber.run() })
 	return subscriber.events
 }
 

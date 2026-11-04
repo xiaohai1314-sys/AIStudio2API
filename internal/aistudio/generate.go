@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"io"
 	"net/http"
 	"regexp"
@@ -837,138 +838,140 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		stopTokenCount, cancelTokenCount = c.countStopInput(ctx, request)
 	}
 	events := make(chan Event, 8)
-	go func() {
-		defer close(events)
-		defer cancelTokenCount()
-		closeOnCancel := func(response *RPCResponse) func() bool {
-			return context.AfterFunc(ctx, func() {
+	paniclog.Go("generate.go:840", func() {
+		func() {
+			defer close(events)
+			defer cancelTokenCount()
+			closeOnCancel := func(response *RPCResponse) func() bool {
+				return context.AfterFunc(ctx, func() {
+					_ = response.Body.Close()
+				})
+			}
+			stopClose := closeOnCancel(response)
+			defer func() { stopClose() }()
+			providerModel := entry.model.ID
+			send := func(event Event) error {
+				providerModel = cmp.Or(event.ProviderModel, providerModel)
+				event.ProviderModel = providerModel
+				select {
+				case events <- event:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			var usage *Usage
+			var finish *Event
+			var output Output
+			// committed 表示本次生成已有不能随重新生成丢弃的输出：客户端收到的正文、函数调用与媒体，或重新执行有外部副作用的服务端工具调用
+			committed := false
+			// sources 暂存 committed 之前收到的网页来源与引用，重新生成时丢弃
+			var sources []Event
+			releaseSources := func() error {
+				for _, source := range sources {
+					if err := send(source); err != nil {
+						return err
+					}
+				}
+				sources = nil
+				return nil
+			}
+			matchedStopSequence := ""
+			emitEvent := func(event Event) error {
+				switch event.Kind {
+				case EventUsage:
+					value := *event.Usage
+					usage = &value
+					return nil
+				case EventFinish:
+					value := event
+					finish = &value
+					return nil
+				default:
+					hiddenTool := serverToolHidden(request, event)
+					if !hiddenTool || !serverToolReplayable(event) {
+						output.Add(event)
+						committed = committed || !event.Thought && event.payload()
+					}
+					if !committed {
+						if event.Kind == EventGrounding || event.Kind == EventCitation {
+							sources = append(sources, event)
+							return nil
+						}
+					} else if err := releaseSources(); err != nil {
+						return err
+					}
+					if request.Config.HideThinking && event.Kind == EventReasoning || hiddenTool {
+						if event.ThoughtSignature == "" {
+							return nil
+						}
+						event = Event{
+							Kind: EventThoughtSignature, Part: Part{ThoughtSignature: event.ThoughtSignature},
+							TurnToken: event.TurnToken, DebugInfo: event.DebugInfo, ResponseID: event.ResponseID, FrameUsage: event.FrameUsage, FinishFrame: event.FinishFrame,
+						}
+					}
+					return send(event)
+				}
+			}
+			emit := stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
+			err := decodeStream(observeStreamActivity(ctx, response.Body), emit)
+			for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, committed); regenerated++ {
+				stopClose()
 				_ = response.Body.Close()
-			})
-		}
-		stopClose := closeOnCancel(response)
-		defer func() { stopClose() }()
-		providerModel := entry.model.ID
-		send := func(event Event) error {
-			providerModel = cmp.Or(event.ProviderModel, providerModel)
-			event.ProviderModel = providerModel
-			select {
-			case events <- event:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		var usage *Usage
-		var finish *Event
-		var output Output
-		// committed 表示本次生成已有不能随重新生成丢弃的输出：客户端收到的正文、函数调用与媒体，或重新执行有外部副作用的服务端工具调用
-		committed := false
-		// sources 暂存 committed 之前收到的网页来源与引用，重新生成时丢弃
-		var sources []Event
-		releaseSources := func() error {
-			for _, source := range sources {
-				if err := send(source); err != nil {
-					return err
-				}
-			}
-			sources = nil
-			return nil
-		}
-		matchedStopSequence := ""
-		emitEvent := func(event Event) error {
-			switch event.Kind {
-			case EventUsage:
-				value := *event.Usage
-				usage = &value
-				return nil
-			case EventFinish:
-				value := event
-				finish = &value
-				return nil
-			default:
-				hiddenTool := serverToolHidden(request, event)
-				if !hiddenTool || !serverToolReplayable(event) {
-					output.Add(event)
-					committed = committed || !event.Thought && event.payload()
-				}
-				if !committed {
-					if event.Kind == EventGrounding || event.Kind == EventCitation {
-						sources = append(sources, event)
-						return nil
+				if response, decodeStream, err = sendRequest(); err != nil {
+					if ctx.Err() == nil {
+						_ = send(Event{Kind: EventError, Err: err})
 					}
-				} else if err := releaseSources(); err != nil {
-					return err
+					return
 				}
-				if request.Config.HideThinking && event.Kind == EventReasoning || hiddenTool {
-					if event.ThoughtSignature == "" {
-						return nil
-					}
-					event = Event{
-						Kind: EventThoughtSignature, Part: Part{ThoughtSignature: event.ThoughtSignature},
-						TurnToken: event.TurnToken, DebugInfo: event.DebugInfo, ResponseID: event.ResponseID, FrameUsage: event.FrameUsage, FinishFrame: event.FinishFrame,
+				stopClose = closeOnCancel(response)
+				usage, finish, sources = nil, nil, nil
+				matcher = newStopSequenceMatcher(request.Config.StopSequences)
+				emit = stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
+				err = decodeStream(observeStreamActivity(ctx, response.Body), emit)
+			}
+			if releaseSources() != nil {
+				return
+			}
+			if errors.Is(err, errStopSequenceMatched) {
+				_ = response.Body.Close()
+				finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
+				return
+			}
+			if closeErr := response.Body.Close(); err == nil {
+				err = closeErr
+			}
+			if ctx.Err() == nil && matcher != nil {
+				if pending := matcher.flush(); pending != "" {
+					if flushErr := emitEvent(Event{Kind: EventText, Text: pending}); err == nil {
+						err = flushErr
 					}
 				}
-				return send(event)
 			}
-		}
-		emit := stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
-		err := decodeStream(observeStreamActivity(ctx, response.Body), emit)
-		for regenerated := 0; regenerated < regenerations && regenerable(ctx, err, finish, committed); regenerated++ {
-			stopClose()
-			_ = response.Body.Close()
-			if response, decodeStream, err = sendRequest(); err != nil {
+			if err != nil {
 				if ctx.Err() == nil {
 					_ = send(Event{Kind: EventError, Err: err})
 				}
 				return
 			}
-			stopClose = closeOnCancel(response)
-			usage, finish, sources = nil, nil, nil
-			matcher = newStopSequenceMatcher(request.Config.StopSequences)
-			emit = stopSequenceEmitter(matcher, emitEvent, &matchedStopSequence)
-			err = decodeStream(observeStreamActivity(ctx, response.Body), emit)
-		}
-		if releaseSources() != nil {
-			return
-		}
-		if errors.Is(err, errStopSequenceMatched) {
-			_ = response.Body.Close()
-			finishAtStopSequence(ctx, request, output, stopTokenCount, matchedStopSequence, send)
-			return
-		}
-		if closeErr := response.Body.Close(); err == nil {
-			err = closeErr
-		}
-		if ctx.Err() == nil && matcher != nil {
-			if pending := matcher.flush(); pending != "" {
-				if flushErr := emitEvent(Event{Kind: EventText, Text: pending}); err == nil {
-					err = flushErr
+			if usage == nil {
+				usage = localCompleteUsage(request, output)
+			} else if usage.OutputTokensMissing {
+				outputTokens := usage.TotalTokens - usage.InputTokens - usage.ToolTokens - usage.ReasoningTokens
+				if outputTokens < 0 {
+					outputTokens = localPartsTokens(output.Visible())
 				}
+				usage.OutputTokens = outputTokens
+				usage.OutputTokensMissing = false
 			}
-		}
-		if err != nil {
-			if ctx.Err() == nil {
-				_ = send(Event{Kind: EventError, Err: err})
+			if err := send(Event{Kind: EventUsage, Usage: usage}); err != nil {
+				return
 			}
-			return
-		}
-		if usage == nil {
-			usage = localCompleteUsage(request, output)
-		} else if usage.OutputTokensMissing {
-			outputTokens := usage.TotalTokens - usage.InputTokens - usage.ToolTokens - usage.ReasoningTokens
-			if outputTokens < 0 {
-				outputTokens = localPartsTokens(output.Visible())
+			if finish != nil {
+				_ = send(*finish)
 			}
-			usage.OutputTokens = outputTokens
-			usage.OutputTokensMissing = false
-		}
-		if err := send(Event{Kind: EventUsage, Usage: usage}); err != nil {
-			return
-		}
-		if finish != nil {
-			_ = send(*finish)
-		}
-	}()
+		}()
+	})
 	return contract.forward(ctx, events), nil
 }
 
@@ -993,11 +996,13 @@ func (c *Client) countStopInput(ctx context.Context, request GenerateRequest) (<
 	countRequest := TokenCountRequest{
 		Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
 	}
-	go func() {
-		count, err := c.CountTokensForAccount(countContext, request.AccountID, countRequest)
-		results <- tokenCountResult{count: count, err: err}
-		close(results)
-	}()
+	paniclog.Go("generate.go:996", func() {
+		func() {
+			count, err := c.CountTokensForAccount(countContext, request.AccountID, countRequest)
+			results <- tokenCountResult{count: count, err: err}
+			close(results)
+		}()
+	})
 	return results, cancel
 }
 

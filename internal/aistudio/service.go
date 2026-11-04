@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // PooledService 在账户租约内调用协议客户端
@@ -166,17 +167,19 @@ func (t *WorkerProtectedTransport) doPrepared(
 		return nil, err
 	}
 	saving := &cookieSavingBody{ReadCloser: response.Body, done: make(chan struct{})}
-	go func() {
-		defer close(saving.done)
-		browserState, err := worker.BrowserStorageState(ctx)
-		if err != nil {
-			saving.err = fmt.Errorf("导出浏览器 Cookie: %w", err)
-			return
-		}
-		if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
-			saving.err = fmt.Errorf("保存浏览器 Cookie: %w", err)
-		}
-	}()
+	paniclog.Go("service.go:169", func() {
+		func() {
+			defer close(saving.done)
+			browserState, err := worker.BrowserStorageState(ctx)
+			if err != nil {
+				saving.err = fmt.Errorf("导出浏览器 Cookie: %w", err)
+				return
+			}
+			if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
+				saving.err = fmt.Errorf("保存浏览器 Cookie: %w", err)
+			}
+		}()
+	})
 	response.Body = saving
 	reportRequestPhase(ctx, RequestPhaseStreaming)
 	return response, nil
@@ -418,15 +421,19 @@ func (s *PooledService) refreshModelCatalogs(ctx context.Context, statuses []Acc
 	var refreshes sync.WaitGroup
 	for _, status := range statuses {
 		refreshes.Add(1)
-		go func(status AccountStatus) {
-			defer refreshes.Done()
-			results <- s.modelsForStatus(ctx, status)
-		}(status)
+		paniclog.Go("service.go:421", func() {
+			func(status AccountStatus) {
+				defer refreshes.Done()
+				results <- s.modelsForStatus(ctx, status)
+			}(status)
+		})
 	}
-	go func() {
-		refreshes.Wait()
-		close(results)
-	}()
+	paniclog.Go("service.go:426", func() {
+		func() {
+			refreshes.Wait()
+			close(results)
+		}()
+	})
 	collected := make([]accountModelsResult, 0, len(statuses))
 	for result := range results {
 		collected = append(collected, result)
@@ -715,7 +722,7 @@ func (s *PooledService) Generate(ctx context.Context, request GenerateRequest) (
 				return events, nil
 			}
 			forwarded := make(chan Event, 8)
-			go forwardEventsWithLease(ctx, events, forwarded, lease, s.pool, modelID)
+			paniclog.Go("service.go:718", func() { forwardEventsWithLease(ctx, events, forwarded, lease, s.pool, modelID) })
 			return forwarded, nil
 		}
 		requestErr = err
@@ -818,13 +825,15 @@ func forwardEventsWithLease(
 			if err := lease.MarkAuthenticationValid(); err != nil {
 				slog.Error("账户认证状态保存失败", "account", accountID, "error", err)
 			}
-			go func() {
-				if _, err := pool.MarkModelAccessVerifiedIfGeneration(
-					accountID, lease.CooldownScope(modelID), accessGeneration, checkedAt,
-				); err != nil {
-					slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
-				}
-			}()
+			paniclog.Go("service.go:821", func() {
+				func() {
+					if _, err := pool.MarkModelAccessVerifiedIfGeneration(
+						accountID, lease.CooldownScope(modelID), accessGeneration, checkedAt,
+					); err != nil {
+						slog.Error("账户模型资格保存失败", "account", accountID, "model", modelID, "error", err)
+					}
+				}()
+			})
 		}
 	}
 }

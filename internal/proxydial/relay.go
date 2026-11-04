@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"golang.org/x/net/proxy"
 )
 
@@ -38,7 +39,7 @@ func StartRelay(proxyURL *url.URL) (*Relay, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	relay := &Relay{listener: listener, dialer: dialer, ctx: ctx, cancel: cancel, conns: make(map[net.Conn]struct{})}
-	go relay.serve()
+	paniclog.Go("relay.go:41", func() { relay.serve() })
 	return relay, nil
 }
 
@@ -74,7 +75,7 @@ func (relay *Relay) serve() {
 			_ = conn.Close()
 			continue
 		}
-		go relay.handle(conn)
+		paniclog.Go("relay.go:77", func() { relay.handle(conn) })
 	}
 }
 
@@ -123,8 +124,8 @@ func (relay *Relay) handle(client net.Conn) {
 		return
 	}
 	done := make(chan struct{}, 2)
-	go pipe(upstream, client, done)
-	go pipe(client, upstream, done)
+	paniclog.Go("relay.go:126", func() { pipe(upstream, client, done) })
+	paniclog.Go("relay.go:127", func() { pipe(client, upstream, done) })
 	<-done
 	<-done
 }

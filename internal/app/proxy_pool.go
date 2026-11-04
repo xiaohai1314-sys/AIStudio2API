@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // proxyProbeInterval 为代理池的定时检测间隔
@@ -92,13 +93,15 @@ func (admin *runtimeAdmin) rebindAccounts(accountIDs []string) {
 	if len(accountIDs) == 0 {
 		return
 	}
-	go func() {
-		for _, accountID := range accountIDs {
-			if err := admin.rebindAccount(admin.lifecycle, accountID); err != nil && admin.lifecycle.Err() == nil {
-				admin.requests.log(accountID, "WARN", "代理改绑 | 错误="+err.Error())
+	paniclog.Go("proxy_pool.go:95", func() {
+		func() {
+			for _, accountID := range accountIDs {
+				if err := admin.rebindAccount(admin.lifecycle, accountID); err != nil && admin.lifecycle.Err() == nil {
+					admin.requests.log(accountID, "WARN", "代理改绑 | 错误="+err.Error())
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 func (admin *runtimeAdmin) rebindAccount(ctx context.Context, accountID string) error {

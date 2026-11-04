@@ -25,6 +25,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	appconfig "github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/gofrs/flock"
 	"golang.org/x/sync/singleflight"
 )
@@ -3386,10 +3387,12 @@ func (p *AccountPool) refreshAccountRuntimes(ctx context.Context, accounts []*Ac
 	var refreshes sync.WaitGroup
 	for index, account := range accounts {
 		refreshes.Add(1)
-		go func(index int, account *Account) {
-			defer refreshes.Done()
-			results[index] = accountRuntimeRefreshResult{account: account, err: p.refreshAccountRuntime(ctx, account)}
-		}(index, account)
+		paniclog.Go("accounts.go:3389", func() {
+			func(index int, account *Account) {
+				defer refreshes.Done()
+				results[index] = accountRuntimeRefreshResult{account: account, err: p.refreshAccountRuntime(ctx, account)}
+			}(index, account)
+		})
 	}
 	refreshes.Wait()
 	return results

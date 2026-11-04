@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 const driveAPIBase = "https://www.googleapis.com/drive/v3/files"
@@ -1039,21 +1040,23 @@ func (s *PooledService) UploadInlineMediaToLease(
 		uploadCtx, cancelUploads := context.WithCancel(targetCtx)
 		resultChannel := make(chan uploadResult, len(pending))
 		for index, job := range pending {
-			go func(index int, job uploadJob) {
-				folder, err := s.client.appFolder(uploadCtx, targetID)
-				var file FileRef
-				if err == nil {
-					file, err = drive.UploadDrive(uploadCtx, targetID, token, UploadRequest{
-						AccountID: targetID,
-						Name:      job.name,
-						MIME:      job.blob.MIME,
-						Size:      int64(len(job.blob.Data)),
-						Reader:    bytes.NewReader(job.blob.Data),
-						Folder:    folder,
-					})
-				}
-				resultChannel <- uploadResult{index: index, file: file, err: err}
-			}(index, job)
+			paniclog.Go("upload.go:1042", func() {
+				func(index int, job uploadJob) {
+					folder, err := s.client.appFolder(uploadCtx, targetID)
+					var file FileRef
+					if err == nil {
+						file, err = drive.UploadDrive(uploadCtx, targetID, token, UploadRequest{
+							AccountID: targetID,
+							Name:      job.name,
+							MIME:      job.blob.MIME,
+							Size:      int64(len(job.blob.Data)),
+							Reader:    bytes.NewReader(job.blob.Data),
+							Folder:    folder,
+						})
+					}
+					resultChannel <- uploadResult{index: index, file: file, err: err}
+				}(index, job)
+			})
 		}
 		results := make([]uploadResult, len(pending))
 		for range pending {
@@ -1264,14 +1267,16 @@ func uploadDriveMultipart(ctx context.Context, client *http.Client, address stri
 		"\r\n\r\n\r\n--" + gapiBoundary + "\r\nContent-Type: " + request.MIME + "\r\nContent-Transfer-Encoding: base64\r\n\r\n\r\n"
 	suffix := "\r\n--" + gapiBoundary + "--"
 	encoded, writer := io.Pipe()
-	go func() {
-		encoder := base64.NewEncoder(base64.StdEncoding, writer)
-		_, err := io.Copy(encoder, request.Reader)
-		if err == nil {
-			err = encoder.Close()
-		}
-		writer.CloseWithError(err)
-	}()
+	paniclog.Go("upload.go:1267", func() {
+		func() {
+			encoder := base64.NewEncoder(base64.StdEncoding, writer)
+			_, err := io.Copy(encoder, request.Reader)
+			if err == nil {
+				err = encoder.Close()
+			}
+			writer.CloseWithError(err)
+		}()
+	})
 	body := struct {
 		io.Reader
 		io.Closer

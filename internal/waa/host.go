@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/mozjs"
 )
 
@@ -480,11 +481,13 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 		natives["loadImage"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
 			state.pending.Add(1)
-			go func() {
-				defer state.pending.Done()
-				loaded := state.loadImage(address)
-				state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
-			}()
+			paniclog.Go("host.go:483", func() {
+				func() {
+					defer state.pending.Done()
+					loaded := state.loadImage(address)
+					state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+				}()
+			})
 			return nil
 		}}
 	}

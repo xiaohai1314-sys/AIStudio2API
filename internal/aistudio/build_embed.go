@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"io"
 	"log/slog"
 	"strings"
@@ -221,11 +222,13 @@ func (s *PooledService) Embed(ctx context.Context, request EmbeddingRequest) (Em
 			if stateErr := errors.Join(lease.MarkAuthenticationValid(), lease.Release()); stateErr != nil {
 				return result, stateErr
 			}
-			go func() {
-				if _, err := s.pool.MarkModelAccessVerifiedIfGeneration(accountID, scope, accessGeneration, checkedAt); err != nil {
-					slog.Error("账户 embedding 资格保存失败", "account", accountID, "model", modelID, "error", err)
-				}
-			}()
+			paniclog.Go("build_embed.go:224", func() {
+				func() {
+					if _, err := s.pool.MarkModelAccessVerifiedIfGeneration(accountID, scope, accessGeneration, checkedAt); err != nil {
+						slog.Error("账户 embedding 资格保存失败", "account", accountID, "model", modelID, "error", err)
+					}
+				}()
+			})
 			return result, nil
 		}
 		requestErr = err

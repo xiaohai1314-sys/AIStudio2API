@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 var errIncompleteStream = errors.New("upstream stream closed before finish")
@@ -121,16 +122,18 @@ func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan
 		first = event
 	}
 	replay := make(chan aistudio.Event)
-	go func() {
-		defer close(replay)
-		for event, ok := first, true; ok; event, ok = <-events {
-			select {
-			case replay <- event:
-			case <-ctx.Done():
-				return
+	paniclog.Go("generate.go:124", func() {
+		func() {
+			defer close(replay)
+			for event, ok := first, true; ok; event, ok = <-events {
+				select {
+				case replay <- event:
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	})
 	return replay, nil
 }
 
