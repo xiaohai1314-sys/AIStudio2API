@@ -48,6 +48,9 @@ const (
 	firefoxPoolWaitRetry = time.Second
 )
 
+// maxPreflightEntries 是单个 transport 保留的 CORS 预检缓存条目上限
+const maxPreflightEntries = 512
+
 // firefoxHTTP2Settings 是 Firefox 152 在每条 HTTP/2 连接开头发送的 SETTINGS
 var firefoxHTTP2Settings = map[http2.SettingID]uint32{
 	http2.SettingHeaderTableSize:   65536,
@@ -567,8 +570,12 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	key := request.Method + " " + target + " " + requestHeaders
 	transport.mu.Lock()
 	expiry, cached := transport.preflights[key]
+	if cached && !time.Now().Before(expiry) {
+		delete(transport.preflights, key)
+		cached = false
+	}
 	transport.mu.Unlock()
-	if cached && time.Now().Before(expiry) {
+	if cached {
 		return nil
 	}
 	preflight, err := fhttp.NewRequestWithContext(request.Context(), stdhttp.MethodOptions, target, nil)
@@ -601,6 +608,17 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 		maxAge = min(time.Duration(seconds)*time.Second, 24*time.Hour)
 	}
 	transport.mu.Lock()
+	if len(transport.preflights) >= maxPreflightEntries {
+		now := time.Now()
+		for entryKey, entryExpiry := range transport.preflights {
+			if !now.Before(entryExpiry) {
+				delete(transport.preflights, entryKey)
+			}
+		}
+		if len(transport.preflights) >= maxPreflightEntries {
+			clear(transport.preflights)
+		}
+	}
 	transport.preflights[key] = time.Now().Add(maxAge)
 	transport.mu.Unlock()
 	return nil

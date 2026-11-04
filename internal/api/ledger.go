@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -382,11 +383,34 @@ func (s *server) handleUsageExport(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	// 先写入临时文件再发送响应头，导出失败时仍能返回错误而不是截断的 CSV
+	temp, err := os.CreateTemp("", "aistudio2api-usage-*.csv")
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "usage_export_failed", err.Error())
+		return
+	}
+	defer os.Remove(temp.Name())
+	defer temp.Close()
+	if err := s.config.Ledger.ExportRecords(r.Context(), query, temp); err != nil {
+		writeAdminError(w, statusFromError(err), "usage_export_failed", err.Error())
+		return
+	}
+	info, err := temp.Stat()
+	if err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "usage_export_failed", err.Error())
+		return
+	}
+	if _, err := temp.Seek(0, io.SeekStart); err != nil {
+		writeAdminError(w, http.StatusInternalServerError, "usage_export_failed", err.Error())
+		return
+	}
 	name := fmt.Sprintf("usage-%s-%s.csv", query.From.Format("20060102T150405Z"), query.To.Format("20060102T150405Z"))
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.Header().Set("Cache-Control", "no-store")
-	if err := s.config.Ledger.ExportRecords(r.Context(), query, w); err != nil {
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, temp); err != nil {
 		SetAccessLogError(r.Context(), err)
 	}
 }

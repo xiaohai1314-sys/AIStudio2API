@@ -136,9 +136,16 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 			runtime.agent.cx.GC()
 			close(collected)
 		}) {
-			<-collected
+			select {
+			case <-collected:
+			case <-loop.done:
+				return nil, errors.New("WAA 事件循环已退出")
+			}
 		}
 		return runtime, nil
+	case <-loop.done:
+		loop.close()
+		return nil, errors.New("WAA 事件循环已退出")
 	case <-ctx.Done():
 		loop.close()
 		return nil, ctx.Err()
@@ -340,6 +347,8 @@ func (runtime *Runtime) Settle(ctx context.Context) error {
 	select {
 	case <-done:
 		return nil
+	case <-runtime.loop.done:
+		return errors.New("WAA runtime 已关闭")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -378,6 +387,8 @@ func (runtime *Runtime) fillPrompt(ctx context.Context, prompt string, submit bo
 	select {
 	case err := <-result:
 		return err
+	case <-runtime.loop.done:
+		return errors.New("WAA runtime 已关闭")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -463,6 +474,8 @@ func (runtime *Runtime) snapshotWith(ctx context.Context, digest mozjs.Value) (s
 	select {
 	case output := <-result:
 		return output.value, output.err
+	case <-runtime.loop.done:
+		return "", errors.New("WAA runtime 已关闭")
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}

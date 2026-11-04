@@ -107,6 +107,8 @@ type Store struct {
 	log       Logger
 	capture   atomic.Bool
 	dropped   atomic.Int64
+	pruneWG   sync.WaitGroup
+	pruning   atomic.Bool
 	mu        sync.RWMutex
 	closed    bool
 }
@@ -167,6 +169,7 @@ func (store *Store) Close() error {
 	close(store.writes)
 	store.mu.Unlock()
 	<-store.done
+	store.pruneWG.Wait()
 	err := store.db.Close()
 	store.mu.Lock()
 	store.closeErr = err
@@ -219,7 +222,7 @@ func (store *Store) enqueue(item write) {
 // run 合并连续到达的记录为单个事务，并每天清理过期用量
 func (store *Store) run() {
 	defer close(store.done)
-	store.prune()
+	store.startPrune()
 	prune := time.NewTicker(24 * time.Hour)
 	defer prune.Stop()
 	for {
@@ -244,9 +247,22 @@ func (store *Store) run() {
 			}
 			store.commit(batch)
 		case <-prune.C:
-			store.prune()
+			store.startPrune()
 		}
 	}
+}
+
+// startPrune 在独立 goroutine 中清理过期用量，避免删除与收缩阻塞写入队列；同一时间只运行一个清理
+func (store *Store) startPrune() {
+	if !store.pruning.CompareAndSwap(false, true) {
+		return
+	}
+	store.pruneWG.Add(1)
+	paniclog.Go("requestdb.go:prune", func() {
+		defer store.pruneWG.Done()
+		defer store.pruning.Store(false)
+		store.prune()
+	})
 }
 
 // commit 写入一批记录，记录写入失败与队列丢弃

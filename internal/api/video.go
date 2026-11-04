@@ -541,7 +541,7 @@ func (s *server) handleOpenAIVideoContent(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", cmp.Or(media.MIME, "video/mp4"))
 	w.Header().Set("Content-Disposition", `attachment; filename="video.mp4"`)
-	writeMediaStream(w, r, media.Body, media.Size)
+	writeMediaStream(w, r, media.Body)
 }
 
 func cleanOperationID(value string) string {

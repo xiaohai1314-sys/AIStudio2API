@@ -270,21 +270,14 @@ func (s *server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 		writeFileRequestError(w, r, err)
 		return
 	}
-	size := media.Size
-	if size < 0 {
-		size = metadata.Size
-	}
 	w.Header().Set("Content-Type", cmp.Or(strings.TrimSpace(media.MIME), metadata.MIME))
 	filename := cmp.Or(strings.TrimSpace(media.Name), metadata.Name)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
-	writeMediaStream(w, r, media.Body, size)
+	writeMediaStream(w, r, media.Body)
 }
 
-// writeMediaStream 写出 200 与文件内容，size 非负时带 Content-Length，复制或关闭出错时记入访问日志
-func writeMediaStream(w http.ResponseWriter, r *http.Request, body io.ReadCloser, size int64) {
-	if size >= 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-	}
+// writeMediaStream 写出 200 与文件内容，不声明 Content-Length，避免元数据大小与实际流不一致时截断响应；复制或关闭出错时记入访问日志
+func writeMediaStream(w http.ResponseWriter, r *http.Request, body io.ReadCloser) {
 	w.WriteHeader(http.StatusOK)
 	_, copyErr := io.Copy(w, body)
 	if err := errors.Join(copyErr, body.Close()); err != nil {

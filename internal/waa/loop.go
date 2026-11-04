@@ -13,6 +13,7 @@ type eventLoop struct {
 	queue     []func()
 	wake      chan struct{}
 	done      chan struct{}
+	doneOnce  sync.Once
 	exited    chan struct{}
 	closed    bool
 	timers    map[*time.Timer]struct{}
@@ -29,6 +30,7 @@ func newEventLoop() *eventLoop {
 func (loop *eventLoop) run() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	defer loop.signalDone()
 	defer close(loop.exited)
 	defer func() {
 		if loop.cleanup != nil {
@@ -113,5 +115,10 @@ func (loop *eventLoop) close() {
 	clear(loop.timers)
 	loop.queue = nil
 	loop.mu.Unlock()
-	close(loop.done)
+	loop.signalDone()
+}
+
+// signalDone 唤醒等待事件循环的调用方，关闭与循环退出只触发一次
+func (loop *eventLoop) signalDone() {
+	loop.doneOnce.Do(func() { close(loop.done) })
 }

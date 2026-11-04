@@ -676,7 +676,7 @@ func (s *server) handleGeminiFileDownload(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.Header().Set("Content-Type", cmp.Or(strings.TrimSpace(media.MIME), "application/octet-stream"))
-	writeMediaStream(w, r, media.Body, media.Size)
+	writeMediaStream(w, r, media.Body)
 }
 
 // handleGeminiFileDelete 删除上传文件并返回空对象

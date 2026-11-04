@@ -12,16 +12,16 @@ func TestPublicBodyLimit(t *testing.T) {
 		"/v1/responses/compact",
 		"/v1/messages",
 		"/v1/messages/count_tokens",
+		"/v1/images/edits",
 	} {
-		if got := publicBodyLimit(path); got != maxJSONBodyBytes {
-			t.Fatalf("%s 上限 = %d, want %d", path, got, maxJSONBodyBytes)
+		if got := publicBodyLimit(path); got != maxBufferedBodyBytes {
+			t.Fatalf("%s 上限 = %d, want %d", path, got, maxBufferedBodyBytes)
 		}
 	}
 	for _, path := range []string{
 		"/upload/v1beta/files",
 		"/v1/audio/transcriptions",
 		"/v1/audio/translations",
-		"/v1/images/edits",
 		"/v1/files",
 	} {
 		if got := publicBodyLimit(path); got != maxPublicBodyBytes {
