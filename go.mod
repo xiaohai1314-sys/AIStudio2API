@@ -3,7 +3,7 @@ module github.com/Mag1cFall/AIStudio2API
 go 1.27
 
 require (
-	github.com/Mag1cFall/fhttp v0.6.8-firefox.1
+	github.com/Mag1cFall/fhttp v0.6.8-firefox.2
 	github.com/Mag1cFall/go-sentencepiece v0.7.1
 	github.com/Mag1cFall/uquic v0.0.6-firefox.6
 	github.com/Mag1cFall/utls v1.8.2-firefox.3

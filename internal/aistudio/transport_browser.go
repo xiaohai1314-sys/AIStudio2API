@@ -20,6 +20,7 @@ import (
 	"github.com/Mag1cFall/fhttp/http2"
 	"github.com/bogdanfinn/tls-client/profiles"
 	tls "github.com/bogdanfinn/utls"
+	"github.com/bogdanfinn/utls/dicttls"
 	"golang.org/x/net/proxy"
 )
 
@@ -70,8 +71,17 @@ var firefoxHTTP2SettingsOrder = []http2.SettingID{
 // firefoxPseudoHeaderOrder 是 Firefox 请求 HEADERS 帧的伪头顺序
 var firefoxPseudoHeaderOrder = []string{":method", ":path", ":authority", ":scheme"}
 
-// firefoxHeaderPriority 是 Firefox 请求 HEADERS 帧携带的优先级，线上权重为 42
-var firefoxHeaderPriority = http2.PriorityParam{Weight: 41}
+// firefoxStreamPriority 返回 Firefox 为请求的 HEADERS 帧写入的优先级：页面文档、用户输入中发起的请求（Priority: u=0）与预载脚本（Priority: u=1）为 41，页面图片为 11，其余（包括 Priority: u=6 的网站图标）为 21，线上权重各加 1
+func firefoxStreamPriority(header fhttp.Header) http2.PriorityParam {
+	priority := header.Get("Priority")
+	switch {
+	case header.Get("Sec-Fetch-Dest") == "document" || priority == "u=0" || priority == "u=1":
+		return http2.PriorityParam{Weight: 41}
+	case header.Get("Sec-Fetch-Dest") == "image" && priority != "u=6":
+		return http2.PriorityParam{Weight: 11}
+	}
+	return http2.PriorityParam{Weight: 21}
+}
 
 // firefoxRequestHeaderOrder 是 Firefox 152 发出官网页面请求的请求头顺序
 var firefoxRequestHeaderOrder = []string{
@@ -163,13 +173,16 @@ type browserResponseBody struct {
 func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	proxyURL = strings.TrimSpace(proxyURL)
 	var proxyDialer proxy.ContextDialer = &net.Dialer{}
+	sessions := &firefoxSessionCache{sessions: map[firefoxSessionPeer][]*tls.ClientSessionState{}}
 	if proxyURL != "" {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil || parsed.Hostname() == "" {
 			return nil, fmt.Errorf("代理 URL 无效")
 		}
 		switch strings.ToLower(parsed.Scheme) {
-		case "http", "https", "socks5":
+		case "http", "https":
+			sessions.tunnel = true
+		case "socks5":
 		default:
 			return nil, fmt.Errorf("代理协议必须是 http、https 或 socks5")
 		}
@@ -178,10 +191,10 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 			return nil, err
 		}
 	}
-	hello := firefox152ClientHello()
-	priority := firefoxHeaderPriority
 	pool := &firefoxConnPool{
-		dial:        func(address string) (net.Conn, error) { return dialBrowserTLS(proxyDialer, hello, address) },
+		dial: func(address string, anonymous bool) (net.Conn, error) {
+			return dialBrowserTLS(proxyDialer, sessions, address, anonymous)
+		},
 		conns:       map[string][]*http2.ClientConn{},
 		experienced: map[*http2.ClientConn]bool{},
 		dialing:     map[string]int{},
@@ -190,7 +203,6 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	pool.transport = &http2.Transport{
 		ConnPool:                   pool,
 		ConnectionFlow:             firefoxConnectionWindowUpdate,
-		HeaderPriority:             &priority,
 		IdleConnTimeout:            browserIdleConnTimeout,
 		InitialStreamID:            firefoxInitialStreamID,
 		PingTimeout:                firefoxPingTimeout,
@@ -213,7 +225,7 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 // firefoxConnPool 按 Firefox 选择 HTTP/2 连接，匿名请求、携带凭据的请求与 HTTP/3 备用连接分开建连
 type firefoxConnPool struct {
 	transport *http2.Transport
-	dial      func(address string) (net.Conn, error)
+	dial      func(address string, anonymous bool) (net.Conn, error)
 	mu        sync.Mutex
 	conns     map[string][]*http2.ClientConn
 	// experienced 记录握手完成后又分派过请求的连接，即 Firefox 的 IsExperienced
@@ -276,7 +288,7 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 	paniclog.Go("transport_browser.go:272", func() {
 		func() {
 			var conn *http2.ClientConn
-			raw, err := pool.dial(address)
+			raw, err := pool.dial(address, class.anonymous)
 			if err == nil {
 				conn, err = pool.transport.NewClientConn(raw)
 				if err != nil {
@@ -409,8 +421,74 @@ func (pool *firefoxConnPool) shutdown() {
 	}
 }
 
-// dialBrowserTLS 以 Firefox ClientHello 建立 TLS 连接并要求协商 HTTP/2
-func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, address string) (net.Conn, error) {
+// firefoxSessionsPerPeer 是 Firefox network.ssl_tokens_cache_records_per_entry 的默认值，即每个 peer 最多保存的会话票据张数
+const firefoxSessionsPerPeer = 10
+
+// firefoxSessionPeer 是 Firefox 区分 TLS 会话票据的 peer：主机与连接是否匿名
+type firefoxSessionPeer struct {
+	host      string
+	anonymous bool
+}
+
+// firefoxSessionCache 按 peer 保存服务器下发的 TLS 会话票据，与 Firefox 一样先用最早收到的票据，每张只用于一次握手
+type firefoxSessionCache struct {
+	mu       sync.Mutex
+	sessions map[firefoxSessionPeer][]*tls.ClientSessionState
+	// tunnel 表示连接经 HTTP 代理的 CONNECT 隧道建立，Firefox 此时建 socket 时取出的票据在隧道建立后的握手重置中丢弃，再取下一张
+	tunnel bool
+}
+
+// take 取出 peer 最早收到且仍能用于 TLS 1.3 恢复的票据与恢复时 pre_shared_key 扩展的长度，途经的不可用票据一并丢弃
+func (cache *firefoxSessionCache) take(peer firefoxSessionPeer) (*tls.ClientSessionState, int) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for len(cache.sessions[peer]) > 0 {
+		session := cache.sessions[peer][0]
+		cache.sessions[peer] = cache.sessions[peer][1:]
+		if ticket, state, _ := session.ResumptionState(); state != nil {
+			if encoded, err := state.Bytes(); err == nil {
+				if psk := resumptionPSKLength(encoded, len(ticket)); psk > 0 {
+					return session, psk
+				}
+			}
+		}
+	}
+	return nil, 0
+}
+
+// put 把服务器下发的票据存到 peer 名下，已满时丢弃最早收到的一张
+func (cache *firefoxSessionCache) put(peer firefoxSessionPeer, session *tls.ClientSessionState) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	sessions := append(cache.sessions[peer], session)
+	if len(sessions) > firefoxSessionsPerPeer {
+		sessions = sessions[1:]
+	}
+	cache.sessions[peer] = sessions
+}
+
+// handshakeSessions 是一次握手所用的会话缓存：Get 返回为这次握手取出的票据，服务器下发的新票据存到这条连接的 peer 名下
+type handshakeSessions struct {
+	cache   *firefoxSessionCache
+	peer    firefoxSessionPeer
+	session *tls.ClientSessionState
+}
+
+func (sessions handshakeSessions) Get(string) (*tls.ClientSessionState, bool) {
+	return sessions.session, sessions.session != nil
+}
+
+func (sessions handshakeSessions) Put(_ string, session *tls.ClientSessionState) {
+	if session != nil {
+		sessions.cache.put(sessions.peer, session)
+	}
+}
+
+// dialBrowserTLS 以 Firefox ClientHello 建立 TLS 连接并要求协商 HTTP/2，按 Firefox 取票据的时机在建 socket 时与 CONNECT 隧道建立后取用会话票据
+func dialBrowserTLS(dialer proxy.ContextDialer, sessions *firefoxSessionCache, address string, anonymous bool) (net.Conn, error) {
+	host, _, _ := net.SplitHostPort(address)
+	peer := firefoxSessionPeer{host: host, anonymous: anonymous}
+	session, psk := sessions.take(peer)
 	// 拨号在请求之外的后台完成以便连接留给后续请求复用，因此只受超时约束
 	dialCtx, cancel := context.WithTimeout(context.Background(), firefoxDialTimeout)
 	raw, err := dialer.DialContext(dialCtx, "tcp", address)
@@ -418,8 +496,10 @@ func dialBrowserTLS(dialer proxy.ContextDialer, hello tls.ClientHelloID, address
 	if err != nil {
 		return nil, err
 	}
-	host, _, _ := net.SplitHostPort(address)
-	connection := tls.UClient(raw, &tls.Config{ServerName: host, OmitEmptyPsk: true}, hello, false, false, false)
+	if sessions.tunnel {
+		session, psk = sessions.take(peer)
+	}
+	connection := tls.UClient(raw, &tls.Config{ServerName: host, OmitEmptyPsk: true, ClientSessionCache: handshakeSessions{sessions, peer, session}}, firefox152ClientHello(psk), false, false, false)
 	ctx, cancel := context.WithTimeout(context.Background(), firefoxTLSHandshakeTimeout)
 	defer cancel()
 	if err := connection.HandshakeContext(ctx); err != nil {
@@ -495,8 +575,9 @@ func (transport *browserRoundTripper) roundTrip(request *fhttp.Request, anonymou
 	return response, err
 }
 
-// roundTripHTTP2 经 HTTP/2 执行上游请求，请求 context 结束时立即返回，未完成的拨号在后台结束
+// roundTripHTTP2 经 HTTP/2 以 Firefox 的 HEADERS 帧优先级执行上游请求，请求 context 结束时立即返回，未完成的拨号在后台结束
 func (transport *browserRoundTripper) roundTripHTTP2(request *fhttp.Request) (*fhttp.Response, error) {
+	request = request.WithContext(http2.WithHeaderPriority(request.Context(), firefoxStreamPriority(request.Header)))
 	type result struct {
 		response *fhttp.Response
 		err      error
@@ -670,8 +751,8 @@ func orderedHeaderNames(headers fhttp.Header, host string) []string {
 	return append(slices.Clone(order), remaining...)
 }
 
-// firefox152ClientHello 返回以 tls-client 的 Firefox 148 档案为底、密码套件按 Firefox 152 排列的 ClientHello
-func firefox152ClientHello() tls.ClientHelloID {
+// firefox152ClientHello 返回以 tls-client 的 Firefox 148 档案为底、密码套件按 Firefox 152 排列、GREASE ECH 按 NSS 选套件与长度的 ClientHello；psk 为 pre_shared_key 扩展长度，非 0 时与 Firefox 的 TLS 1.3 会话恢复一样去掉 session_ticket、末尾加 pre_shared_key
+func firefox152ClientHello(psk int) tls.ClientHelloID {
 	base := profiles.Firefox_148
 	hello := base.GetClientHelloId()
 	hello.Version = "152"
@@ -697,6 +778,19 @@ func firefox152ClientHello() tls.ClientHelloID {
 			tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
 			tls.TLS_RSA_WITH_AES_128_CBC_SHA,
 			tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+		}
+		for _, extension := range spec.Extensions {
+			if ech, ok := extension.(*tls.GREASEEncryptedClientHelloExtension); ok {
+				ech.CandidateCipherSuites = []tls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}, {KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_CHACHA20_POLY1305}}
+				ech.CandidatePayloadLens = []uint16{nssGREASEECHPayload(nssTLSGREASEECHInner, psk, false)}
+			}
+		}
+		if psk > 0 {
+			spec.Extensions = slices.DeleteFunc(spec.Extensions, func(extension tls.TLSExtension) bool {
+				_, ticket := extension.(*tls.SessionTicketExtension)
+				return ticket
+			})
+			spec.Extensions = append(spec.Extensions, &tls.UtlsPreSharedKeyExtension{})
 		}
 		return spec, nil
 	}
