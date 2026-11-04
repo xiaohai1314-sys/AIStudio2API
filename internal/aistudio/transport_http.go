@@ -273,6 +273,15 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 }
 
 // Do 发送普通 MakerSuite RPC 并让响应 body 持有租约
+// doClientRequest 按 RPC 是否流式选择请求方式：流式（SSE）不套固定超时，
+// 健康的长时间思考流会超过任何固定上限，超时由调用方 ctx 控制；非流式包 unaryRPCTimeout 兜底
+func doClientRequest(ctx context.Context, client *http.Client, request *http.Request, streaming bool) (*http.Response, error) {
+	if streaming {
+		return client.Do(request)
+	}
+	return unaryClientDo(ctx, client, request)
+}
+
 // unaryClientDo 为非流式 HTTP 调用（Drive 文件操作、附件上传等）包上 unaryRPCTimeout 兜底超时，
 // 避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约。
 // 超时 ctx 必须覆盖正文的整个读取过程：请求上下文在 Do 返回后仍然控制正文读取，
@@ -337,7 +346,7 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 	if err != nil {
 		return nil, releaseOnError(err)
 	}
-	response, err := unaryClientDo(ctx, client, request)
+	response, err := doClientRequest(ctx, client, request, rpc.Streaming)
 	if err != nil {
 		return nil, releaseOnError(fmt.Errorf("执行 MakerSuite %s 请求: %w", rpc.Method, err))
 	}

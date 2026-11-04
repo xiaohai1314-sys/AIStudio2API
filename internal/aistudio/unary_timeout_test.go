@@ -69,3 +69,49 @@ func TestUnaryClientDoCancelsAfterClose(t *testing.T) {
 		t.Fatalf("重复关闭 = %v", err)
 	}
 }
+
+// TestDoClientRequestSkipsTimeoutForStreaming 验证流式 RPC 不套非流式兜底超时：
+// 长时间思考的健康 SSE 会超过任何固定上限，超时只由调用方 ctx 控制
+func TestDoClientRequestSkipsTimeoutForStreaming(t *testing.T) {
+	SetUnaryRPCTimeout(50 * time.Millisecond)
+	defer SetUnaryRPCTimeout(defaultUnaryRPCTimeout)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(200 * time.Millisecond)
+		_, _ = io.WriteString(w, "data: late\n\n")
+	}))
+	defer server.Close()
+
+	streamRequest, err := http.NewRequest(http.MethodPost, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamResponse, err := doClientRequest(context.Background(), server.Client(), streamRequest, true)
+	if err != nil {
+		t.Fatalf("流式请求 = %v", err)
+	}
+	streamBody, err := io.ReadAll(streamResponse.Body)
+	_ = streamResponse.Body.Close()
+	if err != nil || string(streamBody) != "data: late\n\n" {
+		t.Fatalf("流式正文 = %q, err=%v（不应被 unary 超时截断）", streamBody, err)
+	}
+
+	unaryRequest, err := http.NewRequest(http.MethodPost, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unaryResponse, err := doClientRequest(context.Background(), server.Client(), unaryRequest, false)
+	if err != nil {
+		t.Fatalf("非流式请求 = %v", err)
+	}
+	_, readErr := io.ReadAll(unaryResponse.Body)
+	_ = unaryResponse.Body.Close()
+	if readErr == nil {
+		t.Fatal("非流式正文读取应当因 unary 超时失败")
+	}
+}
