@@ -495,7 +495,11 @@ func requestBodyMiddleware(ledger RequestLedger, next http.Handler) http.Handler
 		request, response := &bodyCapture{}, &bodyCapture{}
 		r.Body = &captureReader{ReadCloser: r.Body, capture: request}
 		next.ServeHTTP(&captureWriter{ResponseWriter: w, capture: response}, r)
-		body := RequestBody{ID: r.Context().Value(accessLogContextKey{}).(*accessLogMetadata).id(), Time: time.Now().UTC()}
+		metadata, ok := r.Context().Value(accessLogContextKey{}).(*accessLogMetadata)
+		if !ok {
+			return
+		}
+		body := RequestBody{ID: metadata.id(), Time: time.Now().UTC()}
 		body.Request, body.RequestSize = request.result()
 		body.Response, body.ResponseSize = response.result()
 		body.Request, body.Response = redactBody(body.Request), redactBody(body.Response)

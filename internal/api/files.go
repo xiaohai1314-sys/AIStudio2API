@@ -378,6 +378,17 @@ func writeAnthropicFileList(w http.ResponseWriter, r *http.Request, files []aist
 	writeJSON(w, http.StatusOK, officialOrder("anthropic", body))
 }
 
+// gifMaxBytes 是官网式 GIF 转 JPEG 处理允许的最大 GIF 体积，超出时按原始 GIF 直接上传
+const gifMaxBytes int64 = 32 << 20
+
+// gifJPEGData 把 GIF 首帧按官网方式转码，返回空切片表示保持原始格式
+func gifJPEGData(data []byte) ([]byte, string) {
+	if frame, config, ok := decodeGIFFrame(data); ok {
+		return gifJPEG(frame, config), "image/jpeg"
+	}
+	return nil, ""
+}
+
 func multipartStreamMIME(file io.Reader, value string, filename string) (string, io.Reader, error) {
 	probe := make([]byte, 512)
 	count, readErr := io.ReadFull(file, probe)
@@ -395,14 +406,17 @@ func multipartStreamMIME(file io.Reader, value string, filename string) (string,
 	if mediaType != "image/gif" {
 		return mediaType, stream, nil
 	}
-	data, err := io.ReadAll(stream)
-	if err != nil {
+	var buffer bytes.Buffer
+	if _, err := io.Copy(&buffer, io.LimitReader(stream, gifMaxBytes+1)); err != nil {
 		return "", nil, err
 	}
-	if frame, config, ok := decodeGIFFrame(data); ok {
-		data, mediaType = gifJPEG(frame, config), "image/jpeg"
+	if int64(buffer.Len()) > gifMaxBytes {
+		return mediaType, io.MultiReader(&buffer, stream), nil
 	}
-	return mediaType, bytes.NewReader(data), nil
+	if data, converted := gifJPEGData(buffer.Bytes()); converted != "" {
+		return converted, bytes.NewReader(data), nil
+	}
+	return mediaType, bytes.NewReader(buffer.Bytes()), nil
 }
 
 // gifJPEG 与官网上传 GIF 时一样把首帧画在同尺寸白底上，编码为质量 92 的 JPEG
