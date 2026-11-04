@@ -1515,7 +1515,13 @@ func (l *AccountLease) WaitForAuthRefresh(ctx context.Context, generation uint64
 	}
 }
 
-// RefreshStorageState 为 generation 下失效的认证提交一次新认证，generation 之后已有提交时直接复用；prepareCommit 在写入新认证前执行
+// ErrStorageGenerationChanged 表示存储刷新回调执行期间认证代际被其他写入推进，
+// 本次计算的状态已过期而未提交，调用方应重试
+var ErrStorageGenerationChanged = errors.New("存储代际已变化，请重试")
+
+// RefreshStorageState 在租约内刷新认证状态：先加锁校验代际并从磁盘快照，
+// 回调（可能包含网络 I/O，如 OAuth 续签、workers.Reset）不持有 storageMu 执行，
+// 提交前重新加锁复核代际。回调期间若代际被其他写入推进则放弃提交，避免覆盖新状态。
 func (l *AccountLease) RefreshStorageState(
 	generation uint64,
 	update func(*StorageState) error,
@@ -1526,24 +1532,40 @@ func (l *AccountLease) RefreshStorageState(
 	if l.released {
 		return fmt.Errorf("账户租约已释放")
 	}
+	// Phase 1: 持锁校验代际并快照，随后立即释放 storageMu。
+	// 回调持有 storageMu 会长时间阻塞该账户的其他存储访问，
+	// 且 prepareCommit 经 workers.Reset 会再取 manager/账户锁，
+	// 形成 storageMu -> 其他锁的顺序，存在死锁风险。
 	l.account.storageMu.Lock()
-	defer l.account.storageMu.Unlock()
 	l.pool.mu.Lock()
 	currentGeneration := l.account.authGeneration
 	l.pool.mu.Unlock()
 	if generation != currentGeneration {
 		l.authGeneration = currentGeneration
+		l.account.storageMu.Unlock()
 		return nil
 	}
 	state, err := LoadStorageState(l.account.StoragePath)
+	l.account.storageMu.Unlock()
 	if err != nil {
 		return err
 	}
+	// Phase 2: 不持有 storageMu 执行回调
 	if err := update(&state); err != nil {
 		return err
 	}
 	if err := prepareCommit(); err != nil {
 		return err
+	}
+	// Phase 3: 重新加锁，确认代际未被其他写入推进后提交
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
+	l.pool.mu.Lock()
+	currentGeneration = l.account.authGeneration
+	l.pool.mu.Unlock()
+	if generation != currentGeneration {
+		l.authGeneration = currentGeneration
+		return fmt.Errorf("%w: 期望代际 %d，当前代际 %d", ErrStorageGenerationChanged, generation, currentGeneration)
 	}
 	if err := WriteStorageState(l.account.StoragePath, state); err != nil {
 		return err

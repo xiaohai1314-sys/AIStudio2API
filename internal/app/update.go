@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,8 +31,14 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 )
 
-// releaseAPI 为 GitHub 最新发行版本接口
-const releaseAPI = "https://api.github.com/repos/Mag1cFall/AIStudio2API/releases/latest"
+// releaseAPI 为 GitHub 最新发行版本接口（指向本 fork，不跟随上游）
+const releaseAPI = "https://api.github.com/repos/xiaohai1314-sys/AIStudio2API/releases/latest"
+
+// updateSigningPublicKey 是发行包签名的 minisign 公钥，
+// base64 编码内容为：签名算法标识 "Ed"(2 字节) || 密钥 ID(8 字节) || Ed25519 公钥(32 字节)。
+// 私钥由仓库维护者在 GitHub Secrets(MINISIGN_PRIVATE_KEY) 中保管，CI 在发布时为每个发行包生成同名的 .minisig 签名文件。
+// Key ID: bdc920bca9dd67f2
+const updateSigningPublicKey = "RWS9ySC8qd1n8mXKOV/iNbNCNNR9cLGaQNhRH2tLAtGTCBTTrXNz2iyR"
 
 // releaseCheckInterval 为最新发行版本的缓存时长
 const releaseCheckInterval = time.Hour
@@ -187,17 +195,15 @@ func (u *selfUpdater) fetchRelease(ctx context.Context) (*githubRelease, error) 
 	return &release, nil
 }
 
-// download 下载 release 中名为 name 的发行包并按发行版本记录的 SHA-256 校验
+// download 下载 release 中名为 name 的发行包：先用内嵌公钥校验同名的 .minisig
+// 签名（缺失或无效都拒绝安装），再按发行版本记录的 SHA-256 校验完整性。
+// 签名防的是发行仓库被入侵后资产与摘要一并被替换，摘要防的是传输损坏。
 func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name string) ([]byte, error) {
 	index := slices.IndexFunc(release.Assets, func(asset githubAsset) bool { return asset.Name == name })
 	if index < 0 {
 		return nil, fmt.Errorf("发行版本 %s 没有 %s", release.TagName, name)
 	}
 	asset := release.Assets[index]
-	expected, ok := strings.CutPrefix(asset.Digest, "sha256:")
-	if !ok {
-		return nil, fmt.Errorf("发行包 %s 缺少 SHA-256 摘要", name)
-	}
 	response, err := u.get(ctx, asset.URL, "application/octet-stream")
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s: %w", name, err)
@@ -207,10 +213,56 @@ func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s: %w", name, err)
 	}
+	sigIndex := slices.IndexFunc(release.Assets, func(asset githubAsset) bool { return asset.Name == name+".minisig" })
+	if sigIndex < 0 {
+		return nil, fmt.Errorf("发行版本 %s 的 %s 缺少签名文件 %s.minisig，拒绝安装", release.TagName, name, name)
+	}
+	sigResponse, err := u.get(ctx, release.Assets[sigIndex].URL, "text/plain")
+	if err != nil {
+		return nil, fmt.Errorf("下载 %s.minisig: %w", name, err)
+	}
+	sigData, err := io.ReadAll(io.LimitReader(sigResponse.Body, 1024))
+	sigResponse.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("下载 %s.minisig: %w", name, err)
+	}
+	if err := verifyMinisign(archive, sigData); err != nil {
+		return nil, fmt.Errorf("发行包 %s 签名校验失败: %w", name, err)
+	}
+	expected, ok := strings.CutPrefix(asset.Digest, "sha256:")
+	if !ok {
+		return nil, fmt.Errorf("发行包 %s 缺少 SHA-256 摘要", name)
+	}
 	if sum := sha256.Sum256(archive); hex.EncodeToString(sum[:]) != expected {
 		return nil, fmt.Errorf("发行包 %s 的 SHA-256 与发行版本记录不一致", name)
 	}
 	return archive, nil
+}
+
+// verifyMinisign 用 updateSigningPublicKey 验证 data 的 minisign 签名文件。
+// 只校验"签名行"（对文件内容本身的 Ed25519 签名），不校验可信注释的时间戳行。
+func verifyMinisign(data, sigFile []byte) error {
+	const sigAlgEd25519 = "\x45\x64" // minisign 的 Ed25519 算法标识 "Ed"
+	pubRaw, err := base64.StdEncoding.DecodeString(updateSigningPublicKey)
+	if err != nil || len(pubRaw) != 2+8+ed25519.PublicKeySize || string(pubRaw[:2]) != sigAlgEd25519 {
+		return fmt.Errorf("内嵌签名公钥格式错误")
+	}
+	keyID, publicKey := pubRaw[2:10], ed25519.PublicKey(pubRaw[10:])
+	lines := strings.Split(string(sigFile), "\n")
+	if len(lines) < 2 || !strings.HasPrefix(lines[0], "untrusted comment:") {
+		return fmt.Errorf("签名文件格式错误")
+	}
+	sigRaw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(lines[1]))
+	if err != nil || len(sigRaw) != 2+8+ed25519.SignatureSize || string(sigRaw[:2]) != sigAlgEd25519 {
+		return fmt.Errorf("签名文件格式错误")
+	}
+	if string(sigRaw[2:10]) != string(keyID) {
+		return fmt.Errorf("签名密钥 ID 与内嵌公钥不匹配")
+	}
+	if !ed25519.Verify(publicKey, data, sigRaw[10:]) {
+		return fmt.Errorf("签名无效")
+	}
+	return nil
 }
 
 // get 经管理进程出口发出 GET，非 200 响应返回错误
