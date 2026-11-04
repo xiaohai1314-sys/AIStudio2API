@@ -32,8 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtk-3-0 libasound2 libnss3 libdbus-glib-1-2 libxtst6 libxrandr2 libgbm1 libxkbcommon0 \
     libpango-1.0-0 libcairo2 libxcomposite1 libxdamage1 libxfixes3 libx11-xcb1 \
     xvfb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r app && useradd -r -g app app \
+    && mkdir -p /data && chown app:app /data
 WORKDIR /data
+USER app
 ENV LISTEN_ADDR=0.0.0.0:2048
 ENV PREVIEW_LISTEN_ADDR=0.0.0.0:2050
 EXPOSE 2048 2050

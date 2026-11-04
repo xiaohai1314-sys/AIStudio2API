@@ -165,15 +165,34 @@ func (e *RPCError) RetryAt(now time.Time) time.Time {
 	return now.Add(e.RetryDelay)
 }
 
+// unaryRPCTimeout 是非流式 RPC 的兜底超时：上游客户端无整体 Timeout（流式不能加，会杀死正常 SSE），
+// 非流式调用在此处统一封顶，避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约
+const unaryRPCTimeout = 120 * time.Second
+
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
 	if err := c.pacer.Wait(ctx, accountID); err != nil {
 		return nil, err
+	}
+	if !streaming {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeout)
+		defer cancel()
 	}
 	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
 	c.applyBenefitTier(method, accountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)
+	}
+	if !streaming {
+		// 非流式响应在此同步读完再返回：超时 ctx 取消后 Body 读取也会失败，
+		// leaseResponseBody 的租约释放与调用方返回不会因上游 hang 而无限推迟
+		defer response.Body.Close()
+		raw, err := io.ReadAll(response.Body)
+		if err != nil {
+			return nil, fmt.Errorf("读取 AI Studio %s 响应: %w", method, err)
+		}
+		response.Body = io.NopCloser(bytes.NewReader(raw))
 	}
 	return validateRPCResponse(method, response)
 }

@@ -108,13 +108,15 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 
 // DiscoverPublicHeaders 从 AI Studio 首页读取普通 RPC 所需的公开头
 func DiscoverPublicHeaders(ctx context.Context, client *http.Client) (http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, unaryRPCTimeout)
+	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, aiStudioOrigin+"/", nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	request.Header.Set("User-Agent", publicDiscoveryUserAgent)
-	response, err := client.Do(request)
+	response, err := unaryClientDo(ctx, client, request)
 	if err != nil {
 		return nil, fmt.Errorf("读取 AI Studio 首页: %w", err)
 	}
@@ -221,7 +223,7 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 			return nil, nil, fmt.Errorf("创建写代码助手附件上传请求: %w", err)
 		}
 		request.Header = header
-		response, err := client.Do(request)
+		response, err := unaryClientDo(ctx, client, request)
 		if err != nil {
 			return nil, nil, fmt.Errorf("执行写代码助手附件上传: %w", err)
 		}
@@ -271,6 +273,14 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 }
 
 // Do 发送普通 MakerSuite RPC 并让响应 body 持有租约
+// unaryClientDo 为非流式 HTTP 调用（Drive 文件操作、附件上传等）包上 unaryRPCTimeout 兜底超时，
+// 避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约
+func unaryClientDo(ctx context.Context, client *http.Client, request *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, unaryRPCTimeout)
+	defer cancel()
+	return client.Do(request.WithContext(ctx))
+}
+
 func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
 	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: rpc.AccountID})
 	if err != nil {
@@ -296,7 +306,7 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 	if err != nil {
 		return nil, releaseOnError(err)
 	}
-	response, err := client.Do(request)
+	response, err := unaryClientDo(ctx, client, request)
 	if err != nil {
 		return nil, releaseOnError(fmt.Errorf("执行 MakerSuite %s 请求: %w", rpc.Method, err))
 	}

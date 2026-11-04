@@ -133,7 +133,9 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 	}, rpc)
 }
 
-// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie
+// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie。
+// 非流式 RPC（rpc.Body 为 unary 请求或 proof/标题等短请求）在发送阶段包 unaryRPCTimeout 兜底超时，
+// 避免上游或代理 hang 住时无限占用账户租约；流式（buildProxyStreamedMethod）不加，避免杀死正常 SSE
 func (t *WorkerProtectedTransport) doPrepared(
 	ctx context.Context,
 	prompt string,
@@ -142,6 +144,11 @@ func (t *WorkerProtectedTransport) doPrepared(
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
+	if rpc.Method != buildProxyStreamedMethod {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeout)
+		defer cancel()
+	}
 	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, selection, rpc)
 	if err != nil {
 		return nil, err
@@ -775,9 +782,11 @@ func forwardEventsWithLease(
 	defer close(destination)
 	defer func() {
 		if err := lease.Release(); err != nil {
+			// 消费者可能已放弃读取：非阻塞发送，发不出去就记日志丢弃，避免 goroutine 永久阻塞
 			select {
 			case destination <- Event{Kind: EventError, Err: err}:
-			case <-ctx.Done():
+			default:
+				slog.Warn("转发循环租约释放失败且无法投递错误事件", "error", err)
 			}
 		}
 	}()

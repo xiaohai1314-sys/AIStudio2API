@@ -2,6 +2,7 @@ package aistudio
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -160,9 +161,12 @@ func minuteQuotaReset(windowStart string, now time.Time) time.Time {
 }
 
 func nextQuotaDay(now time.Time) time.Time {
+	// 时区名是常量 "America/Los_Angeles"，加载几乎不可能失败；万一 tzdata 缺失（如精简容器未装），
+	// 记日志并降级为 24 小时后重置，而不是 panic 崩掉整个进程（此函数在请求处理路径上被调用）
 	location, err := tzcache.Load(quotaResetTimezone)
 	if err != nil {
-		panic(err)
+		slog.Error("配额重置时区加载失败，降级为 24 小时冷却", "timezone", quotaResetTimezone, "error", err)
+		return now.Add(24 * time.Hour)
 	}
 	local := now.In(location)
 	return time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, location)

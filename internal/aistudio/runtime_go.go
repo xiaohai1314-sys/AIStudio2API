@@ -716,7 +716,10 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 		return "", fmt.Errorf("WAA 解释器摘要不一致 expected=%s actual=%s", challenge.InterpreterHash, hash)
 	}
 	if err := os.MkdirAll(runtime.cacheDirectory, 0o755); err == nil {
-		_ = os.WriteFile(path, data, 0o644)
+		// 缓存写入失败不影响本次运行（返回内存中的 data），但记日志避免磁盘满/权限问题被静默吞掉
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			slog.Warn("WAA 解释器缓存写入失败，下次启动将重新下载", "path", path, "error", err)
+		}
 	}
 	return string(data), nil
 }
