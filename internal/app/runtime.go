@@ -100,6 +100,10 @@ func newRuntime(
 		_ = proxies.Close()
 		return nil, nil, nil, err
 	}
+	// 非流式 RPC 兜底超时来自运行配置，避免上游 hang 住时无限占用账户租约；
+	// 上传与下载按请求总时限封顶，避免慢速链路上的大文件被短超时截断
+	aistudio.SetUnaryRPCTimeout(cfg.UnaryRPCTimeout)
+	aistudio.SetUnaryTransferTimeout(cfg.RequestTimeout)
 	workers := newAccountWorkerManager(
 		pool, accounts, requests, camoufoxPath, globalProxy, cfg.InitTimeout,
 		cfg.WarmWorkerLimit, cfg.MaxActiveWorkers, cfg.WarmStartupConcurrency, cfg.TemporaryChat,

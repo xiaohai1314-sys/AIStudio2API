@@ -108,7 +108,7 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 
 // DiscoverPublicHeaders 从 AI Studio 首页读取普通 RPC 所需的公开头
 func DiscoverPublicHeaders(ctx context.Context, client *http.Client) (http.Header, error) {
-	ctx, cancel := context.WithTimeout(ctx, unaryRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, unaryRPCTimeoutValue())
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, aiStudioOrigin+"/", nil)
 	if err != nil {
@@ -223,7 +223,7 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 			return nil, nil, fmt.Errorf("创建写代码助手附件上传请求: %w", err)
 		}
 		request.Header = header
-		response, err := unaryClientDo(ctx, client, request)
+		response, err := unaryTransferDo(ctx, client, request)
 		if err != nil {
 			return nil, nil, fmt.Errorf("执行写代码助手附件上传: %w", err)
 		}
@@ -274,11 +274,42 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 
 // Do 发送普通 MakerSuite RPC 并让响应 body 持有租约
 // unaryClientDo 为非流式 HTTP 调用（Drive 文件操作、附件上传等）包上 unaryRPCTimeout 兜底超时，
-// 避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约
+// 避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约。
+// 超时 ctx 必须覆盖正文的整个读取过程：请求上下文在 Do 返回后仍然控制正文读取，
+// 因此在函数返回时取消会让调用方读 body 拿到 context canceled，
+// 只能由正文关闭（cancelOnCloseBody）或出错路径触发取消
 func unaryClientDo(ctx context.Context, client *http.Client, request *http.Request) (*http.Response, error) {
-	ctx, cancel := context.WithTimeout(ctx, unaryRPCTimeout)
-	defer cancel()
-	return client.Do(request.WithContext(ctx))
+	return unaryClientDoWithTimeout(ctx, client, request, unaryRPCTimeoutValue())
+}
+
+// unaryTransferDo 为上传与下载这类流式传输包上较长的兜底超时：它们传输的是文件内容，
+// 120 秒的 RPC 超时会截断慢速链路上的大文件
+func unaryTransferDo(ctx context.Context, client *http.Client, request *http.Request) (*http.Response, error) {
+	return unaryClientDoWithTimeout(ctx, client, request, unaryTransferTimeoutValue())
+}
+
+func unaryClientDoWithTimeout(ctx context.Context, client *http.Client, request *http.Request, timeout time.Duration) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	response, err := client.Do(request.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	response.Body = &cancelOnCloseBody{ReadCloser: response.Body, cancel: cancel}
+	return response, nil
+}
+
+// cancelOnCloseBody 在正文关闭时取消请求上下文，让超时 ctx 的生命周期覆盖正文读取
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (body *cancelOnCloseBody) Close() error {
+	err := body.ReadCloser.Close()
+	body.once.Do(body.cancel)
+	return err
 }
 
 func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {

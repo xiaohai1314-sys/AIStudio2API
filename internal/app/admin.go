@@ -1007,6 +1007,10 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("REQUEST_TIMEOUT 无效: %w", err))
 	}
+	unaryRPCTimeout, err := time.ParseDuration(value.UnaryRPCTimeout)
+	if err != nil {
+		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("UNARY_RPC_TIMEOUT 无效: %w", err))
+	}
 	cfg := config.Config{
 		AutoStart:        value.AutoStart,
 		RequestBodyLog:   value.RequestBodyLog,
@@ -1020,6 +1024,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), FirstEventHedgeModels: strings.TrimSpace(value.FirstEventHedgeModels), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
 		PProfAddr: saved.PProfAddr, GeoIPDBPath: saved.GeoIPDBPath,
 		ProxyAPIKey: value.APIKey, PublicRateLimit: saved.PublicRateLimit, PublicRateBurst: saved.PublicRateBurst, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
+		UnaryRPCTimeout: unaryRPCTimeout,
 		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
 		WarmStartupConcurrency: value.WarmStartupConcurrency,
 		PerAccountConcurrency:  value.PerAccountConcurrency,
@@ -1329,6 +1334,7 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		ActiveListenAddr: cfg.ListenAddr, ActiveAPIKey: cfg.ProxyAPIKey,
 		PreviewListenAddr: cfg.PreviewListenAddr, ActivePreviewListenAddr: cfg.PreviewListenAddr,
 		Proxy: cfg.Proxy, InitTimeout: cfg.InitTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(),
+		UnaryRPCTimeout: cfg.UnaryRPCTimeout.String(),
 		WarmWorkerLimit: cfg.WarmWorkerLimit, MaxActiveWorkers: cfg.MaxActiveWorkers,
 		WarmStartupConcurrency: cfg.WarmStartupConcurrency,
 		PerAccountConcurrency:  cfg.PerAccountConcurrency,

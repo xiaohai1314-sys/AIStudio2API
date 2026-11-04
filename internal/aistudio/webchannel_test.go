@@ -6,14 +6,12 @@ import (
 	"time"
 )
 
-// TestBidiFinalizeWithAbandonedConsumer 验证消费者放弃读取 events 且 ctx 未取消时，
-// runBackchannel 的收尾（cancel 先于等待 forwardDone）仍能退出并释放账户租约
-func TestBidiFinalizeWithAbandonedConsumer(t *testing.T) {
+// newFinalizeTestSession 构造只含收尾所需字段的会话，转发与释放逻辑均为真实实现
+func newFinalizeTestSession(eventsCap int, released chan struct{}) *BidiSession {
 	ctx, cancel := context.WithCancel(context.Background())
-	released := make(chan struct{})
 	session := &BidiSession{
 		ctx: ctx, cancel: cancel,
-		events:      make(chan BidiEvent, 1), // 缓冲小于待转发事件数，模拟消费者不排空
+		events:      make(chan BidiEvent, eventsCap),
 		wireEvents:  make(chan BidiEvent, 4),
 		forwarding:  make(chan bool, 1),
 		forwardDone: make(chan struct{}),
@@ -23,37 +21,29 @@ func TestBidiFinalizeWithAbandonedConsumer(t *testing.T) {
 		close(released)
 		return nil
 	}
-	// 模拟 forwardEvents 正在把多个事件转发进小缓冲的 events，且无人消费
-	go func() {
-		defer close(session.forwardDone)
-		defer close(session.events)
-		for _, event := range []BidiEvent{{Kind: BidiEventText}, {Kind: BidiEventText}, {Kind: BidiEventText}} {
-			if !session.forwardEvent(event) {
-				return
-			}
-		}
-	}()
+	return session
+}
+
+// TestBidiFinalizeWithAbandonedConsumer 验证消费者放弃读取 events 且 ctx 未取消时，
+// 真实收尾逻辑仍能退出并释放账户租约（修复前 <-forwardDone 先于 cancel，会永久卡死）
+func TestBidiFinalizeWithAbandonedConsumer(t *testing.T) {
+	released := make(chan struct{})
+	session := newFinalizeTestSession(1, released) // 缓冲 1 小于待转发事件数，模拟消费者不排空
+	go session.forwardEvents(nil)
 	session.forwarding <- true // awaitSetup 在启动 forwardEvents 后写入 true
-	// 模拟 runBackchannel 收尾的顺序（修复后：先 cancel 再等 forwardDone）
-	// 注意 cancel 前先让 forwardEvent 进入阻塞发送：3 个事件塞 1 缓冲，第 3 个必然阻塞
+	session.wireEvents <- BidiEvent{Kind: BidiEventText}
+	session.wireEvents <- BidiEvent{Kind: BidiEventText}
+	session.wireEvents <- BidiEvent{Kind: BidiEventText}
+
+	finished := make(chan struct{})
 	go func() {
-		close(session.wireEvents)
-		session.cancel()
-		if true { // 模拟未修复代码：等待 forwardDone
-			<-session.forwardDone
-		} else {
-			close(session.events)
-			close(session.forwardDone)
-		}
-		if session.release != nil {
-			_ = session.release()
-		}
-		close(session.done)
+		defer close(finished)
+		session.finalize(nil, false)
 	}()
 	select {
-	case <-session.done:
+	case <-finished:
 	case <-time.After(5 * time.Second):
-		t.Fatal("收尾在消费者放弃读取时永久卡死，未释放租约")
+		t.Fatal("收尾在消费者放弃读取时永久卡死")
 	}
 	select {
 	case <-released:
@@ -62,59 +52,72 @@ func TestBidiFinalizeWithAbandonedConsumer(t *testing.T) {
 	}
 }
 
-// TestBidiFinalizeWithConsumer 验证正常消费路径（消费者持续排空）收尾仍能完成且事件投递
+// TestBidiFinalizeWithConsumer 验证消费者持续排空时，真实收尾逻辑完成、事件全部投递且租约释放
 func TestBidiFinalizeWithConsumer(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	session := &BidiSession{
-		ctx: ctx, cancel: cancel,
-		events:      make(chan BidiEvent, 4),
-		wireEvents:  make(chan BidiEvent, 4),
-		forwarding:  make(chan bool, 1),
-		forwardDone: make(chan struct{}),
-		done:        make(chan struct{}),
-	}
-	var released bool
-	session.release = func() error {
-		released = true
-		return nil
-	}
-	// 消费者持续排空
+	released := make(chan struct{})
+	session := newFinalizeTestSession(4, released)
+	delivered := make(chan []BidiEvent, 1)
 	go func() {
-		for range session.events {
+		var events []BidiEvent
+		for event := range session.events {
+			events = append(events, event)
 		}
+		delivered <- events
 	}()
-	// 转发中
-	go func() {
-		defer close(session.forwardDone)
-		defer close(session.events)
-		for _, event := range []BidiEvent{{Kind: BidiEventText}, {Kind: BidiEventClosed}} {
-			if !session.forwardEvent(event) {
-				return
-			}
-		}
-	}()
+	go session.forwardEvents(nil)
 	session.forwarding <- true
+	session.wireEvents <- BidiEvent{Kind: BidiEventText}
+	session.wireEvents <- BidiEvent{Kind: BidiEventText}
+
+	finished := make(chan struct{})
 	go func() {
-		close(session.wireEvents)
-		session.cancel()
-		if true { // 模拟未修复代码：等待 forwardDone
-			<-session.forwardDone
-		} else {
-			close(session.events)
-			close(session.forwardDone)
-		}
-		if session.release != nil {
-			_ = session.release()
-		}
-		close(session.done)
+		defer close(finished)
+		session.finalize(nil, false)
 	}()
 	select {
-	case <-session.done:
+	case <-finished:
 	case <-time.After(5 * time.Second):
 		t.Fatal("正常消费路径收尾卡死")
 	}
-	if !released {
+	select {
+	case <-released:
+	default:
 		t.Fatal("正常消费路径租约未释放")
+	}
+	select {
+	case events := <-delivered:
+		// 两条文本事件 + 收尾投递的 closed 事件
+		if len(events) != 3 || events[len(events)-1].Kind != BidiEventClosed {
+			t.Fatalf("投递事件 = %v，want 2 条文本 + closed", events)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("消费者未收到全部事件")
+	}
+}
+
+// TestBidiFinalizeWithFullWireEvents 验证消费者放弃且 wireEvents 已满时，终止事件投递有超时兜底，收尾不卡死
+func TestBidiFinalizeWithFullWireEvents(t *testing.T) {
+	released := make(chan struct{})
+	session := newFinalizeTestSession(1, released)
+	// 不启动 forwardEvents：wireEvents 塞满后终止事件无处可去
+	for range cap(session.wireEvents) {
+		session.wireEvents <- BidiEvent{Kind: BidiEventText}
+	}
+	session.forwarding <- false // 未进入转发阶段
+
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		session.finalize(nil, false)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wireEvents 满时收尾卡死")
+	}
+	select {
+	case <-released:
+	default:
+		t.Fatal("租约未释放")
 	}
 }

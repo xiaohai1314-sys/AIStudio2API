@@ -609,7 +609,8 @@ cp .env.example .env
 | `GEOIP_DB_PATH` | `runtime/geoip/dbip-country-lite.mmdb` | 本地 GeoIP 数据库路径，供账户环境检查比对出口 IP 所在国家；缺省文件时可在账户页一键下载 DB-IP 免费库（CC BY 4.0） |
 | `PROXY` | 空 | Chrome 导入、登录和账户默认使用的 HTTP、HTTPS 或 SOCKS5 代理，多个代理用逗号分隔组成代理池；留空时使用系统代理 |
 | `INIT_TIMEOUT` | `2m` | 单账户 WAA 初始化超时 |
-| `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 |
+| `REQUEST_TIMEOUT` | `30m` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时；同时作为文件上传与下载的兜底超时 |
+| `UNARY_RPC_TIMEOUT` | `2m` | 非流式上游 RPC（统计 token、embedding、Drive 文件操作等）的兜底超时，避免上游或代理 hang 住时无限占用账户租约 |
 | `WARM_WORKER_LIMIT` | `5` | 常驻预热账户数 |
 | `MAX_ACTIVE_WORKERS` | `10` | 高峰期最多同时运行的 Worker 数 |
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=spidermonkey` 时不限制 |

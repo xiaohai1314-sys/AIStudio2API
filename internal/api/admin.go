@@ -336,6 +336,7 @@ type RuntimeConfig struct {
 	ProxyPool                 []AdminProxy         `json:"proxy_pool"`
 	InitTimeout               string               `json:"init_timeout"`
 	RequestTimeout            string               `json:"request_timeout"`
+	UnaryRPCTimeout           string               `json:"unary_rpc_timeout"`
 	WarmWorkerLimit           int                  `json:"warm_worker_limit"`
 	MaxActiveWorkers          int                  `json:"max_active_workers"`
 	WarmStartupConcurrency    int                  `json:"warm_startup_concurrency"`

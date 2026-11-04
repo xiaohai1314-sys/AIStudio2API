@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
@@ -165,9 +166,49 @@ func (e *RPCError) RetryAt(now time.Time) time.Time {
 	return now.Add(e.RetryDelay)
 }
 
-// unaryRPCTimeout 是非流式 RPC 的兜底超时：上游客户端无整体 Timeout（流式不能加，会杀死正常 SSE），
-// 非流式调用在此处统一封顶，避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约
-const unaryRPCTimeout = 120 * time.Second
+// defaultUnaryRPCTimeout 是非流式 RPC 兜底超时的默认值：上游客户端无整体 Timeout（流式不能加，会杀死正常 SSE），
+// 非流式调用统一封顶，避免上游或代理 hang 住时 goroutine 无限阻塞并占用账户租约
+const defaultUnaryRPCTimeout = 120 * time.Second
+
+// unaryRPCTimeoutNs 保存当前生效的非流式 RPC 兜底超时（纳秒），由 UNARY_RPC_TIMEOUT 在启动时配置
+var unaryRPCTimeoutNs atomic.Int64
+
+func init() { unaryRPCTimeoutNs.Store(int64(defaultUnaryRPCTimeout)) }
+
+// SetUnaryRPCTimeout 设置非流式 RPC 的兜底超时，非正值忽略
+func SetUnaryRPCTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		unaryRPCTimeoutNs.Store(int64(timeout))
+	}
+}
+
+// unaryRPCTimeoutValue 返回当前生效的非流式 RPC 兜底超时
+func unaryRPCTimeoutValue() time.Duration {
+	return time.Duration(unaryRPCTimeoutNs.Load())
+}
+
+// defaultUnaryTransferTimeout 是文件上传与下载这类流式传输的兜底超时默认值，与 REQUEST_TIMEOUT 默认一致
+const defaultUnaryTransferTimeout = 30 * time.Minute
+
+// unaryTransferTimeoutNs 保存当前生效的上传下载兜底超时（纳秒），由 REQUEST_TIMEOUT 在启动时配置
+var unaryTransferTimeoutNs atomic.Int64
+
+func init() { unaryTransferTimeoutNs.Store(int64(defaultUnaryTransferTimeout)) }
+
+// SetUnaryTransferTimeout 设置文件上传与下载的兜底超时，非正值忽略
+func SetUnaryTransferTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		unaryTransferTimeoutNs.Store(int64(timeout))
+	}
+}
+
+// unaryTransferTimeoutValue 返回当前生效的上传下载兜底超时
+func unaryTransferTimeoutValue() time.Duration {
+	return time.Duration(unaryTransferTimeoutNs.Load())
+}
+
+// maxUnaryResponseBytes 是非流式响应正文的读取上限，防止恶意或故障代理返回超大正文打爆内存
+const maxUnaryResponseBytes int64 = 64 << 20
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
 	if err := c.pacer.Wait(ctx, accountID); err != nil {
@@ -175,7 +216,7 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 	}
 	if !streaming {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeout)
+		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeoutValue())
 		defer cancel()
 	}
 	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
@@ -188,9 +229,12 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 		// 非流式响应在此同步读完再返回：超时 ctx 取消后 Body 读取也会失败，
 		// leaseResponseBody 的租约释放与调用方返回不会因上游 hang 而无限推迟
 		defer response.Body.Close()
-		raw, err := io.ReadAll(response.Body)
+		raw, err := io.ReadAll(io.LimitReader(response.Body, maxUnaryResponseBytes+1))
 		if err != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s 响应: %w", method, err)
+		}
+		if int64(len(raw)) > maxUnaryResponseBytes {
+			return nil, fmt.Errorf("AI Studio %s 响应超过 %d MiB", method, maxUnaryResponseBytes>>20)
 		}
 		response.Body = io.NopCloser(bytes.NewReader(raw))
 	}

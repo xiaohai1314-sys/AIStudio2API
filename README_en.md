@@ -609,7 +609,8 @@ Process environment variables override the same keys in `.env`, and those settin
 | `GEOIP_DB_PATH` | `runtime/geoip/dbip-country-lite.mmdb` | Local GeoIP database used by the account environment check to compare the exit IP country; when missing, the Accounts page can download the free DB-IP database (CC BY 4.0) |
 | `PROXY` | empty | HTTP, HTTPS, or SOCKS5 proxy used by Chrome import, login, and accounts without an override; separate several proxies with commas to form a proxy pool; the system proxy is used when empty |
 | `INIT_TIMEOUT` | `2m` | Per-account WAA initialization timeout |
-| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round |
+| `REQUEST_TIMEOUT` | `30m` | Maximum request execution time, restarted at the start of each auto-continuation round; also caps file uploads and downloads |
+| `UNARY_RPC_TIMEOUT` | `2m` | Fallback timeout for non-streaming upstream RPCs (token counting, embeddings, Drive file operations), so a hung upstream or proxy cannot hold an account lease forever |
 | `WARM_WORKER_LIMIT` | `5` | Number of resident prewarmed accounts |
 | `MAX_ACTIVE_WORKERS` | `10` | Maximum workers active during peak load |
 | `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=spidermonkey` |

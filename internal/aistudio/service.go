@@ -135,7 +135,8 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 
 // doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie。
 // 非流式 RPC（rpc.Body 为 unary 请求或 proof/标题等短请求）在发送阶段包 unaryRPCTimeout 兜底超时，
-// 避免上游或代理 hang 住时无限占用账户租约；流式（buildProxyStreamedMethod）不加，避免杀死正常 SSE
+// 避免上游或代理 hang 住时无限占用账户租约；流式（buildProxyStreamedMethod）不加，避免杀死正常 SSE。
+// 超时 ctx 必须覆盖正文读取与 Cookie 写回，成功时由响应体关闭触发取消，只有出错路径立即取消
 func (t *WorkerProtectedTransport) doPrepared(
 	ctx context.Context,
 	prompt string,
@@ -144,11 +145,15 @@ func (t *WorkerProtectedTransport) doPrepared(
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
+	var cancel context.CancelFunc
 	if rpc.Method != buildProxyStreamedMethod {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeout)
-		defer cancel()
+		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeoutValue())
 	}
+	defer func() {
+		if cancel != nil {
+			cancel()
+		}
+	}()
 	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, selection, rpc)
 	if err != nil {
 		return nil, err
@@ -188,6 +193,12 @@ func (t *WorkerProtectedTransport) doPrepared(
 		}()
 	})
 	response.Body = saving
+	if cancel != nil {
+		// 取消交给响应体：cookieSavingBody.Close 会先等待 Cookie 写回完成，再触发取消，
+		// 保证后台协程使用的 ctx 在写回结束前仍然有效
+		response.Body = &cancelOnCloseBody{ReadCloser: saving, cancel: cancel}
+		cancel = nil
+	}
 	reportRequestPhase(ctx, RequestPhaseStreaming)
 	return response, nil
 }

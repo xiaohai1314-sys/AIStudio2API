@@ -1291,7 +1291,7 @@ func uploadDriveMultipart(ctx context.Context, client *http.Client, address stri
 	httpRequest.Header.Set("Content-Type", `multipart/related; boundary="`+gapiBoundary+`"`)
 	httpRequest.Header.Set("Sec-Fetch-Storage-Access", "none")
 	httpRequest.Header.Set("Sec-Fetch-Site", "cross-site")
-	response, err := unaryClientDo(ctx, client, httpRequest)
+	response, err := unaryTransferDo(ctx, client, httpRequest)
 	if err != nil {
 		return FileRef{}, fmt.Errorf("上传 Drive 文件: %w", err)
 	}
@@ -1408,7 +1408,7 @@ func sendDriveUploadChunk(
 		totalValue = fmt.Sprintf("%d", total)
 	}
 	request.Header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%s", offset, end, totalValue))
-	response, err := unaryClientDo(ctx, client, request)
+	response, err := unaryTransferDo(ctx, client, request)
 	if err != nil {
 		return nil, fmt.Errorf("上传 Drive 文件块: %w", err)
 	}
@@ -1466,7 +1466,7 @@ func (t *MakerSuiteHTTPTransport) DownloadDrive(ctx context.Context, accountID s
 	if err != nil {
 		return MediaStream{}, release(err)
 	}
-	response, err := unaryClientDo(ctx, client, httpRequest)
+	response, err := unaryTransferDo(ctx, client, httpRequest)
 	if err != nil {
 		return MediaStream{}, release(fmt.Errorf("下载 Drive 文件: %w", err))
 	}

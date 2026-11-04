@@ -507,6 +507,13 @@ func (s *BidiSession) disableEventForwarding() {
 }
 
 func (s *BidiSession) forwardEvent(event BidiEvent) bool {
+	// 缓冲有空位时优先投递：select 在 events 可写与 ctx.Done 同时就绪时随机选择，
+	// 直接写会把收尾阶段的终止事件随机丢掉；只有缓冲满时才等待或随取消放弃
+	select {
+	case s.events <- event:
+		return true
+	default:
+	}
 	select {
 	case s.events <- event:
 		return true
@@ -743,6 +750,48 @@ func (s *BidiSession) postBatch(ctx context.Context, batch []bidiOutgoing) (resu
 	return nil
 }
 
+// finalEventTimeout 是收尾时投递终止事件的最长等待：消费者已放弃读取且 wireEvents 缓冲满时，
+// 不让收尾卡在 emit 上
+const finalEventTimeout = time.Second
+
+// emitFinal 投递终止事件，最多等待 finalEventTimeout
+func (s *BidiSession) emitFinal(event BidiEvent) {
+	timer := time.NewTimer(finalEventTimeout)
+	defer timer.Stop()
+	select {
+	case s.wireEvents <- event:
+	case <-s.ctx.Done():
+	case <-timer.C:
+	}
+}
+
+// finalize 结束会话：投递终止事件、关闭转发、取消上下文、等待转发退出、释放租约并关闭 done。
+// 先取消再等待转发退出：forwardEvent 阻塞在 events <- event（消费者已放弃读取）时，
+// 取消让它的 ctx.Done 分支解开，否则 <-s.forwardDone 永不返回，租约无法释放。
+// 终止事件在取消前投递；forwardEvents 手里剩余的普通事件在消费者放弃后即使进入缓冲也无人消费，丢弃安全
+func (s *BidiSession) finalize(streamErr error, terminalEvent bool) {
+	if streamErr != nil && s.ctx.Err() == nil {
+		s.emitFinal(BidiEvent{Kind: BidiEventError, Err: streamErr})
+	}
+	if s.ctx.Err() == nil && !terminalEvent {
+		s.emitFinal(BidiEvent{Kind: BidiEventClosed})
+	}
+	close(s.wireEvents)
+	s.cancel()
+	if <-s.forwarding {
+		<-s.forwardDone
+	} else {
+		close(s.events)
+		close(s.forwardDone)
+	}
+	if s.release != nil {
+		s.releaseMu.Lock()
+		s.releaseErr = s.release()
+		s.releaseMu.Unlock()
+	}
+	close(s.done)
+}
+
 func (s *BidiSession) runBackchannel(ready chan<- error) {
 	readyOnce := sync.Once{}
 	reportReady := func(err error) {
@@ -759,30 +808,7 @@ func (s *BidiSession) runBackchannel(ready chan<- error) {
 			readyErr = s.ctx.Err()
 		}
 		reportReady(readyErr)
-		if streamErr != nil && s.ctx.Err() == nil {
-			s.emit(BidiEvent{Kind: BidiEventError, Err: streamErr})
-		}
-		if s.ctx.Err() == nil && !terminalEvent {
-			s.emit(BidiEvent{Kind: BidiEventClosed})
-		}
-		close(s.wireEvents)
-		// 先取消会话再等待转发退出：forwardEvent 阻塞在 events <- event（消费者已放弃读取）时，
-		// 取消让它的 ctx.Done 分支解开，否则 <-s.forwardDone 永不返回，租约无法释放。
-		// 终止事件（错误/关闭）已在上面 emit 时投递，forwardEvents 手里剩的普通事件
-		// 在消费者放弃读取后即使进入缓冲也无人消费，丢弃是安全的
-		s.cancel()
-		if <-s.forwarding {
-			<-s.forwardDone
-		} else {
-			close(s.events)
-			close(s.forwardDone)
-		}
-		if s.release != nil {
-			s.releaseMu.Lock()
-			s.releaseErr = s.release()
-			s.releaseMu.Unlock()
-		}
-		close(s.done)
+		s.finalize(streamErr, terminalEvent)
 	}()
 	first := true
 	for s.ctx.Err() == nil {

@@ -22,6 +22,7 @@ const (
 	defaultPreviewListenAddr  = "127.0.0.1:2050"
 	defaultInitTimeout        = 2 * time.Minute
 	defaultRequestTimeout     = 30 * time.Minute
+	defaultUnaryRPCTimeout    = 2 * time.Minute
 	defaultWarmWorkerLimit    = 5
 	defaultMaxActiveWorkers   = 10
 	defaultWarmConcurrency    = 5
@@ -50,6 +51,7 @@ var configKeys = [...]string{
 	"PROXY",
 	"INIT_TIMEOUT",
 	"REQUEST_TIMEOUT",
+	"UNARY_RPC_TIMEOUT",
 	"WARM_WORKER_LIMIT",
 	"MAX_ACTIVE_WORKERS",
 	"WARM_STARTUP_CONCURRENCY",
@@ -160,9 +162,11 @@ type Config struct {
 	// AccountRateJitter 是请求间隔的随机抖动百分比
 	AccountRateJitter int
 	// EnvironmentBinding 为真时账户认证绑定出口代理与浏览器指纹，二者变化后需要重新登录
-	EnvironmentBinding     bool
-	InitTimeout            time.Duration
-	RequestTimeout         time.Duration
+	EnvironmentBinding bool
+	InitTimeout        time.Duration
+	RequestTimeout     time.Duration
+	// UnaryRPCTimeout 是非流式上游 RPC 的兜底超时，避免上游 hang 住时占死账户租约
+	UnaryRPCTimeout        time.Duration
 	WarmWorkerLimit        int
 	MaxActiveWorkers       int
 	WarmStartupConcurrency int
@@ -203,6 +207,7 @@ func Default() Config {
 		PreviewListenAddr:      defaultPreviewListenAddr,
 		InitTimeout:            defaultInitTimeout,
 		RequestTimeout:         defaultRequestTimeout,
+		UnaryRPCTimeout:        defaultUnaryRPCTimeout,
 		WarmWorkerLimit:        defaultWarmWorkerLimit,
 		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
@@ -270,6 +275,7 @@ var configSetters = map[string]func(*Config, string) error{
 	"PUBLIC_RATE_BURST":         intSetter("PUBLIC_RATE_BURST", func(c *Config) *int { return &c.PublicRateBurst }),
 	"INIT_TIMEOUT":              durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
 	"REQUEST_TIMEOUT":           durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
+	"UNARY_RPC_TIMEOUT":         durationSetter("UNARY_RPC_TIMEOUT", func(c *Config) *time.Duration { return &c.UnaryRPCTimeout }),
 	"ADMIN_USERNAME":            textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
 	"ADMIN_PASSWORD":            textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
 	"ENCRYPT_CREDENTIALS":       boolSetter("ENCRYPT_CREDENTIALS", func(c *Config) *bool { return &c.EncryptCredentials }),
@@ -402,6 +408,12 @@ var configChecks = []configCheck{
 	{[]string{"REQUEST_TIMEOUT"}, func(c Config) error {
 		if c.RequestTimeout <= 0 {
 			return fmt.Errorf("REQUEST_TIMEOUT 必须是正数时长")
+		}
+		return nil
+	}},
+	{[]string{"UNARY_RPC_TIMEOUT"}, func(c Config) error {
+		if c.UnaryRPCTimeout <= 0 {
+			return fmt.Errorf("UNARY_RPC_TIMEOUT 必须是正数时长")
 		}
 		return nil
 	}},
@@ -634,6 +646,7 @@ func (c Config) envValues() map[string]string {
 		"PROXY":                     c.Proxy,
 		"INIT_TIMEOUT":              c.InitTimeout.String(),
 		"REQUEST_TIMEOUT":           c.RequestTimeout.String(),
+		"UNARY_RPC_TIMEOUT":         c.UnaryRPCTimeout.String(),
 		"WARM_WORKER_LIMIT":         strconv.Itoa(c.WarmWorkerLimit),
 		"MAX_ACTIVE_WORKERS":        strconv.Itoa(c.MaxActiveWorkers),
 		"WARM_STARTUP_CONCURRENCY":  strconv.Itoa(c.WarmStartupConcurrency),
