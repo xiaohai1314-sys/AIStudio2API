@@ -591,8 +591,8 @@ Process environment variables override the same keys in `.env`, and those settin
 | `LISTEN_ADDR` | `127.0.0.1:2048` | Management UI and API listen address; a non-loopback address requires `PROXY_API_KEY`, otherwise the service refuses to start |
 | `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | Listen address for HTML previews in the API playground, on a port different from `LISTEN_ADDR`; when it cannot be bound, a free port on the same host is used; the page opens previews at the current host name with the port in use |
 | `PROXY_API_KEY` | empty | Public API key; required when `LISTEN_ADDR` is not a loopback address |
-| `PUBLIC_RATE_LIMIT` | `120` | Public API requests allowed per minute for each API key, or each peer IP when no key is configured; excess requests receive 429 |
-| `PUBLIC_RATE_BURST` | `30` | Requests an API key/IP can make immediately; must not exceed `PUBLIC_RATE_LIMIT` |
+| `PUBLIC_RATE_LIMIT` | `30` | Public API requests allowed per minute for each API key, or each peer IP when no key is configured; excess requests receive 429 |
+| `PUBLIC_RATE_BURST` | `4` | Requests an API key/IP can make immediately; must not exceed `PUBLIC_RATE_LIMIT` |
 | `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
 | `API_KEY_RATE_LIMITS` | empty | Per-minute request limit for individual API keys, each item `key:requests-per-minute`; keys not listed use `PUBLIC_RATE_LIMIT`; also editable on the Settings page |
 | `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
@@ -615,7 +615,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `WARM_STARTUP_CONCURRENCY` | `5` | Camoufox workers cold-started concurrently, shared by prewarming and on-demand scaling; unlimited with `WAA_BACKEND=spidermonkey` |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | Concurrent requests allowed per account |
 | `MAX_ACCOUNTS_PER_PROXY` | `3` | Maximum accounts bound to one proxy; `0` means unlimited. Lowering it rebalances existing bindings; applies immediately when saved on the Settings page |
-| `MAX_CONCURRENCY_PER_PROXY` | `6` | Maximum concurrent requests through one egress; `0` means unlimited. Requests beyond the limit wait in the queue; applies immediately when saved on the Settings page |
+| `MAX_CONCURRENCY_PER_PROXY` | `3` | Maximum concurrent requests through one egress; `0` means unlimited. Requests beyond the limit wait in the queue; applies immediately when saved on the Settings page |
 | `ACCOUNT_RATE_LIMIT` | `60` | Maximum upstream requests per minute per account; `0` means unlimited. Takes effect after restarting the generation service |
 | `ACCOUNT_RATE_JITTER` | `25` | Random jitter percentage for request spacing, `0` to `90`. Takes effect after restarting the generation service |
 | `ENVIRONMENT_BINDING` | `true` | Bind account auth to its egress proxy and browser fingerprint; changing either requires signing in again. Takes effect after restarting the generation service |

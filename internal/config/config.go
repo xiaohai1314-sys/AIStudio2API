@@ -29,10 +29,13 @@ const (
 	// defaultMaxAccountsPerProxy 是同一出口允许绑定的账户数上限
 	defaultMaxAccountsPerProxy = 3
 	// defaultMaxConcurrencyPerProxy 是同一出口允许的并发请求数上限
-	defaultMaxConcurrencyPerProxy = 6
-	defaultPublicRateLimit        = 120
-	defaultPublicRateBurst        = 30
-	defaultGeoIPDBPath            = "runtime/geoip/dbip-country-lite.mmdb"
+	defaultMaxConcurrencyPerProxy = 3
+	// defaultPublicRateLimit 是每个身份每分钟放行的公开 API 请求数，
+	// 收紧默认值使客户端的密集重试（如 Claude Code 连发 10 次重试）在撞墙后迅速收到 429 而不是继续打到上游
+	defaultPublicRateLimit = 30
+	// defaultPublicRateBurst 是令牌桶容量，限制瞬间连发放行的请求数
+	defaultPublicRateBurst = 4
+	defaultGeoIPDBPath     = "runtime/geoip/dbip-country-lite.mmdb"
 )
 
 var configKeys = [...]string{

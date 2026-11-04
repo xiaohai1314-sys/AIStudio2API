@@ -21,7 +21,7 @@ func TestValidateProxyCredentials(t *testing.T) {
 
 // TestProxyLimitValidation 验证出口上限的默认值、0 表示不限制以及负数被拒绝
 func TestProxyLimitValidation(t *testing.T) {
-	if cfg := Default(); cfg.MaxAccountsPerProxy != 3 || cfg.MaxConcurrencyPerProxy != 6 {
+	if cfg := Default(); cfg.MaxAccountsPerProxy != 3 || cfg.MaxConcurrencyPerProxy != 3 {
 		t.Fatalf("出口上限默认值 = %d, %d", cfg.MaxAccountsPerProxy, cfg.MaxConcurrencyPerProxy)
 	}
 	cfg := Default()

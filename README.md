@@ -591,8 +591,8 @@ cp .env.example .env
 | `LISTEN_ADDR` | `127.0.0.1:2048` | 管理页面与 API 监听地址；不是本机回环地址时必须同时设置 `PROXY_API_KEY`，否则服务拒绝启动 |
 | `PREVIEW_LISTEN_ADDR` | `127.0.0.1:2050` | API 试用页 HTML 预览的监听地址，端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口；页面以当前访问的主机名加实际端口打开预览 |
 | `PROXY_API_KEY` | 空 | 公开 API key；`LISTEN_ADDR` 不是本机回环地址时必填 |
-| `PUBLIC_RATE_LIMIT` | `120` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数；超限返回 429 |
-| `PUBLIC_RATE_BURST` | `30` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` |
+| `PUBLIC_RATE_LIMIT` | `30` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数；超限返回 429 |
+| `PUBLIC_RATE_BURST` | `4` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` |
 | `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `API_KEY_RATE_LIMITS` | 空 | 为个别 API key 指定每分钟请求上限，每项写成 `key:每分钟`，未列出的 key 使用 `PUBLIC_RATE_LIMIT`；也可在设置页填写 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
@@ -615,7 +615,7 @@ cp .env.example .env
 | `WARM_STARTUP_CONCURRENCY` | `5` | 同时冷启动的 Camoufox Worker 数，预热与按需扩容共用；`WAA_BACKEND=spidermonkey` 时不限制 |
 | `PER_ACCOUNT_CONCURRENCY` | `2` | 单账号同时执行的请求数 |
 | `MAX_ACCOUNTS_PER_PROXY` | `3` | 同一代理最多绑定的账户数，`0` 表示不限制；调低后重新均衡已有绑定，设置页保存后立即生效 |
-| `MAX_CONCURRENCY_PER_PROXY` | `6` | 同一出口最多同时发出的请求数，`0` 表示不限制；达到上限的请求排队等待，设置页保存后立即生效 |
+| `MAX_CONCURRENCY_PER_PROXY` | `3` | 同一出口最多同时发出的请求数，`0` 表示不限制；达到上限的请求排队等待，设置页保存后立即生效 |
 | `ACCOUNT_RATE_LIMIT` | `60` | 单账户每分钟最多发出的上游请求数，`0` 表示不限制；修改 `.env` 后重启生成服务生效 |
 | `ACCOUNT_RATE_JITTER` | `25` | 请求间隔的随机抖动百分比，取值 `0` 到 `90`；修改 `.env` 后重启生成服务生效 |
 | `ENVIRONMENT_BINDING` | `true` | 账户认证绑定出口代理与浏览器指纹，二者变化后需要重新登录；修改 `.env` 后重启生成服务生效 |
