@@ -389,11 +389,43 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
       - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: '{packages-*,desktop-*}'
           merge-multiple: true
+      - name: Verify Signing Key
+        shell: bash
+        env:
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          embedded=$(sed -n 's/^const updateSigningPublicKey = "\(.*\)"$/\1/p' internal/app/update.go)
+          if [[ -z "$embedded" ]]; then
+            echo "::error::未能在 internal/app/update.go 找到内嵌公钥"
+            exit 1
+          fi
+          if [[ "$MINISIGN_PUBLIC_KEY" != "$embedded" ]]; then
+            echo "::error::MINISIGN_PUBLIC_KEY 与 internal/app/update.go 的内嵌公钥不一致，签名后的发行包会被客户端拒绝"
+            exit 1
+          fi
+      - name: Sign Release Assets
+        shell: bash
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sign-release" ./cmd/sign-release
+          mapfile -d '' files < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::dist 中没有可签名的发行包"
+            exit 1
+          fi
+          "$RUNNER_TEMP/sign-release" "${files[@]}"
       - name: Publish Release
         env:
           GH_TOKEN: ${{ github.token }}
