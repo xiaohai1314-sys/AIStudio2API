@@ -19,6 +19,26 @@ func TestValidateProxyCredentials(t *testing.T) {
 	}
 }
 
+// TestProxyLimitValidation 验证出口上限的默认值、0 表示不限制以及负数被拒绝
+func TestProxyLimitValidation(t *testing.T) {
+	if cfg := Default(); cfg.MaxAccountsPerProxy != 3 || cfg.MaxConcurrencyPerProxy != 6 {
+		t.Fatalf("出口上限默认值 = %d, %d", cfg.MaxAccountsPerProxy, cfg.MaxConcurrencyPerProxy)
+	}
+	cfg := Default()
+	cfg.MaxAccountsPerProxy, cfg.MaxConcurrencyPerProxy = 0, 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("0 表示不限制 = %v", err)
+	}
+	cfg.MaxAccountsPerProxy = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MAX_ACCOUNTS_PER_PROXY") {
+		t.Fatalf("负的账户上限 = %v", err)
+	}
+	cfg.MaxAccountsPerProxy, cfg.MaxConcurrencyPerProxy = 3, -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MAX_CONCURRENCY_PER_PROXY") {
+		t.Fatalf("负的并发上限 = %v", err)
+	}
+}
+
 func TestRemoteListenRequiresAPIKey(t *testing.T) {
 	cfg := Default()
 	cfg.ListenAddr = "0.0.0.0:2048"

@@ -26,9 +26,13 @@ const (
 	defaultMaxActiveWorkers   = 10
 	defaultWarmConcurrency    = 5
 	defaultAccountConcurrency = 2
-	defaultPublicRateLimit    = 120
-	defaultPublicRateBurst    = 30
-	defaultGeoIPDBPath        = "runtime/geoip/dbip-country-lite.mmdb"
+	// defaultMaxAccountsPerProxy 是同一出口允许绑定的账户数上限
+	defaultMaxAccountsPerProxy = 3
+	// defaultMaxConcurrencyPerProxy 是同一出口允许的并发请求数上限
+	defaultMaxConcurrencyPerProxy = 6
+	defaultPublicRateLimit        = 120
+	defaultPublicRateBurst        = 30
+	defaultGeoIPDBPath            = "runtime/geoip/dbip-country-lite.mmdb"
 )
 
 var configKeys = [...]string{
@@ -47,6 +51,8 @@ var configKeys = [...]string{
 	"MAX_ACTIVE_WORKERS",
 	"WARM_STARTUP_CONCURRENCY",
 	"PER_ACCOUNT_CONCURRENCY",
+	"MAX_ACCOUNTS_PER_PROXY",
+	"MAX_CONCURRENCY_PER_PROXY",
 	"ACCOUNT_RATE_LIMIT",
 	"ACCOUNT_RATE_JITTER",
 	"ENVIRONMENT_BINDING",
@@ -158,6 +164,10 @@ type Config struct {
 	MaxActiveWorkers       int
 	WarmStartupConcurrency int
 	PerAccountConcurrency  int
+	// MaxAccountsPerProxy 是同一出口最多绑定的账户数，0 表示不限制
+	MaxAccountsPerProxy int
+	// MaxConcurrencyPerProxy 是同一出口最多同时发出的请求数，0 表示不限制
+	MaxConcurrencyPerProxy int
 	RoutingStrategy        string
 	UpstreamChannels       []string
 	ModelMapping           string
@@ -194,6 +204,8 @@ func Default() Config {
 		MaxActiveWorkers:       defaultMaxActiveWorkers,
 		WarmStartupConcurrency: defaultWarmConcurrency,
 		PerAccountConcurrency:  defaultAccountConcurrency,
+		MaxAccountsPerProxy:    defaultMaxAccountsPerProxy,
+		MaxConcurrencyPerProxy: defaultMaxConcurrencyPerProxy,
 		AccountRateLimit:       60,
 		AccountRateJitter:      25,
 		EnvironmentBinding:     true,
@@ -228,42 +240,44 @@ func invalidValue(key, value string, err error) InvalidValue {
 
 // configSetters 把每个配置键的文本值解析到 Config
 var configSetters = map[string]func(*Config, string) error{
-	"AUTO_START":               boolSetter("AUTO_START", func(c *Config) *bool { return &c.AutoStart }),
-	"REQUEST_BODY_LOG":         boolSetter("REQUEST_BODY_LOG", func(c *Config) *bool { return &c.RequestBodyLog }),
-	"AUTH_FAILURE_PAUSE":       boolSetter("AUTH_FAILURE_PAUSE", func(c *Config) *bool { return &c.AuthFailurePause }),
-	"LOG_FILE":                 boolSetter("LOG_FILE", func(c *Config) *bool { return &c.LogFile }),
-	"ADMIN_AUTH_ENABLED":       boolSetter("ADMIN_AUTH_ENABLED", func(c *Config) *bool { return &c.AdminAuthEnabled }),
-	"BUILD_NATIVE_NONSTREAM":   boolSetter("BUILD_NATIVE_NONSTREAM", func(c *Config) *bool { return &c.BuildNativeNonstream }),
-	"NONSTREAM_KEEPALIVE":      boolSetter("NONSTREAM_KEEPALIVE", func(c *Config) *bool { return &c.NonstreamKeepalive }),
-	"FAKE_STREAM":              boolSetter("FAKE_STREAM", func(c *Config) *bool { return &c.FakeStream }),
-	"SEARCH_MODEL_ALIASES":     boolSetter("SEARCH_MODEL_ALIASES", func(c *Config) *bool { return &c.SearchModelAliases }),
-	"GOOGLE_SEARCH":            boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
-	"YOUTUBE_LINKS":            boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
-	"CONTINUATION_REWRITE":     boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
-	"TEMPORARY_CHAT":           boolSetter("TEMPORARY_CHAT", func(c *Config) *bool { return &c.TemporaryChat }),
-	"LOG_MAX_TOTAL_MB":         intSetter("LOG_MAX_TOTAL_MB", func(c *Config) *int { return &c.LogMaxTotalMB }),
-	"WARM_WORKER_LIMIT":        intSetter("WARM_WORKER_LIMIT", func(c *Config) *int { return &c.WarmWorkerLimit }),
-	"MAX_ACTIVE_WORKERS":       intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
-	"WARM_STARTUP_CONCURRENCY": intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
-	"PER_ACCOUNT_CONCURRENCY":  intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
-	"ACCOUNT_RATE_LIMIT":       intSetter("ACCOUNT_RATE_LIMIT", func(c *Config) *int { return &c.AccountRateLimit }),
-	"ACCOUNT_RATE_JITTER":      intSetter("ACCOUNT_RATE_JITTER", func(c *Config) *int { return &c.AccountRateJitter }),
-	"ENVIRONMENT_BINDING":      boolSetter("ENVIRONMENT_BINDING", func(c *Config) *bool { return &c.EnvironmentBinding }),
-	"PUBLIC_RATE_LIMIT":        intSetter("PUBLIC_RATE_LIMIT", func(c *Config) *int { return &c.PublicRateLimit }),
-	"PUBLIC_RATE_BURST":        intSetter("PUBLIC_RATE_BURST", func(c *Config) *int { return &c.PublicRateBurst }),
-	"INIT_TIMEOUT":             durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
-	"REQUEST_TIMEOUT":          durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
-	"ADMIN_USERNAME":           textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
-	"ADMIN_PASSWORD":           textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
-	"ENCRYPT_CREDENTIALS":      boolSetter("ENCRYPT_CREDENTIALS", func(c *Config) *bool { return &c.EncryptCredentials }),
-	"TRUSTED_PROXY_CIDRS":      textSetter(func(c *Config) *string { return &c.TrustedProxyCIDRs }, strings.TrimSpace),
-	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
-	"FIRST_EVENT_HEDGE_MODELS": textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
-	"CONTINUATION_PROMPT":      textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
-	"AISTUDIO_AUTH_STATES":     textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
-	"LISTEN_ADDR":              textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
-	"PREVIEW_LISTEN_ADDR":      textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
-	"PPROF_ADDR":               textSetter(func(c *Config) *string { return &c.PProfAddr }, strings.TrimSpace),
+	"AUTO_START":                boolSetter("AUTO_START", func(c *Config) *bool { return &c.AutoStart }),
+	"REQUEST_BODY_LOG":          boolSetter("REQUEST_BODY_LOG", func(c *Config) *bool { return &c.RequestBodyLog }),
+	"AUTH_FAILURE_PAUSE":        boolSetter("AUTH_FAILURE_PAUSE", func(c *Config) *bool { return &c.AuthFailurePause }),
+	"LOG_FILE":                  boolSetter("LOG_FILE", func(c *Config) *bool { return &c.LogFile }),
+	"ADMIN_AUTH_ENABLED":        boolSetter("ADMIN_AUTH_ENABLED", func(c *Config) *bool { return &c.AdminAuthEnabled }),
+	"BUILD_NATIVE_NONSTREAM":    boolSetter("BUILD_NATIVE_NONSTREAM", func(c *Config) *bool { return &c.BuildNativeNonstream }),
+	"NONSTREAM_KEEPALIVE":       boolSetter("NONSTREAM_KEEPALIVE", func(c *Config) *bool { return &c.NonstreamKeepalive }),
+	"FAKE_STREAM":               boolSetter("FAKE_STREAM", func(c *Config) *bool { return &c.FakeStream }),
+	"SEARCH_MODEL_ALIASES":      boolSetter("SEARCH_MODEL_ALIASES", func(c *Config) *bool { return &c.SearchModelAliases }),
+	"GOOGLE_SEARCH":             boolSetter("GOOGLE_SEARCH", func(c *Config) *bool { return &c.GoogleSearch }),
+	"YOUTUBE_LINKS":             boolSetter("YOUTUBE_LINKS", func(c *Config) *bool { return &c.YouTubeLinks }),
+	"CONTINUATION_REWRITE":      boolSetter("CONTINUATION_REWRITE", func(c *Config) *bool { return &c.ContinuationRewrite }),
+	"TEMPORARY_CHAT":            boolSetter("TEMPORARY_CHAT", func(c *Config) *bool { return &c.TemporaryChat }),
+	"LOG_MAX_TOTAL_MB":          intSetter("LOG_MAX_TOTAL_MB", func(c *Config) *int { return &c.LogMaxTotalMB }),
+	"WARM_WORKER_LIMIT":         intSetter("WARM_WORKER_LIMIT", func(c *Config) *int { return &c.WarmWorkerLimit }),
+	"MAX_ACTIVE_WORKERS":        intSetter("MAX_ACTIVE_WORKERS", func(c *Config) *int { return &c.MaxActiveWorkers }),
+	"WARM_STARTUP_CONCURRENCY":  intSetter("WARM_STARTUP_CONCURRENCY", func(c *Config) *int { return &c.WarmStartupConcurrency }),
+	"PER_ACCOUNT_CONCURRENCY":   intSetter("PER_ACCOUNT_CONCURRENCY", func(c *Config) *int { return &c.PerAccountConcurrency }),
+	"MAX_ACCOUNTS_PER_PROXY":    intSetter("MAX_ACCOUNTS_PER_PROXY", func(c *Config) *int { return &c.MaxAccountsPerProxy }),
+	"MAX_CONCURRENCY_PER_PROXY": intSetter("MAX_CONCURRENCY_PER_PROXY", func(c *Config) *int { return &c.MaxConcurrencyPerProxy }),
+	"ACCOUNT_RATE_LIMIT":        intSetter("ACCOUNT_RATE_LIMIT", func(c *Config) *int { return &c.AccountRateLimit }),
+	"ACCOUNT_RATE_JITTER":       intSetter("ACCOUNT_RATE_JITTER", func(c *Config) *int { return &c.AccountRateJitter }),
+	"ENVIRONMENT_BINDING":       boolSetter("ENVIRONMENT_BINDING", func(c *Config) *bool { return &c.EnvironmentBinding }),
+	"PUBLIC_RATE_LIMIT":         intSetter("PUBLIC_RATE_LIMIT", func(c *Config) *int { return &c.PublicRateLimit }),
+	"PUBLIC_RATE_BURST":         intSetter("PUBLIC_RATE_BURST", func(c *Config) *int { return &c.PublicRateBurst }),
+	"INIT_TIMEOUT":              durationSetter("INIT_TIMEOUT", func(c *Config) *time.Duration { return &c.InitTimeout }),
+	"REQUEST_TIMEOUT":           durationSetter("REQUEST_TIMEOUT", func(c *Config) *time.Duration { return &c.RequestTimeout }),
+	"ADMIN_USERNAME":            textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
+	"ADMIN_PASSWORD":            textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
+	"ENCRYPT_CREDENTIALS":       boolSetter("ENCRYPT_CREDENTIALS", func(c *Config) *bool { return &c.EncryptCredentials }),
+	"TRUSTED_PROXY_CIDRS":       textSetter(func(c *Config) *string { return &c.TrustedProxyCIDRs }, strings.TrimSpace),
+	"FIRST_EVENT_HEDGE":         textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
+	"FIRST_EVENT_HEDGE_MODELS":  textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
+	"CONTINUATION_PROMPT":       textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
+	"AISTUDIO_AUTH_STATES":      textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
+	"LISTEN_ADDR":               textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
+	"PREVIEW_LISTEN_ADDR":       textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
+	"PPROF_ADDR":                textSetter(func(c *Config) *string { return &c.PProfAddr }, strings.TrimSpace),
 	"GEOIP_DB_PATH": func(c *Config, value string) error {
 		if path := strings.TrimSpace(value); path != "" {
 			c.GeoIPDBPath = path
@@ -406,6 +420,15 @@ var configChecks = []configCheck{
 	{[]string{"PER_ACCOUNT_CONCURRENCY"}, func(c Config) error {
 		if c.PerAccountConcurrency <= 0 {
 			return fmt.Errorf("PER_ACCOUNT_CONCURRENCY 必须是正整数")
+		}
+		return nil
+	}},
+	{[]string{"MAX_ACCOUNTS_PER_PROXY", "MAX_CONCURRENCY_PER_PROXY"}, func(c Config) error {
+		if c.MaxAccountsPerProxy < 0 {
+			return fmt.Errorf("MAX_ACCOUNTS_PER_PROXY 不能为负数")
+		}
+		if c.MaxConcurrencyPerProxy < 0 {
+			return fmt.Errorf("MAX_CONCURRENCY_PER_PROXY 不能为负数")
 		}
 		return nil
 	}},
@@ -577,52 +600,54 @@ func (c Config) KeepEnvironment(saved Config) Config {
 // envValues 返回每个配置键在 .env 中的文本值
 func (c Config) envValues() map[string]string {
 	return map[string]string{
-		"AUTO_START":               strconv.FormatBool(c.AutoStart),
-		"REQUEST_BODY_LOG":         strconv.FormatBool(c.RequestBodyLog),
-		"AUTH_FAILURE_PAUSE":       strconv.FormatBool(c.AuthFailurePause),
-		"LOG_FILE":                 strconv.FormatBool(c.LogFile),
-		"LOG_MAX_TOTAL_MB":         strconv.Itoa(c.LogMaxTotalMB),
-		"ADMIN_AUTH_ENABLED":       strconv.FormatBool(c.AdminAuthEnabled),
-		"ADMIN_USERNAME":           c.AdminUsername,
-		"ADMIN_PASSWORD":           c.AdminPassword,
-		"ENCRYPT_CREDENTIALS":      strconv.FormatBool(c.EncryptCredentials),
-		"TRUSTED_PROXY_CIDRS":      c.TrustedProxyCIDRs,
-		"BUILD_NATIVE_NONSTREAM":   strconv.FormatBool(c.BuildNativeNonstream),
-		"NONSTREAM_KEEPALIVE":      strconv.FormatBool(c.NonstreamKeepalive),
-		"FAKE_STREAM":              strconv.FormatBool(c.FakeStream),
-		"YOUTUBE_LINKS":            strconv.FormatBool(c.YouTubeLinks),
-		"SEARCH_MODEL_ALIASES":     strconv.FormatBool(c.SearchModelAliases),
-		"GOOGLE_SEARCH":            strconv.FormatBool(c.GoogleSearch),
-		"FIRST_EVENT_HEDGE":        c.FirstEventHedge,
-		"FIRST_EVENT_HEDGE_MODELS": c.FirstEventHedgeModels,
-		"CONTINUATION_REWRITE":     strconv.FormatBool(c.ContinuationRewrite),
-		"CONTINUATION_PROMPT":      c.ContinuationPrompt,
-		"AISTUDIO_AUTH_STATES":     c.AuthStates,
-		"LISTEN_ADDR":              c.ListenAddr,
-		"PREVIEW_LISTEN_ADDR":      c.PreviewListenAddr,
-		"PROXY_API_KEY":            c.ProxyAPIKey,
-		"PUBLIC_RATE_LIMIT":        strconv.Itoa(c.PublicRateLimit),
-		"PUBLIC_RATE_BURST":        strconv.Itoa(c.PublicRateBurst),
-		"PROXY":                    c.Proxy,
-		"INIT_TIMEOUT":             c.InitTimeout.String(),
-		"REQUEST_TIMEOUT":          c.RequestTimeout.String(),
-		"WARM_WORKER_LIMIT":        strconv.Itoa(c.WarmWorkerLimit),
-		"MAX_ACTIVE_WORKERS":       strconv.Itoa(c.MaxActiveWorkers),
-		"WARM_STARTUP_CONCURRENCY": strconv.Itoa(c.WarmStartupConcurrency),
-		"PER_ACCOUNT_CONCURRENCY":  strconv.Itoa(c.PerAccountConcurrency),
-		"ACCOUNT_RATE_LIMIT":       strconv.Itoa(c.AccountRateLimit),
-		"ACCOUNT_RATE_JITTER":      strconv.Itoa(c.AccountRateJitter),
-		"ENVIRONMENT_BINDING":      strconv.FormatBool(c.EnvironmentBinding),
-		"ROUTING_STRATEGY":         c.RoutingStrategy,
-		"UPSTREAM_CHANNELS":        strings.Join(c.UpstreamChannels, ","),
-		"MODEL_MAPPING":            c.ModelMapping,
-		"MODEL_CHANNELS":           c.ModelChannels,
-		"API_KEY_ACCOUNTS":         c.APIKeyAccounts,
-		"API_KEY_RATE_LIMITS":      c.APIKeyRateLimits,
-		"TEMPORARY_CHAT":           strconv.FormatBool(c.TemporaryChat),
-		"WAA_BACKEND":              c.WAABackend,
-		"MEDIA_OUTPUT":             c.MediaOutput,
-		"MEDIA_BASE_URL":           c.MediaBaseURL,
+		"AUTO_START":                strconv.FormatBool(c.AutoStart),
+		"REQUEST_BODY_LOG":          strconv.FormatBool(c.RequestBodyLog),
+		"AUTH_FAILURE_PAUSE":        strconv.FormatBool(c.AuthFailurePause),
+		"LOG_FILE":                  strconv.FormatBool(c.LogFile),
+		"LOG_MAX_TOTAL_MB":          strconv.Itoa(c.LogMaxTotalMB),
+		"ADMIN_AUTH_ENABLED":        strconv.FormatBool(c.AdminAuthEnabled),
+		"ADMIN_USERNAME":            c.AdminUsername,
+		"ADMIN_PASSWORD":            c.AdminPassword,
+		"ENCRYPT_CREDENTIALS":       strconv.FormatBool(c.EncryptCredentials),
+		"TRUSTED_PROXY_CIDRS":       c.TrustedProxyCIDRs,
+		"BUILD_NATIVE_NONSTREAM":    strconv.FormatBool(c.BuildNativeNonstream),
+		"NONSTREAM_KEEPALIVE":       strconv.FormatBool(c.NonstreamKeepalive),
+		"FAKE_STREAM":               strconv.FormatBool(c.FakeStream),
+		"YOUTUBE_LINKS":             strconv.FormatBool(c.YouTubeLinks),
+		"SEARCH_MODEL_ALIASES":      strconv.FormatBool(c.SearchModelAliases),
+		"GOOGLE_SEARCH":             strconv.FormatBool(c.GoogleSearch),
+		"FIRST_EVENT_HEDGE":         c.FirstEventHedge,
+		"FIRST_EVENT_HEDGE_MODELS":  c.FirstEventHedgeModels,
+		"CONTINUATION_REWRITE":      strconv.FormatBool(c.ContinuationRewrite),
+		"CONTINUATION_PROMPT":       c.ContinuationPrompt,
+		"AISTUDIO_AUTH_STATES":      c.AuthStates,
+		"LISTEN_ADDR":               c.ListenAddr,
+		"PREVIEW_LISTEN_ADDR":       c.PreviewListenAddr,
+		"PROXY_API_KEY":             c.ProxyAPIKey,
+		"PUBLIC_RATE_LIMIT":         strconv.Itoa(c.PublicRateLimit),
+		"PUBLIC_RATE_BURST":         strconv.Itoa(c.PublicRateBurst),
+		"PROXY":                     c.Proxy,
+		"INIT_TIMEOUT":              c.InitTimeout.String(),
+		"REQUEST_TIMEOUT":           c.RequestTimeout.String(),
+		"WARM_WORKER_LIMIT":         strconv.Itoa(c.WarmWorkerLimit),
+		"MAX_ACTIVE_WORKERS":        strconv.Itoa(c.MaxActiveWorkers),
+		"WARM_STARTUP_CONCURRENCY":  strconv.Itoa(c.WarmStartupConcurrency),
+		"PER_ACCOUNT_CONCURRENCY":   strconv.Itoa(c.PerAccountConcurrency),
+		"MAX_ACCOUNTS_PER_PROXY":    strconv.Itoa(c.MaxAccountsPerProxy),
+		"MAX_CONCURRENCY_PER_PROXY": strconv.Itoa(c.MaxConcurrencyPerProxy),
+		"ACCOUNT_RATE_LIMIT":        strconv.Itoa(c.AccountRateLimit),
+		"ACCOUNT_RATE_JITTER":       strconv.Itoa(c.AccountRateJitter),
+		"ENVIRONMENT_BINDING":       strconv.FormatBool(c.EnvironmentBinding),
+		"ROUTING_STRATEGY":          c.RoutingStrategy,
+		"UPSTREAM_CHANNELS":         strings.Join(c.UpstreamChannels, ","),
+		"MODEL_MAPPING":             c.ModelMapping,
+		"MODEL_CHANNELS":            c.ModelChannels,
+		"API_KEY_ACCOUNTS":          c.APIKeyAccounts,
+		"API_KEY_RATE_LIMITS":       c.APIKeyRateLimits,
+		"TEMPORARY_CHAT":            strconv.FormatBool(c.TemporaryChat),
+		"WAA_BACKEND":               c.WAABackend,
+		"MEDIA_OUTPUT":              c.MediaOutput,
+		"MEDIA_BASE_URL":            c.MediaBaseURL,
 	}
 }
 

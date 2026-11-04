@@ -340,6 +340,8 @@ type RuntimeConfig struct {
 	MaxActiveWorkers          int                  `json:"max_active_workers"`
 	WarmStartupConcurrency    int                  `json:"warm_startup_concurrency"`
 	PerAccountConcurrency     int                  `json:"per_account_concurrency"`
+	MaxAccountsPerProxy       int                  `json:"max_accounts_per_proxy"`
+	MaxConcurrencyPerProxy    int                  `json:"max_concurrency_per_proxy"`
 	RoutingStrategy           string               `json:"routing_strategy"`
 	UpstreamChannels          []string             `json:"upstream_channels"`
 	ModelMapping              string               `json:"model_mapping"`

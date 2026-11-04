@@ -264,6 +264,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkers': '尖峰 Worker 上限',
   'settings.warmStartupConcurrency': 'Camoufox 同時啟動數',
   'settings.perAccountConcurrency': '每個帳號的同時請求數',
+  'settings.maxAccountsPerProxy': '單出口帳號上限',
+  'settings.maxConcurrencyPerProxy': '單出口請求並發',
   'settings.routingStrategy': '帳號選擇策略',
   'settings.routingRoundRobin': '輪流分配',
   'settings.routingFillFirst': '優先使用同一帳號',
@@ -1412,6 +1414,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkersHelp': '尖峰時最多同時執行的 Worker 數',
   'settings.warmStartupConcurrencyHelp': '同時冷啟動的 Camoufox Worker 數',
   'settings.perAccountConcurrencyHelp': '單一帳號同時執行的請求數。',
+  'settings.maxAccountsPerProxyHelp': '同一代理最多綁定的帳號數，0 表示不限制。',
+  'settings.maxConcurrencyPerProxyHelp': '同一代理同時發出的請求數，0 表示不限制。',
   'settings.buildNativeHelp': '非串流請求優先使用 Build，無法使用時改用 Playground',
   'settings.nonstreamKeepaliveHelp':
     '等待結果時每 10 秒寫出一個換行，避免反向代理因長時間無資料而中斷連線',

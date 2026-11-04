@@ -73,6 +73,8 @@ const sections: {
       'max_active_workers',
       'warm_startup_concurrency',
       'per_account_concurrency',
+      'max_accounts_per_proxy',
+      'max_concurrency_per_proxy',
       'routing_strategy',
     ],
   },
@@ -684,6 +686,38 @@ async function saveConfig(): Promise<void> {
                 :class="inputClass"
                 type="number"
                 min="1"
+              />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.maxAccountsPerProxy')"
+              control-id="setting-max-accounts-per-proxy"
+              :description="t('settings.maxAccountsPerProxyHelp')"
+              effect="immediate"
+              :changed="changedFields.has('max_accounts_per_proxy')"
+              :env="environmentKey('max_accounts_per_proxy')"
+            >
+              <input
+                id="setting-max-accounts-per-proxy"
+                v-model.number="form.max_accounts_per_proxy"
+                :class="inputClass"
+                type="number"
+                min="0"
+              />
+            </SettingRow>
+            <SettingRow
+              :label="t('settings.maxConcurrencyPerProxy')"
+              control-id="setting-max-concurrency-per-proxy"
+              :description="t('settings.maxConcurrencyPerProxyHelp')"
+              effect="immediate"
+              :changed="changedFields.has('max_concurrency_per_proxy')"
+              :env="environmentKey('max_concurrency_per_proxy')"
+            >
+              <input
+                id="setting-max-concurrency-per-proxy"
+                v-model.number="form.max_concurrency_per_proxy"
+                :class="inputClass"
+                type="number"
+                min="0"
               />
             </SettingRow>
             <SettingRow

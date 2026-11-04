@@ -307,12 +307,18 @@ type AccountPool struct {
 	byID                  map[string]*Account
 	resources             map[string]string
 	perAccountConcurrency int
-	routingStrategy       string
-	lastPicked            map[string]string
-	lastPickedChannel     map[string]Channel
-	channels              []Channel
-	modelChannels         map[string]Channel
-	apiKeyAccounts        map[string][]string
+	// maxConcurrencyPerProxy 是同一出口允许的并发请求数，0 表示不限制
+	maxConcurrencyPerProxy int
+	// globalProxy 是未绑定代理池时账户使用的全局代理，用于统计出口并发
+	globalProxy string
+	// egressActive 记录各出口当前进行中的请求数
+	egressActive      map[string]int
+	routingStrategy   string
+	lastPicked        map[string]string
+	lastPickedChannel map[string]Channel
+	channels          []Channel
+	modelChannels     map[string]Channel
+	apiKeyAccounts    map[string][]string
 	// risk 保存各账户在当前窗口内的风控响应计数
 	risk map[string]*accountRiskWindow
 	// endpointRisk 保存各模型与通道在当前窗口内的请求与风控计数
@@ -336,6 +342,7 @@ type AccountLease struct {
 	checkedAt             time.Time
 	refreshRuntime        bool
 	channel               Channel
+	egress                string
 	// ignorePlanLimitCooldown 表示租约按套餐限额回退取得，套餐限额冷却不阻止它发送
 	ignorePlanLimitCooldown bool
 	operation               sync.Mutex
@@ -757,6 +764,7 @@ func NewAccountPool(accounts []*Account, perAccountConcurrency int) *AccountPool
 	p := &AccountPool{
 		accounts: append([]*Account(nil), accounts...), byID: make(map[string]*Account, len(accounts)),
 		resources: make(map[string]string), perAccountConcurrency: perAccountConcurrency, changed: make(chan struct{}),
+		egressActive:    make(map[string]int),
 		routingStrategy: "round-robin", lastPicked: make(map[string]string), lastPickedChannel: make(map[string]Channel),
 		risk: make(map[string]*accountRiskWindow), endpointRisk: make(map[string]*endpointRiskEntry),
 	}
@@ -1732,6 +1740,12 @@ func (l *AccountLease) Release() error {
 		} else if l.account.active > 0 {
 			l.account.active--
 		}
+		if l.egress != "" && l.pool.egressActive[l.egress] > 0 {
+			l.pool.egressActive[l.egress]--
+			if l.pool.egressActive[l.egress] == 0 {
+				delete(l.pool.egressActive, l.egress)
+			}
+		}
 		if l.account.active == 0 && !l.account.exclusive && l.account.authRefreshers == 0 && l.account.leaseLock != nil {
 			if err := l.account.leaseLock.Unlock(); err != nil {
 				l.err = err
@@ -2553,6 +2567,10 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 		if account.exclusive || account.exclusiveWaiters > 0 || account.authRefreshers > 0 || account.active >= p.perAccountConcurrency {
 			continue
 		}
+		egress := p.egressLocked(account)
+		if p.maxConcurrencyPerProxy > 0 && egress != "" && p.egressActive[egress] >= p.maxConcurrencyPerProxy {
+			continue
+		}
 		if selection.ResourceID == "" && !selection.anyState {
 			if cooldown, active := selectionCooldown(account, ChannelCooldownScope(candidate.channel, selectionAccessScope(selection)), selection, now); active {
 				if earliest.IsZero() || cooldown.Until.Before(earliest) {
@@ -2581,13 +2599,16 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 			refreshRuntime = leaseLock != nil
 		}
 		account.active++
+		if egress != "" {
+			p.egressActive[egress]++
+		}
 		account.LastUsed = now
 		p.lastPicked[selectionAccessScope(selection)] = account.ID
 		p.lastPickedChannel[selectionAccessScope(selection)] = candidate.channel
 		return &AccountLease{
 			pool: p, account: account, authGeneration: account.authGeneration,
 			modelAccessGeneration: account.modelAccessGeneration, refreshRuntime: refreshRuntime, checkedAt: now.UTC(),
-			channel: candidate.channel, ignorePlanLimitCooldown: selection.IgnorePlanLimitCooldown,
+			channel: candidate.channel, egress: egress, ignorePlanLimitCooldown: selection.IgnorePlanLimitCooldown,
 		}, time.Time{}, true, nil
 	}
 	return nil, earliest, waitable, nil
@@ -2761,6 +2782,34 @@ func (p *AccountPool) SetPerAccountConcurrency(limit int) {
 	p.perAccountConcurrency = limit
 	p.notifyLocked()
 	p.mu.Unlock()
+}
+
+// SetProxyLimits 设置同一出口的并发请求上限与未绑定代理池时使用的全局代理，0 表示不限制
+func (p *AccountPool) SetProxyLimits(maxConcurrency int, globalProxy string) {
+	p.mu.Lock()
+	p.maxConcurrencyPerProxy = maxConcurrency
+	p.globalProxy = strings.TrimSpace(globalProxy)
+	p.notifyLocked()
+	p.mu.Unlock()
+}
+
+// SetProxyConcurrencyLimit 设置同一出口的并发请求上限，0 表示不限制
+func (p *AccountPool) SetProxyConcurrencyLimit(maxConcurrency int) {
+	p.mu.Lock()
+	p.maxConcurrencyPerProxy = maxConcurrency
+	p.notifyLocked()
+	p.mu.Unlock()
+}
+
+// egressLocked 返回账户请求实际使用的出口，直连时返回空字符串
+func (p *AccountPool) egressLocked(account *Account) string {
+	if proxy := strings.TrimSpace(account.Config.Proxy); proxy != "" {
+		return proxy
+	}
+	if bound := account.boundProxy.Load(); bound != nil {
+		return *bound
+	}
+	return p.globalProxy
 }
 
 // OrderCandidates 按当前策略排列候选账户而不推进轮询位置

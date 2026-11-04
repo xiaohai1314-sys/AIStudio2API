@@ -361,6 +361,8 @@ export interface ServiceConfig {
   max_active_workers: number
   warm_startup_concurrency: number
   per_account_concurrency: number
+  max_accounts_per_proxy: number
+  max_concurrency_per_proxy: number
   routing_strategy: 'round-robin' | 'fill-first'
   upstream_channels: UpstreamChannel[]
   model_mapping: string

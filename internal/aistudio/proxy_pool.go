@@ -36,6 +36,8 @@ type ProxyPool struct {
 	scorePath string
 	saveTimer *time.Timer
 	closed    bool
+	// maxAccountsPerProxy 是同一代理最多绑定的账户数，0 表示不限制
+	maxAccountsPerProxy int
 }
 
 // proxyEntry 表示代理池中的一个代理与其健康状态
@@ -87,6 +89,16 @@ func NewProxyPool(pool *AccountPool, proxies []string) *ProxyPool {
 	return &ProxyPool{pool: pool, entries: entries}
 }
 
+// SetAccountLimit 设置同一代理最多绑定的账户数，0 表示不限制
+func (p *ProxyPool) SetAccountLimit(limit int) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.maxAccountsPerProxy = max(limit, 0)
+	p.mu.Unlock()
+}
+
 // Assign 为未固定代理的账户绑定代理：保留指向可用代理的已有绑定，其余账户选绑定数最少的可用代理并写入运行状态，返回绑定变化的账户
 func (p *ProxyPool) Assign() ([]string, error) {
 	if p == nil {
@@ -118,7 +130,7 @@ func (p *ProxyPool) assignLocked() ([]string, error) {
 		if current := account.boundProxy.Load(); bound == "" && current != nil {
 			bound = *current
 		}
-		if slices.Contains(available, bound) {
+		if slices.Contains(available, bound) && p.canBindLocked(available, counts, bound) {
 			counts[bound]++
 			bindings[account] = bound
 			continue
@@ -180,11 +192,38 @@ func (p *ProxyPool) Next() string {
 	return chosen
 }
 
+// canBindLocked 判断代理是否还能再绑定一个账户；超过上限且其他代理仍有空位时不再绑定
+func (p *ProxyPool) canBindLocked(available []string, counts map[string]int, proxy string) bool {
+	if p.maxAccountsPerProxy <= 0 || counts[proxy] < p.maxAccountsPerProxy {
+		return true
+	}
+	return !p.hasCapacityLocked(available, counts)
+}
+
+// hasCapacityLocked 判断是否还有代理未达到绑定上限
+func (p *ProxyPool) hasCapacityLocked(available []string, counts map[string]int) bool {
+	for _, proxy := range available {
+		if counts[proxy] < p.maxAccountsPerProxy {
+			return true
+		}
+	}
+	return false
+}
+
 // chooseLocked 在可用代理中选出出口质量最高、健康评分最高、绑定数最少的代理
 func (p *ProxyPool) chooseLocked(available []string, counts map[string]int) string {
-	chosen := available[0]
+	candidates := available
+	if p.maxAccountsPerProxy > 0 && p.hasCapacityLocked(available, counts) {
+		candidates = make([]string, 0, len(available))
+		for _, proxy := range available {
+			if counts[proxy] < p.maxAccountsPerProxy {
+				candidates = append(candidates, proxy)
+			}
+		}
+	}
+	chosen := candidates[0]
 	chosenRank, chosenScore := p.rankOfLocked(chosen), p.scoreOfLocked(chosen)
-	for _, proxy := range available[1:] {
+	for _, proxy := range candidates[1:] {
 		rank, score := p.rankOfLocked(proxy), p.scoreOfLocked(proxy)
 		better := rank > chosenRank ||
 			rank == chosenRank && (score > chosenScore || score == chosenScore && counts[proxy] < counts[chosen])

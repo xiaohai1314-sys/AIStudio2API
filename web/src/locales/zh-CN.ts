@@ -262,6 +262,8 @@ export const messages = {
   'settings.maxActiveWorkers': '峰值 Worker 上限',
   'settings.warmStartupConcurrency': 'Camoufox 启动并发',
   'settings.perAccountConcurrency': '单账户请求并发',
+  'settings.maxAccountsPerProxy': '单出口账户上限',
+  'settings.maxConcurrencyPerProxy': '单出口请求并发',
   'settings.routingStrategy': '账户选择策略',
   'settings.routingRoundRobin': '轮询',
   'settings.routingFillFirst': '账户粘性优先',
@@ -1409,6 +1411,8 @@ export const messages = {
   'settings.maxActiveWorkersHelp': '高峰期最多同时运行的 Worker 数',
   'settings.warmStartupConcurrencyHelp': '同时冷启动的 Camoufox Worker 数',
   'settings.perAccountConcurrencyHelp': '单个账户同时执行的请求数。',
+  'settings.maxAccountsPerProxyHelp': '同一代理最多绑定的账户数，0 表示不限制。',
+  'settings.maxConcurrencyPerProxyHelp': '同一代理同时发出的请求数，0 表示不限制。',
   'settings.buildNativeHelp': '非流式请求优先用 Build，不可用时用 Playground',
   'settings.nonstreamKeepaliveHelp':
     '等待结果时每 10 秒写出一个换行，避免反向代理因长时间无数据断开连接',

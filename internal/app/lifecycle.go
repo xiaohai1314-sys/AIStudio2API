@@ -19,7 +19,7 @@ import (
 type managedService interface {
 	aistudio.Service
 	State() string
-	ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int)
+	ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int, maxAccountsPerProxy int, maxConcurrencyPerProxy int)
 	SetAPIKeyAccounts(map[string][]string)
 }
 
@@ -552,6 +552,7 @@ func (manager *runtimeManager) UpdateRuntimeConfig(ctx context.Context, value ap
 		manager.current.service.SetAPIKeyAccounts(apiKeyAccounts(updated.APIKey, updated.APIKeyAccounts, manager.activeManagement))
 		manager.current.service.ApplyCapacity(
 			updated.WarmWorkerLimit, updated.MaxActiveWorkers, updated.WarmStartupConcurrency, updated.PerAccountConcurrency,
+			updated.MaxAccountsPerProxy, updated.MaxConcurrencyPerProxy,
 		)
 		updated = manager.decorateRuntimeConfig(updated, manager.current.config)
 		manager.ledger.SetBodyCapture(updated.RequestBodyLog)

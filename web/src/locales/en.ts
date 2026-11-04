@@ -275,6 +275,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkers': 'Peak worker limit',
   'settings.warmStartupConcurrency': 'Camoufox startup concurrency',
   'settings.perAccountConcurrency': 'Concurrent requests per account',
+  'settings.maxAccountsPerProxy': 'Accounts per egress',
+  'settings.maxConcurrencyPerProxy': 'Concurrent requests per egress',
   'settings.routingStrategy': 'Account selection strategy',
   'settings.routingRoundRobin': 'Round robin',
   'settings.routingFillFirst': 'Fill first',
@@ -1510,6 +1512,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkersHelp': 'Maximum workers running at peak',
   'settings.warmStartupConcurrencyHelp': 'Camoufox workers cold-starting at once',
   'settings.perAccountConcurrencyHelp': 'Requests one account runs at the same time.',
+  'settings.maxAccountsPerProxyHelp': 'Maximum accounts bound to one proxy, 0 means unlimited.',
+  'settings.maxConcurrencyPerProxyHelp':
+    'Requests one proxy sends at the same time, 0 means unlimited.',
   'settings.buildNativeHelp':
     'Non-streaming requests prefer Build and use Playground when it is unavailable',
   'settings.nonstreamKeepaliveHelp':

@@ -75,6 +75,53 @@ func TestProxyPoolFallsBackWhenHigherQualityUnavailable(t *testing.T) {
 	}
 }
 
+// TestProxyPoolCapsAccountsPerProxy 验证达到出口账户上限后改绑到其他可用代理
+func TestProxyPoolCapsAccountsPerProxy(t *testing.T) {
+	pool, accounts := newQualityTestPool(4)
+	proxies := NewProxyPool(pool, []string{
+		"http://res.example:8080#residential",
+		"http://dc.example:8080#datacenter",
+	})
+	proxies.SetAccountLimit(2)
+	if _, err := proxies.Assign(); err != nil {
+		t.Fatalf("Assign() = %v", err)
+	}
+	counts := map[string]int{}
+	for _, account := range accounts {
+		counts[proxies.Binding(account.ID)]++
+	}
+	if counts["http://res.example:8080#residential"] != 2 || counts["http://dc.example:8080#datacenter"] != 2 {
+		t.Fatalf("出口绑定数 = %v, want 2/2", counts)
+	}
+}
+
+// TestProxyPoolRebalancesAfterLoweringLimit 验证调低上限后重新分配已超限的绑定
+func TestProxyPoolRebalancesAfterLoweringLimit(t *testing.T) {
+	pool, accounts := newQualityTestPool(4)
+	proxies := NewProxyPool(pool, []string{
+		"http://res.example:8080#residential",
+		"http://dc.example:8080#datacenter",
+	})
+	if _, err := proxies.Assign(); err != nil {
+		t.Fatalf("Assign() = %v", err)
+	}
+	proxies.SetAccountLimit(2)
+	changed, err := proxies.Assign()
+	if err != nil {
+		t.Fatalf("Assign() = %v", err)
+	}
+	if len(changed) != 2 {
+		t.Fatalf("改绑账户数 = %d, want 2", len(changed))
+	}
+	counts := map[string]int{}
+	for _, account := range accounts {
+		counts[proxies.Binding(account.ID)]++
+	}
+	if counts["http://res.example:8080#residential"] != 2 || counts["http://dc.example:8080#datacenter"] != 2 {
+		t.Fatalf("出口绑定数 = %v, want 2/2", counts)
+	}
+}
+
 // TestProxyStatusReportsQuality 验证代理状态带出出口质量标签
 func TestProxyStatusReportsQuality(t *testing.T) {
 	pool, _ := newQualityTestPool(1)

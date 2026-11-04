@@ -67,10 +67,12 @@ func newRuntime(
 	}
 	requests.log("service", "INFO", "运行时装配 | 3/3 | 创建协议客户端 | 出口="+egress)
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
+	pool.SetProxyLimits(cfg.MaxConcurrencyPerProxy, globalProxy)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
 	pool.SetModelChannels(modelChannels(cfg.ModelChannels))
 	proxies := aistudio.NewProxyPool(pool, proxyList)
+	proxies.SetAccountLimit(cfg.MaxAccountsPerProxy)
 	if err := proxies.LoadScores(filepath.Join("runtime", "proxy-scores.json")); err != nil {
 		requests.log("service", "WARN", "代理评分读取 | 错误="+err.Error())
 	}
@@ -805,8 +807,13 @@ func (service *trackedService) SetAPIKeyAccounts(accounts map[string][]string) {
 	service.pool.SetAPIKeyAccounts(accounts)
 }
 
-func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int) {
+func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int, maxAccountsPerProxy int, maxConcurrencyPerProxy int) {
 	service.pool.SetPerAccountConcurrency(perAccountConcurrency)
+	service.pool.SetProxyConcurrencyLimit(maxConcurrencyPerProxy)
+	service.proxies.SetAccountLimit(maxAccountsPerProxy)
+	if changed, err := service.proxies.Assign(); err == nil && len(changed) > 0 && service.rebindAccounts != nil {
+		service.rebindAccounts(changed)
+	}
 	service.workers.SetCapacity(warmTarget, maxActive, startupConcurrency)
 	service.lifecycleMu.Lock()
 	dataContext := service.dataContext

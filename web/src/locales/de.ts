@@ -279,6 +279,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkers': 'Worker-Limit bei Spitzenlast',
   'settings.warmStartupConcurrency': 'Gleichzeitige Camoufox-Starts',
   'settings.perAccountConcurrency': 'Gleichzeitige Anfragen pro Konto',
+  'settings.maxAccountsPerProxy': 'Konten pro Ausgang',
+  'settings.maxConcurrencyPerProxy': 'Gleichzeitige Anfragen pro Ausgang',
   'settings.routingStrategy': 'Kontoauswahl',
   'settings.routingRoundRobin': 'Reihum',
   'settings.routingFillFirst': 'Gleiches Konto bevorzugen',
@@ -1548,6 +1550,9 @@ export const messages: Record<TranslationKey, string> = {
   'settings.warmStartupConcurrencyHelp': 'Gleichzeitig kalt startende Camoufox-Worker',
   'settings.perAccountConcurrencyHelp':
     'Anzahl der Anfragen, die ein Konto gleichzeitig bearbeitet.',
+  'settings.maxAccountsPerProxyHelp': 'Maximale Anzahl an Konten pro Proxy, 0 bedeutet unbegrenzt.',
+  'settings.maxConcurrencyPerProxyHelp':
+    'Anfragen, die ein Proxy gleichzeitig sendet, 0 bedeutet unbegrenzt.',
   'settings.buildNativeHelp': 'Nicht-Streaming-Anfragen nutzen bevorzugt Build, sonst Playground',
   'settings.nonstreamKeepaliveHelp':
     'Sendet beim Warten alle 10 Sekunden einen Zeilenumbruch, damit Reverse-Proxys die Verbindung offen halten',

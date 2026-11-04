@@ -275,6 +275,8 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkers': '최대 Worker 수',
   'settings.warmStartupConcurrency': 'Camoufox 동시 시작 수',
   'settings.perAccountConcurrency': '계정당 동시 요청 수',
+  'settings.maxAccountsPerProxy': '출구당 계정 수 제한',
+  'settings.maxConcurrencyPerProxy': '출구당 동시 요청 수',
   'settings.routingStrategy': '계정 선택 방식',
   'settings.routingRoundRobin': '라운드 로빈',
   'settings.routingFillFirst': '같은 계정 우선',
@@ -1479,6 +1481,10 @@ export const messages: Record<TranslationKey, string> = {
   'settings.maxActiveWorkersHelp': '피크 시 동시에 실행하는 최대 Worker 수',
   'settings.warmStartupConcurrencyHelp': '동시에 콜드 스타트하는 Camoufox Worker 수',
   'settings.perAccountConcurrencyHelp': '계정 하나가 동시에 처리하는 요청 수입니다.',
+  'settings.maxAccountsPerProxyHelp':
+    '프록시 하나에 바인딩할 수 있는 계정 수입니다. 0은 무제한입니다.',
+  'settings.maxConcurrencyPerProxyHelp':
+    '프록시 하나가 동시에 보내는 요청 수입니다. 0은 무제한입니다.',
   'settings.buildNativeHelp':
     '비스트리밍 요청은 Build를 우선하고, 사용할 수 없으면 Playground 사용',
   'settings.nonstreamKeepaliveHelp':
