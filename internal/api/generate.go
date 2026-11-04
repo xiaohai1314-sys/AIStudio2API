@@ -39,6 +39,9 @@ type generationResult struct {
 	turnToken            string
 	debugInfo            json.RawMessage
 	detailedFinishReason json.RawMessage
+	// interactionID 与 accountID 是 agent 后台任务的上游 interaction ID 与所属账户
+	interactionID string
+	accountID     string
 }
 
 func (result *generationResult) apply(event aistudio.Event) error {
@@ -50,6 +53,9 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	}
 	if event.TurnToken != "" {
 		result.turnToken = event.TurnToken
+	}
+	if event.InteractionID != "" {
+		result.interactionID, result.accountID = event.InteractionID, event.AccountID
 	}
 	if len(event.DebugInfo) > 0 {
 		result.debugInfo = event.DebugInfo
@@ -69,6 +75,9 @@ func (result *generationResult) apply(event aistudio.Event) error {
 		result.toolCalls = append(result.toolCalls, *event.FunctionCall)
 	case aistudio.EventGrounding:
 		grounding := *event.Grounding
+		if result.grounding != nil {
+			grounding.URLContext = mergeURLContext(result.grounding.URLContext, grounding.URLContext)
+		}
 		result.grounding = &grounding
 		result.citations = append(result.citations, groundingCitations(grounding)...)
 	case aistudio.EventCitation:
@@ -102,39 +111,50 @@ func (result *generationResult) apply(event aistudio.Event) error {
 	return nil
 }
 
-// awaitStreamStart 在写出流式响应头前等待首个事件，首个事件为错误时返回该错误，心跳间隔内没有事件时直接返回原事件流
-func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan aistudio.Event, error) {
+// mergeURLContext 返回 previous 加上 next 中的网址读取结果，同一网址取 next 的结果
+func mergeURLContext(previous, next []aistudio.URLMetadata) []aistudio.URLMetadata {
+	merged := slices.Clone(previous)
+	for _, item := range next {
+		if index := slices.IndexFunc(merged, func(old aistudio.URLMetadata) bool { return old.RetrievedURL == item.RetrievedURL }); index >= 0 {
+			merged[index] = item
+		} else {
+			merged = append(merged, item)
+		}
+	}
+	return merged
+}
+
+// awaitStreamStart 在写出流式响应头前等待首个事件，返回重放该事件的事件流与首个事件所在上游帧的用量；首个事件为错误时返回该错误，心跳间隔内没有事件时直接返回原事件流
+func awaitStreamStart(ctx context.Context, events <-chan aistudio.Event) (<-chan aistudio.Event, *aistudio.Usage, error) {
 	timer := time.NewTimer(streamHeartbeatInterval)
 	defer timer.Stop()
 	var first aistudio.Event
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	case <-timer.C:
-		return events, nil
+		return events, nil, nil
 	case event, ok := <-events:
 		if !ok {
-			return nil, errIncompleteStream
+			return nil, nil, errIncompleteStream
 		}
 		if event.Kind == aistudio.EventError {
-			return nil, event.Err
+			return nil, nil, event.Err
 		}
 		first = event
 	}
 	replay := make(chan aistudio.Event)
 	paniclog.Go("generate.go:124", func() {
-		func() {
-			defer close(replay)
-			for event, ok := first, true; ok; event, ok = <-events {
-				select {
-				case replay <- event:
-				case <-ctx.Done():
-					return
-				}
+		defer close(replay)
+		for event, ok := first, true; ok; event, ok = <-events {
+			select {
+			case replay <- event:
+			case <-ctx.Done():
+				return
 			}
-		}()
+		}
 	})
-	return replay, nil
+	return replay, first.FrameUsage, nil
 }
 
 // consumeEvents 收集全部事件，不逐个转发也不写心跳

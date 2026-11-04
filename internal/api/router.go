@@ -48,6 +48,8 @@ type Config struct {
 	EgressProxy func() string
 	// Lifecycle 是 webhook 重试等后台任务的存活上下文，为空时使用 context.Background()
 	Lifecycle context.Context
+	// States 持久保存 Responses、Interactions 与 Chat 音频回复的续接节点，为空时只保存在内存中
+	States StateStore
 }
 
 // KeyRateLimit 是单个 API key 的请求速率上限
@@ -72,6 +74,7 @@ type server struct {
 	thoughtSignatures *thoughtSignatureStore
 	pairing           *pairingTokens
 	loginViews        *loginViews
+	accountTasks      *accountTasks
 	// background 按响应 ID 保存进行中的 Responses 后台响应
 	background sync.Map
 }
@@ -81,8 +84,8 @@ var idSequence atomic.Uint64
 // NewHandler 创建公开 API 路由
 func NewHandler(service aistudio.Service, config Config) http.Handler {
 	s := &server{
-		service: service, config: config, responseStates: newResponseStateStore(), uploads: newGeminiUploads(), caches: newGeminiCaches(),
-		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{}, loginViews: &loginViews{},
+		service: service, config: config, responseStates: newResponseStateStore(config.States), uploads: newGeminiUploads(), caches: newGeminiCaches(),
+		thoughtSignatures: newThoughtSignatureStore(), pairing: &pairingTokens{}, loginViews: &loginViews{}, accountTasks: &accountTasks{},
 	}
 	public := http.NewServeMux()
 	public.HandleFunc("GET /v1/models", s.handleOpenAIModels)
@@ -159,6 +162,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 		root.Handle("GET /media/{file}", corsMiddleware(http.HandlerFunc(s.handleMedia)))
 	}
 	root.HandleFunc("POST /api/pairing/accounts", s.handlePairingAccount)
+	root.HandleFunc("PUT /api/pairing/accounts/{account}/cookies", s.handlePairingRenewal)
 	return root
 }
 

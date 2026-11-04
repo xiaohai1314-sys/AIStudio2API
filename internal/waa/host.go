@@ -149,6 +149,7 @@ const hostJavaScript = `
     timeOrigin: input.timeOrigin,
     createIframeWindow: input.createIframeWindow,
     loadImage: input.loadImage,
+    loadFrame: input.loadFrame,
     resolveInterface: input.resolveInterface,
     orderKeys: input.orderKeys,
   });
@@ -171,6 +172,7 @@ type agent struct {
 	loop            *eventLoop
 	profile         Profile
 	loadImage       func(string) bool
+	loadFrame       func(string) bool
 	pending         *sync.WaitGroup
 	timezone        string
 	navigationStart time.Time
@@ -488,6 +490,18 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 					state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
 				}()
 			})
+			return nil
+		}}
+	}
+	if state.loadFrame != nil {
+		natives["loadFrame"] = hostNative{2, func(call *mozjs.Call) error {
+			address, id := call.ArgString(0), call.ArgNumber(1)
+			state.pending.Add(1)
+			go func() {
+				defer state.pending.Done()
+				loaded := state.loadFrame(address)
+				state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+			}()
 			return nil
 		}}
 	}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -104,6 +105,16 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 		return nil, err
 	}
 	return transport, nil
+}
+
+// sendHTTP 发送 HTTP 请求，请求失败时错误中的地址不含查询参数
+func sendHTTP(client *http.Client, request *http.Request) (*http.Response, error) {
+	response, err := client.Do(request)
+	var requestErr *url.Error
+	if errors.As(err, &requestErr) {
+		requestErr.URL, _, _ = strings.Cut(requestErr.URL, "?")
+	}
+	return response, err
 }
 
 // DiscoverPublicHeaders 从 AI Studio 首页读取普通 RPC 所需的公开头
@@ -460,6 +471,7 @@ func prepareProtocolHeaders(
 	}
 	headers.Set("Authorization", authorization)
 	headers.Set("Accept", "*/*")
+	headers.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	headers.Set("Origin", aiStudioOrigin)
 	headers.Set("Referer", aiStudioOrigin+"/")
 	headers.Set("Sec-Fetch-Dest", "empty")

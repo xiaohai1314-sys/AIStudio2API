@@ -51,19 +51,6 @@ type ProtectedTransport interface {
 	DoProtected(context.Context, GenerateRequest, RPCRequest) (*RPCResponse, error)
 }
 
-// VideoProtectedTransport 原子完成 Veo fresh WAA proof、field 8 写入和同 context 发送
-type VideoProtectedTransport interface {
-	DoProtectedVideo(context.Context, VideoRequest, RPCRequest) (*RPCResponse, error)
-}
-
-// ProtectedTransportFunc 将函数适配为 ProtectedTransport
-type ProtectedTransportFunc func(context.Context, GenerateRequest, RPCRequest) (*RPCResponse, error)
-
-// DoProtected 调用受保护传输函数
-func (f ProtectedTransportFunc) DoProtected(ctx context.Context, request GenerateRequest, rpc RPCRequest) (*RPCResponse, error) {
-	return f(ctx, request, rpc)
-}
-
 // RequestContext 保存账户运行时提供的协议上下文
 type RequestContext struct {
 	Timezone string
@@ -83,6 +70,7 @@ type ClientOptions struct {
 	AccountRateLimit int
 	// AccountRateJitter 是请求间隔的随机抖动百分比
 	AccountRateJitter int
+	Pages             PageCatalogProvider
 }
 
 // Client 实现 AI Studio 私有协议核心
@@ -91,6 +79,7 @@ type Client struct {
 	protected       ProtectedTransport
 	contextProvider RequestContextProvider
 	pacer           *pacer
+	pages           PageCatalogProvider
 	catalogMu       sync.RWMutex
 	catalogs        map[string]modelCatalog
 	tierMu          sync.RWMutex
@@ -98,6 +87,8 @@ type Client struct {
 	termsMu         sync.Mutex
 	termsAccepted   map[string]struct{}
 	disclaimers     map[string]struct{}
+	assistants      *assistantSessions
+	turns           *modelTurnHistory
 }
 
 // NewClient 创建协议客户端
@@ -107,10 +98,13 @@ func NewClient(options ClientOptions) *Client {
 		protected:       options.Protected,
 		contextProvider: options.ContextProvider,
 		pacer:           newPacer(options.AccountRateLimit, options.AccountRateJitter),
+		pages:           options.Pages,
 		catalogs:        make(map[string]modelCatalog),
 		tiers:           make(map[string]BenefitTier),
 		termsAccepted:   make(map[string]struct{}),
 		disclaimers:     make(map[string]struct{}),
+		assistants:      newAssistantSessions(),
+		turns:           newModelTurnHistory(),
 	}
 }
 
@@ -258,19 +252,6 @@ func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body 
 	return validateRPCResponse("GenerateContent", response)
 }
 
-func (c *Client) doProtectedVideo(ctx context.Context, request VideoRequest, body []byte) (*RPCResponse, error) {
-	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
-		return nil, err
-	}
-	rpc := newRPCRequest("GenerateVideo", request.AccountID, "", body, false)
-	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
-	response, err := c.protected.(VideoProtectedTransport).DoProtectedVideo(ctx, request, rpc)
-	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio GenerateVideo: %w", err)
-	}
-	return validateRPCResponse("GenerateVideo", response)
-}
-
 func newRPCRequest(method string, accountID string, requestID string, body []byte, streaming bool) RPCRequest {
 	return RPCRequest{
 		Method:    method,
@@ -286,9 +267,6 @@ func newRPCRequest(method string, accountID string, requestID string, body []byt
 }
 
 func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, error) {
-	if response == nil || response.Body == nil {
-		return nil, fmt.Errorf("AI Studio %s transport 返回空响应", method)
-	}
 	if response.StatusCode != http.StatusOK {
 		defer response.Body.Close()
 		raw, readErr := io.ReadAll(response.Body)

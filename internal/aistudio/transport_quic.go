@@ -69,14 +69,13 @@ func (resumption *quicResumption) lookup(host string) (int, *[2]uint64) {
 		return 0, nil
 	}
 	raw, err := state.Bytes()
-	if err != nil || time.Now().After(time.Unix(int64(binary.BigEndian.Uint64(raw[len(raw)-12:])), 0)) {
+	if err != nil {
 		return 0, nil
 	}
-	binder := 32
-	if binary.BigEndian.Uint16(raw[3:]) == utls.TLS_AES_256_GCM_SHA384 {
-		binder = 48
+	psk := resumptionPSKLength(raw, len(ticket))
+	if psk == 0 {
+		return 0, nil
 	}
-	psk := 2 + 2 + len(ticket) + 4 + 2 + 1 + binder
 	settings, ok := resumption.rememberedSettings(host)
 	if !state.EarlyData || !ok {
 		return psk, nil
@@ -249,7 +248,7 @@ func firefoxQUICClientHello(psk int, early bool) *utls.ClientHelloSpec {
 			utls.MaxDatagramFrameSize(65535),
 		}},
 		&utls.GREASEEncryptedClientHelloExtension{
-			CandidateCipherSuites: []utls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}},
+			CandidateCipherSuites: []utls.HPKESymmetricCipherSuite{{KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_AES_128_GCM}, {KdfId: dicttls.HKDF_SHA256, AeadId: dicttls.AEAD_CHACHA20_POLY1305}},
 			CandidatePayloadLens:  []uint16{nssGREASEECHPayload(nssQUICGREASEECHInner, psk, early)},
 		},
 	)

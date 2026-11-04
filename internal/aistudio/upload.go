@@ -322,7 +322,6 @@ type DriveTransport interface {
 	UploadDrive(context.Context, string, string, UploadRequest) (FileRef, error)
 	DownloadDrive(context.Context, string, string, string) (MediaStream, error)
 	DeleteDrive(context.Context, string, string, string) error
-	CopyDrive(context.Context, string, string, string, string) (string, error)
 }
 
 // DriveFileChecker 负责使用账户固定出口查询 Drive 文件是否存在
@@ -397,14 +396,10 @@ func (c *Client) deleteDriveFile(ctx context.Context, accountID string, token st
 
 // UploadFile 使用一个独占账户完成上传并保存资源绑定
 func (s *PooledService) UploadFile(ctx context.Context, request UploadRequest) (FileRef, error) {
-	purpose := strings.TrimSpace(request.Purpose)
-	if purpose == "" && request.ResolvePurpose == nil {
-		return FileRef{}, fmt.Errorf("%w: purpose is required", ErrInvalidArgument)
-	}
-	accountID := strings.TrimSpace(request.AccountID)
-	selection := AccountSelection{AccountID: accountID}
+	purpose := request.Purpose
+	selection := AccountSelection{AccountID: request.AccountID}
 	_, pinned := AccountLeaseFromContext(ctx)
-	automatic := accountID == "" && !pinned
+	automatic := request.AccountID == "" && !pinned
 	source := request.Reader
 	maxAttempts := 1
 	var candidateAccountIDs []string
@@ -436,10 +431,6 @@ func (s *PooledService) UploadFile(ctx context.Context, request UploadRequest) (
 		file, token, uploadErr = s.client.uploadFile(attemptCtx, request)
 		if uploadErr == nil && purpose == "" {
 			purpose, uploadErr = request.ResolvePurpose(attemptCtx)
-			purpose = strings.TrimSpace(purpose)
-			if uploadErr == nil && purpose == "" {
-				uploadErr = fmt.Errorf("%w: purpose is required", ErrInvalidArgument)
-			}
 		}
 		if uploadErr == nil {
 			uploadErr = lease.BindFileResource(attemptCtx, file, counter.metadata(purpose, request.Alias))
@@ -517,10 +508,6 @@ func (l *AccountLease) BindFileResource(ctx context.Context, file FileRef, metad
 }
 
 func (p *AccountPool) bindFileResource(ctx context.Context, file FileRef, accountID string, metadata FileMetadata) error {
-	file.ID = strings.TrimSpace(file.ID)
-	file.Name = strings.TrimSpace(file.Name)
-	file.MIME = strings.TrimSpace(file.MIME)
-	purpose := strings.TrimSpace(metadata.Purpose)
 	p.fileBindMu.Lock()
 	defer p.fileBindMu.Unlock()
 	_, err := p.updateRuntimeContext(ctx, accountID, func(_ *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
@@ -539,7 +526,7 @@ func (p *AccountPool) bindFileResource(ctx context.Context, file FileRef, accoun
 			createdAt = existing.CreatedAt
 		}
 		runtimeState.Resources[file.ID] = ResourceBinding{
-			Kind: "drive-file", Name: file.Name, MIME: file.MIME, Size: metadata.Size, Purpose: purpose, CreatedAt: createdAt,
+			Kind: "drive-file", Name: file.Name, MIME: file.MIME, Size: metadata.Size, Purpose: metadata.Purpose, CreatedAt: createdAt,
 			Alias: metadata.Alias, SHA256: metadata.SHA256, VideoDuration: metadata.VideoDuration,
 		}
 		return true, nil, nil
@@ -813,6 +800,42 @@ type inlineMediaKey struct {
 	name   string
 }
 
+// inlineMediaKeyOf 返回内联附件 part 的标识
+func inlineMediaKeyOf(part Part) inlineMediaKey {
+	digest := sha256.Sum256(part.InlineData.Data)
+	return inlineMediaKey{mime: part.InlineData.MIME, sha256: base64.StdEncoding.EncodeToString(digest[:]), name: part.DisplayName}
+}
+
+// InlineMediaAccount 返回已上传 contents 中最多内联附件的账户，没有账户上传过时返回空串
+func (p *AccountPool) InlineMediaAccount(contents []Content) string {
+	keys := make(map[inlineMediaKey]bool)
+	for _, content := range contents {
+		for _, part := range content.Parts {
+			if part.InlineData != nil {
+				keys[inlineMediaKeyOf(part)] = true
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	best, bestHits := "", 0
+	for _, account := range p.accounts {
+		hits := 0
+		for _, binding := range account.runtime.Resources {
+			if binding.Kind == "inline-media" && keys[inlineMediaKey{mime: binding.MIME, sha256: binding.SHA256, name: binding.DisplayName}] {
+				hits++
+			}
+		}
+		if hits > bestHits {
+			best, bestHits = account.ID, hits
+		}
+	}
+	return best
+}
+
 // reclaimedInlineMedia 是解除绑定待删除的闲置内联附件
 type reclaimedInlineMedia struct {
 	file FileRef
@@ -989,8 +1012,7 @@ func (s *PooledService) UploadInlineMediaToLease(
 				return nil, nil, errors.Join(fmt.Errorf("%w: inline data 缺少 MIME 或数据", ErrInvalidArgument), temporary.Cleanup())
 			}
 			mediaIndex++
-			digest := sha256.Sum256(part.InlineData.Data)
-			key := inlineMediaKey{mime: part.InlineData.MIME, sha256: base64.StdEncoding.EncodeToString(digest[:]), name: part.DisplayName}
+			key := inlineMediaKeyOf(*part)
 			if _, seen := parts[key]; !seen {
 				jobs = append(jobs, uploadJob{key: key, name: cmp.Or(key.name, fmt.Sprintf("inline-media-%d", mediaIndex)), blob: part.InlineData})
 			}
@@ -1067,20 +1089,22 @@ func (s *PooledService) UploadInlineMediaToLease(
 			}
 		}
 		cancelUploads()
+		var failures GroupedErrors
 		for index, result := range results {
 			if result.err != nil {
-				uploadErr = errors.Join(uploadErr, result.err)
+				failures.Add("", result.err)
 				continue
 			}
 			job := pending[index]
 			if bindErr := target.bindInlineMedia(targetCtx, result.file, job.key, int64(len(job.blob.Data))); bindErr != nil {
 				temporary.copies = append(temporary.copies, temporaryDriveCopy{id: result.file.ID, token: token})
-				uploadErr = errors.Join(uploadErr, bindErr)
+				failures.Add("", bindErr)
 				continue
 			}
 			files[job.key] = result.file
 			used = append(used, result.file.ID)
 		}
+		uploadErr = failures.Join(nil)
 	}
 	temporary.release = s.useInlineMedia(used)
 	if uploadErr != nil {
@@ -1345,9 +1369,6 @@ func uploadDriveResumable(ctx context.Context, client *http.Client, token string
 			buffer[0] = buffer[driveUploadChunkSize]
 			buffered = 1
 		case errors.Is(readErr, io.EOF), errors.Is(readErr, io.ErrUnexpectedEOF):
-			if buffered == 0 {
-				return FileRef{}, fmt.Errorf("上传文件不能为空")
-			}
 			total := offset + int64(buffered)
 			response, err := sendDriveUploadChunk(ctx, client, token, sessionURL, request.MIME, buffer[:buffered], offset, total)
 			if err != nil {
