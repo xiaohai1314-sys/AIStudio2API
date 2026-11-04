@@ -766,13 +766,17 @@ func (s *BidiSession) runBackchannel(ready chan<- error) {
 			s.emit(BidiEvent{Kind: BidiEventClosed})
 		}
 		close(s.wireEvents)
+		// 先取消会话再等待转发退出：forwardEvent 阻塞在 events <- event（消费者已放弃读取）时，
+		// 取消让它的 ctx.Done 分支解开，否则 <-s.forwardDone 永不返回，租约无法释放。
+		// 终止事件（错误/关闭）已在上面 emit 时投递，forwardEvents 手里剩的普通事件
+		// 在消费者放弃读取后即使进入缓冲也无人消费，丢弃是安全的
+		s.cancel()
 		if <-s.forwarding {
 			<-s.forwardDone
 		} else {
 			close(s.events)
 			close(s.forwardDone)
 		}
-		s.cancel()
 		if s.release != nil {
 			s.releaseMu.Lock()
 			s.releaseErr = s.release()
