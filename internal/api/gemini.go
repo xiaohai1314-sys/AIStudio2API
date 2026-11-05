@@ -1618,12 +1618,13 @@ func geminiGroundingMetadata(metadata aistudio.GroundingMetadata) map[string]any
 }
 
 func geminiFinishReason(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
 	switch reason {
 	case "", "stop", "stop_sequence":
 		return "STOP"
 	case "unspecified":
 		return "FINISH_REASON_UNSPECIFIED"
-	case "max_tokens":
+	case "max_tokens", "length":
 		return "MAX_TOKENS"
 	case "safety":
 		return "SAFETY"
