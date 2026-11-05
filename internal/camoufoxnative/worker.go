@@ -47,10 +47,11 @@ type Worker struct {
 	client     *bidiClient
 	contextID  string
 	// page 为页面主世界中保存官方 WAA service 与受保护请求状态的对象
-	page      pageHandle
-	state     State
-	closed    bool
-	closing   bool
+	page   pageHandle
+	state  State
+	closed bool
+	// closeDone 在一次 Close 执行期间非空，并发 Close 等待它关闭后再按最终状态返回
+	closeDone chan struct{}
 	cacheLock *flock.Flock
 	// cookieOrder 是启动时写入浏览器的各 Cookie 的序号
 	cookieOrder map[cookieKey]int
@@ -530,19 +531,27 @@ func (worker *Worker) Close() error {
 		return nil
 	}
 	worker.mu.Lock()
-	if worker.closed || worker.closing {
+	if worker.closed {
 		worker.mu.Unlock()
 		return nil
 	}
-	worker.closing = true
+	if worker.closeDone != nil {
+		done := worker.closeDone
+		worker.mu.Unlock()
+		<-done
+		return worker.Close()
+	}
+	done := make(chan struct{})
+	worker.closeDone = done
 	client := worker.client
 	connection := worker.connection
 	process := worker.process
 	worker.mu.Unlock()
 	defer func() {
 		worker.mu.Lock()
-		worker.closing = false
+		worker.closeDone = nil
 		worker.mu.Unlock()
+		close(done)
 	}()
 	if client != nil && connection != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

@@ -83,6 +83,10 @@ func loadKey() ([]byte, error) {
 		if len(data) != aesKeySize {
 			return nil, fmt.Errorf("凭证密钥文件长度应为 %d 字节", aesKeySize)
 		}
+		// 创建时设 0600，读取时也要校验：从备份还原等途径预置的宽权限文件不能静默沿用
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+			return nil, fmt.Errorf("凭证密钥文件权限过宽 (%04o)，应为 0600: %s", info.Mode().Perm(), path)
+		}
 		return data, nil
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, fmt.Errorf("读取凭证密钥: %w", err)
@@ -120,12 +124,28 @@ func loadKey() ([]byte, error) {
 		if errors.Is(err, os.ErrExist) {
 			return readExistingKey(path)
 		}
-		// 不支持硬链接的文件系统退回改名
-		if renameErr := os.Rename(tempName, path); renameErr != nil {
-			if errors.Is(renameErr, os.ErrExist) {
+		// 不支持硬链接的文件系统改用排他创建发布：Rename 在 POSIX 下会直接覆盖目标，
+		// 并发首次启动时可能把对方已发布的密钥换掉，使其已加密的凭证无法解密
+		published, openErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if openErr != nil {
+			if errors.Is(openErr, os.ErrExist) {
 				return readExistingKey(path)
 			}
-			return nil, fmt.Errorf("发布凭证密钥: %w", renameErr)
+			return nil, fmt.Errorf("发布凭证密钥: %w", openErr)
+		}
+		if _, writeErr := published.Write(key); writeErr != nil {
+			published.Close()
+			os.Remove(path)
+			return nil, fmt.Errorf("发布凭证密钥: %w", writeErr)
+		}
+		if syncErr := published.Sync(); syncErr != nil {
+			published.Close()
+			os.Remove(path)
+			return nil, fmt.Errorf("发布凭证密钥: %w", syncErr)
+		}
+		if closeErr := published.Close(); closeErr != nil {
+			os.Remove(path)
+			return nil, fmt.Errorf("发布凭证密钥: %w", closeErr)
 		}
 	}
 	return key, nil

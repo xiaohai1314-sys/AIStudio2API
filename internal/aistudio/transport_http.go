@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,6 +55,8 @@ type MakerSuiteHTTPTransport struct {
 	clients     map[string]*http.Client
 	// clientUsed 记录各固定出口客户端最近一次使用的时间，用于在数量超限时淘汰
 	clientUsed map[string]time.Time
+	// clientInflight 记录各固定出口客户端的在途请求数，淘汰时跳过仍在传输的客户端
+	clientInflight map[string]*atomic.Int64
 	// driveMu 保护 driveDiscovered
 	driveMu sync.Mutex
 	// driveDiscovered 记录已按官网页面读取 Drive discovery 文档的账户
@@ -99,6 +102,7 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 		now:             time.Now,
 		clients:         make(map[string]*http.Client),
 		clientUsed:      make(map[string]time.Time),
+		clientInflight:  make(map[string]*atomic.Int64),
 		driveDiscovered: make(map[string]bool),
 	}
 	if _, err := transport.clientForProxy(transport.globalProxy); err != nil {
@@ -182,7 +186,11 @@ func NewProxyHTTPClient(proxyURL string) (*http.Client, error) {
 	}
 	client := &http.Client{Transport: roundTripper}
 	// 登录与人机验证跳转不自动跟随，交由调用方识别为风控并暂停账户
-	client.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		// 保留标准库的 10 次上限：自定义策略替代默认实现后，上游循环重定向会无限跟随
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
 		if challengeURL(request.URL.String()) {
 			return http.ErrUseLastResponse
 		}
@@ -408,19 +416,65 @@ func (t *MakerSuiteHTTPTransport) clientForProxy(proxyURL string) (*http.Client,
 	if err != nil {
 		return nil, err
 	}
+	inflight := &atomic.Int64{}
+	client.Transport = &inflightRoundTripper{base: client.Transport, count: inflight}
 	if len(t.clients) >= maxProxyClients {
 		t.evictClientLocked()
 	}
 	t.clients[proxyURL] = client
 	t.clientUsed[proxyURL] = t.now()
+	t.clientInflight[proxyURL] = inflight
 	return client, nil
 }
 
-// evictClientLocked 关闭并移除最久未使用的固定出口客户端，在途请求结束后其连接才会关闭
+// inflightRoundTripper 统计经该客户端发出的在途请求数，供淘汰逻辑避开正在传输的客户端
+type inflightRoundTripper struct {
+	base  http.RoundTripper
+	count *atomic.Int64
+}
+
+func (t *inflightRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.count.Add(1)
+	response, err := t.base.RoundTrip(request)
+	if err != nil {
+		t.count.Add(-1)
+		return nil, err
+	}
+	response.Body = &inflightBody{ReadCloser: response.Body, done: func() { t.count.Add(-1) }}
+	return response, nil
+}
+
+// inflightBody 在响应体读到 EOF 或被关闭时结束在途计数，两者只计一次
+type inflightBody struct {
+	io.ReadCloser
+	once sync.Once
+	done func()
+}
+
+func (b *inflightBody) Read(buffer []byte) (int, error) {
+	read, err := b.ReadCloser.Read(buffer)
+	if err == io.EOF {
+		b.once.Do(b.done)
+	}
+	return read, err
+}
+
+func (b *inflightBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.done)
+	return err
+}
+
+// evictClientLocked 关闭并移除最久未使用且没有在途请求的固定出口客户端。
+// 有在途请求时不能淘汰：浏览器传输的 HTTP/3 连接关闭会直接中止活跃流，
+// 全部客户端都在忙时本次不淘汰，缓存暂时超限，等下次创建时再试
 func (t *MakerSuiteHTTPTransport) evictClientLocked() {
 	oldestProxy := ""
 	var oldestUsed time.Time
 	for proxyURL, used := range t.clientUsed {
+		if counter := t.clientInflight[proxyURL]; counter != nil && counter.Load() > 0 {
+			continue
+		}
 		if oldestProxy == "" || used.Before(oldestUsed) {
 			oldestProxy, oldestUsed = proxyURL, used
 		}
@@ -433,6 +487,7 @@ func (t *MakerSuiteHTTPTransport) evictClientLocked() {
 	}
 	delete(t.clients, oldestProxy)
 	delete(t.clientUsed, oldestProxy)
+	delete(t.clientInflight, oldestProxy)
 }
 
 func prepareProtocolHeaders(

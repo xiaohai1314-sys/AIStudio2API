@@ -414,6 +414,11 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 		}
 		return nil
 	})
+	if errors.Is(err, aistudio.ErrStorageGenerationChanged) {
+		// 并发续签已抢先提交新代际，本方刷新结果作废但目标状态已经达成：
+		// 与 phase-1 发现代际已推进时的静默复用一致，按成功处理，不误报续签失败
+		err = nil
+	}
 	if err != nil {
 		wrapped := fmt.Errorf("保存账户 %s 认证状态: %w", account.ID, err)
 		refresher.requests.log(account.Config.Label, "ERROR", fmt.Sprintf(

@@ -63,7 +63,13 @@ func Reclaim(ctx context.Context, db *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("交还空闲页: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	// checkpoint 与写事务并发时返回 BUSY 或 busy=1：本次回收不完整、留待下次，不算失败
+	var busy, walPages, checkpointed int
+	if err := db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &walPages, &checkpointed); err != nil {
+		var sqliteErr sqlite3.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrBusy {
+			return nil
+		}
 		return fmt.Errorf("截短 WAL: %w", err)
 	}
 	return nil

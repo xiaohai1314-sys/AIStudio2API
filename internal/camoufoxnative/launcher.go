@@ -40,7 +40,8 @@ type browserProcess struct {
 	cacheDirectory string
 	mu             sync.Mutex
 	closed         bool
-	closing        bool
+	// closeDone 在一次 Close 执行期间非空，并发 Close 等待它关闭后再按最终状态返回
+	closeDone chan struct{}
 }
 
 // launchBrowser 启动 Camoufox 并返回原生 WebDriver BiDi 端点
@@ -243,16 +244,24 @@ func (process *browserProcess) Close() error {
 		return nil
 	}
 	process.mu.Lock()
-	if process.closed || process.closing {
+	if process.closed {
 		process.mu.Unlock()
 		return nil
 	}
-	process.closing = true
+	if process.closeDone != nil {
+		done := process.closeDone
+		process.mu.Unlock()
+		<-done
+		return process.Close()
+	}
+	done := make(chan struct{})
+	process.closeDone = done
 	process.mu.Unlock()
 	defer func() {
 		process.mu.Lock()
-		process.closing = false
+		process.closeDone = nil
 		process.mu.Unlock()
+		close(done)
 	}()
 	closeCtx, cancel := context.WithTimeout(context.Background(), browserProcessCloseTimeout)
 	defer cancel()

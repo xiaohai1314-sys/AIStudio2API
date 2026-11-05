@@ -61,6 +61,9 @@ func (p *ProxyPool) LoadScores(path string) error {
 			entry.good, entry.bad, entry.scoreSince = sample.Good, sample.Bad, sample.Since
 		}
 		for _, bucket := range sample.History {
+			if bucket.Good < 0 || bucket.Bad < 0 || bucket.Forbidden < 0 {
+				continue
+			}
 			if bucket.Hour.IsZero() || now.Sub(bucket.Hour) >= proxyHistoryWindow || bucket.Hour.After(now) {
 				continue
 			}

@@ -1592,53 +1592,6 @@ func (t *MakerSuiteHTTPTransport) DriveFileExists(ctx context.Context, accountID
 	return true, nil
 }
 
-// CopyDrive 通过当前账户固定出口复制 Drive 文件并返回副本 ID
-func (t *MakerSuiteHTTPTransport) CopyDrive(ctx context.Context, accountID string, token string, fileID string, name string) (_ string, err error) {
-	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: accountID})
-	if err != nil {
-		return "", err
-	}
-	if owned {
-		defer func() { err = errors.Join(err, lease.Release()) }()
-	}
-	body, err := json.Marshal(map[string]string{"name": name})
-	if err != nil {
-		return "", err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, driveAPIBase+"/"+url.PathEscape(fileID)+"/copy", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "text/plain;charset=UTF-8")
-	client, err := t.clientForProxy(lease.Account().EffectiveProxy(t.globalProxy))
-	if err != nil {
-		return "", err
-	}
-	response, err := unaryClientDo(ctx, client, request)
-	if err != nil {
-		return "", fmt.Errorf("复制 Drive 文件: %w", err)
-	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return "", err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", driveUploadRPCError("DriveCopy", response.StatusCode, responseBody)
-	}
-	var copied struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(responseBody, &copied); err != nil {
-		return "", fmt.Errorf("解析 Drive 复制响应: %w", err)
-	}
-	if copied.ID == "" {
-		return "", fmt.Errorf("Drive 复制响应缺少文件 ID")
-	}
-	return copied.ID, nil
-}
-
 func driveFilename(disposition string) string {
 	_, parameters, err := mime.ParseMediaType(disposition)
 	if err != nil {

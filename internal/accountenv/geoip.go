@@ -152,8 +152,15 @@ func downloadGeoIPMonth(ctx context.Context, client *http.Client, path string, m
 	if closeErr != nil {
 		return closeErr
 	}
-	if err := os.Rename(temporary.Name(), path); err != nil {
-		return fmt.Errorf("替换 GeoIP 数据库: %w", err)
+	// Windows 上目标文件可能正被并发的出口查询以 mmap 方式打开，替换会短暂失败，重试几次再放弃；
+	// 放弃时旧数据库保持不变，下次更新仍可成功
+	renameErr := os.Rename(temporary.Name(), path)
+	for attempt := 0; renameErr != nil && attempt < 10; attempt++ {
+		time.Sleep(200 * time.Millisecond)
+		renameErr = os.Rename(temporary.Name(), path)
+	}
+	if renameErr != nil {
+		return fmt.Errorf("替换 GeoIP 数据库: %w", renameErr)
 	}
 	return nil
 }

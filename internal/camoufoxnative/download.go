@@ -22,6 +22,7 @@ import (
 const camoufoxRelease = "152.0.4-beta.29"
 
 // camoufoxChecksums 是固定发行版各平台压缩包的 sha256，升级 camoufoxRelease 时须同步更新
+// 注意信任模型：本表与二进制同源发布，只能防传输损坏与镜像替换，不能防发布源本身被攻破
 var camoufoxChecksums = map[string]string{
 	"camoufox-152.0.4-beta.29-lin.arm64.zip":  "c8844c03f3c233d6a466d59fd3f4e6f21470bd685e1b7cc82d650379a9b23e35",
 	"camoufox-152.0.4-beta.29-lin.x86_64.zip": "1bea4b55a51c88e82dc7d426d9c75093d942d2afc8c911cb8fc78ebf723d686c",
@@ -71,7 +72,7 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	}
 	expected, ok := camoufoxChecksums[asset]
 	if !ok {
-		return "", fmt.Errorf("Camoufox %s 没有内置的 sha256 摘要，无法校验下载内容", asset)
+		return "", fmt.Errorf("Camoufox %s 没有内置的 sha256 摘要，无法校验下载内容（可能 camoufoxRelease 已升级但校验表未同步更新）", asset)
 	}
 	root, err := camoufoxInstallRoot()
 	if err != nil {
