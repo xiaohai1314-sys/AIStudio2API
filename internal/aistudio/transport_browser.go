@@ -695,7 +695,7 @@ func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) 
 	if err != nil {
 		return fmt.Errorf("CORS 预检: %w", err)
 	}
-	_, _ = io.ReadAll(response.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxErrorResponseBytes))
 	_ = response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return fmt.Errorf("CORS 预检返回 HTTP %d", response.StatusCode)

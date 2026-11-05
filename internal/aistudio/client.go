@@ -204,6 +204,20 @@ func unaryTransferTimeoutValue() time.Duration {
 // maxUnaryResponseBytes 是非流式响应正文的读取上限，防止恶意或故障代理返回超大正文打爆内存
 const maxUnaryResponseBytes int64 = 64 << 20
 
+// maxErrorResponseBytes 限制错误响应正文，避免流式请求的错误路径无界分配内存
+const maxErrorResponseBytes int64 = 1 << 20
+
+func readErrorResponseBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxErrorResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxErrorResponseBytes {
+		return nil, fmt.Errorf("错误响应正文超过 %d MiB", maxErrorResponseBytes>>20)
+	}
+	return raw, nil
+}
+
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
 	if err := c.pacer.Wait(ctx, accountID); err != nil {
 		return nil, err
@@ -223,12 +237,16 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 		// 非流式响应在此同步读完再返回：超时 ctx 取消后 Body 读取也会失败，
 		// leaseResponseBody 的租约释放与调用方返回不会因上游 hang 而无限推迟
 		defer response.Body.Close()
-		raw, err := io.ReadAll(io.LimitReader(response.Body, maxUnaryResponseBytes+1))
+		maxBytes := maxUnaryResponseBytes
+		if response.StatusCode != http.StatusOK {
+			maxBytes = maxErrorResponseBytes
+		}
+		raw, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 		if err != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s 响应: %w", method, err)
 		}
-		if int64(len(raw)) > maxUnaryResponseBytes {
-			return nil, fmt.Errorf("AI Studio %s 响应超过 %d MiB", method, maxUnaryResponseBytes>>20)
+		if int64(len(raw)) > maxBytes {
+			return nil, fmt.Errorf("AI Studio %s 响应超过 %d MiB", method, maxBytes>>20)
 		}
 		response.Body = io.NopCloser(bytes.NewReader(raw))
 	}
@@ -269,7 +287,7 @@ func newRPCRequest(method string, accountID string, requestID string, body []byt
 func validateRPCResponse(method string, response *RPCResponse) (*RPCResponse, error) {
 	if response.StatusCode != http.StatusOK {
 		defer response.Body.Close()
-		raw, readErr := io.ReadAll(response.Body)
+		raw, readErr := readErrorResponseBody(response.Body)
 		if readErr != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s 错误响应: %w", method, readErr)
 		}

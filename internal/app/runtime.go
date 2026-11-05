@@ -843,11 +843,12 @@ func (service *trackedService) SetAPIKeyAccounts(accounts map[string][]string) {
 	service.pool.SetAPIKeyAccounts(accounts)
 }
 
-func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int, maxAccountsPerProxy int, maxConcurrencyPerProxy int) {
+func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, startupConcurrency int, perAccountConcurrency int, maxAccountsPerProxy int, maxConcurrencyPerProxy int) error {
 	service.pool.SetPerAccountConcurrency(perAccountConcurrency)
 	service.pool.SetProxyConcurrencyLimit(maxConcurrencyPerProxy)
 	service.proxies.SetAccountLimit(maxAccountsPerProxy)
-	if changed, err := service.proxies.Assign(); err == nil && len(changed) > 0 && service.rebindAccounts != nil {
+	changed, assignErr := service.proxies.Assign()
+	if len(changed) > 0 && service.rebindAccounts != nil {
 		service.rebindAccounts(changed)
 	}
 	service.workers.SetCapacity(warmTarget, maxActive, startupConcurrency)
@@ -858,6 +859,10 @@ func (service *trackedService) ApplyCapacity(warmTarget int, maxActive int, star
 	if running && len(service.workers.WarmAccountIDs()) < warmTarget {
 		service.workers.StartPrewarm(dataContext)
 	}
+	if assignErr != nil {
+		return fmt.Errorf("重新分配账户代理: %w", assignErr)
+	}
+	return nil
 }
 
 func (service *trackedService) syncAccountModels(ctx context.Context, accountID string) ([]aistudio.Model, error) {

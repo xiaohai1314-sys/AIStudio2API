@@ -262,13 +262,14 @@ func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, hea
 	if err != nil {
 		return err
 	}
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotModified {
+		_ = response.Body.Close()
+		return fmt.Errorf("HTTP %d", response.StatusCode)
+	}
 	_, err = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
 	if err != nil {
 		return err
-	}
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNotModified {
-		return fmt.Errorf("HTTP %d", response.StatusCode)
 	}
 	return runtime.pageCache.store(target, response, time.Now())
 }

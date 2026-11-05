@@ -40,7 +40,7 @@
   </tr>
 </table>
 
-**Get started in three steps**: download a [release](https://github.com/Mag1cFall/AIStudio2API/releases) and launch it → add a Google account on the Accounts page → click "Start service" and use `http://127.0.0.1:2048` as the Base URL of your OpenAI, Anthropic or Gemini client
+**Get started in three steps**: download a [release](https://github.com/xiaohai1314-sys/AIStudio2API/releases) and launch it → add a Google account on the Accounts page → click "Start service" and use `http://127.0.0.1:2048` as the Base URL of your OpenAI, Anthropic or Gemini client
 
 ## 🧩 The Google proxy family
 
@@ -49,8 +49,8 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 <table>
   <tr>
     <td width="33%" valign="top">
-      <p align="center"><a href="https://github.com/Mag1cFall/AIStudio2API"><img src="build/appicon.png" width="72" alt="AIStudio2API"></a><br>
-      <a href="https://github.com/Mag1cFall/AIStudio2API"><b>AIStudio&shy;2API</b></a></p>
+      <p align="center"><a href="https://github.com/xiaohai1314-sys/AIStudio2API"><img src="build/appicon.png" width="72" alt="AIStudio2API"></a><br>
+      <a href="https://github.com/xiaohai1314-sys/AIStudio2API"><b>AIStudio&shy;2API</b></a></p>
       Camou&shy;fox or in-process Spider&shy;Monkey generates the official WAA proof, so accounts chat as on the website
     </td>
     <td width="33%" valign="top">
@@ -113,7 +113,7 @@ The three projects connect to AI Studio, the Gemini web app and Antigravity, and
 
 ### Method 1: Windows One-Click Start (Recommended)
 
-Download the `windows-amd64.zip` package from [Releases](https://github.com/Mag1cFall/AIStudio2API/releases), extract it, and double-click `aistudio2api.exe`:
+Download the `windows-amd64.zip` package from [Releases](https://github.com/xiaohai1314-sys/AIStudio2API/releases), extract it, and double-click `aistudio2api.exe`:
 
 - The management UI opens in a desktop window; at launch the window shows a startup screen until the management service is ready
 - Closing the window keeps the app running in the system tray: double-click the tray icon to show the window and right-click it for the tray menu; the menu shows the window, opens the management UI in the browser, turns start at login on or off, or quits
@@ -122,7 +122,7 @@ Download the `windows-amd64.zip` package from [Releases](https://github.com/Mag1
 To start from source:
 
 ```powershell
-git clone https://github.com/Mag1cFall/AIStudio2API.git
+git clone https://github.com/xiaohai1314-sys/AIStudio2API.git
 cd AIStudio2API
 copy .env.example .env
 cd web
@@ -182,7 +182,7 @@ Run `setup` and other commands with the desktop executable in a terminal, such a
 #### 2. Clone the Project
 
 ```bash
-git clone https://github.com/Mag1cFall/AIStudio2API.git
+git clone https://github.com/xiaohai1314-sys/AIStudio2API.git
 cd AIStudio2API
 cp .env.example .env
 ```
@@ -214,7 +214,7 @@ Linux and macOS also prepare the matching Camoufox build automatically when it i
 
 ```bash
 mkdir aistudio2api && cd aistudio2api
-curl -fsSLO https://raw.githubusercontent.com/Mag1cFall/AIStudio2API/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/xiaohai1314-sys/AIStudio2API/main/docker-compose.yml
 mkdir data
 cat > data/.env <<'EOF'
 PROXY_API_KEY=<API key>
@@ -729,10 +729,10 @@ Issues and Pull Requests are welcome!
 
 ## 📈 Star History
 
-<a href="https://star-history.com/#Mag1cFall/AIStudio2API&Date">
+<a href="https://star-history.com/#xiaohai1314-sys/AIStudio2API&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xiaohai1314-sys/AIStudio2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xiaohai1314-sys/AIStudio2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xiaohai1314-sys/AIStudio2API&type=Date" />
   </picture>
 </a>

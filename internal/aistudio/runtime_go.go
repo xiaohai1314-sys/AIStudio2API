@@ -543,12 +543,8 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument
 		if err != nil {
 			return "", pageDocument{}, fmt.Errorf("载入 AI Studio 页面: %w", err)
 		}
-		body, readErr := io.ReadAll(response.Body)
-		_ = response.Body.Close()
-		if readErr != nil {
-			return "", pageDocument{}, fmt.Errorf("读取 AI Studio 页面: %w", readErr)
-		}
 		if response.StatusCode >= 300 && response.StatusCode < 400 {
+			_ = response.Body.Close()
 			location, err := response.Location()
 			if err != nil {
 				return "", pageDocument{}, fmt.Errorf("AI Studio 页面跳转无效: %w", err)
@@ -560,7 +556,13 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
+			_ = response.Body.Close()
 			return "", pageDocument{}, fmt.Errorf("AI Studio 页面返回 HTTP %d", response.StatusCode)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			return "", pageDocument{}, fmt.Errorf("读取 AI Studio 页面: %w", readErr)
 		}
 		match := makerSuiteAPIKeyPattern.FindSubmatch(body)
 		if len(match) != 2 || len(match[1]) == 0 {
@@ -622,12 +624,16 @@ func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey st
 		return "", nil, fmt.Errorf("读取官网日志上下文: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, err := readErrorResponseBody(response.Body)
+		if err != nil {
+			return "", nil, err
+		}
+		return "", nil, DecodeRPCError("GetLoggingContext", response.StatusCode, body)
+	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return "", nil, err
-	}
-	if response.StatusCode != http.StatusOK {
-		return "", nil, DecodeRPCError("GetLoggingContext", response.StatusCode, body)
 	}
 	encoded, err := encodeJSPBFields(body)
 	if err != nil {
@@ -678,8 +684,11 @@ func (runtime *goWAARuntime) drain(response *http.Response, err error) []byte {
 		return nil
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil
+	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil || response.StatusCode != http.StatusOK {
+	if err != nil {
 		return nil
 	}
 	return body
@@ -748,12 +757,16 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 		return waa.Challenge{}, fmt.Errorf("调用 Waa/Create: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		raw, err := readErrorResponseBody(response.Body)
+		if err != nil {
+			return waa.Challenge{}, err
+		}
+		return waa.Challenge{}, fmt.Errorf("Waa/Create 返回 HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
+	}
 	raw, err := io.ReadAll(response.Body)
 	if err != nil {
 		return waa.Challenge{}, err
-	}
-	if response.StatusCode != http.StatusOK {
-		return waa.Challenge{}, fmt.Errorf("Waa/Create 返回 HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return waa.ParseChallenge(raw)
 }
@@ -794,15 +807,17 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 		return "", fmt.Errorf("下载 WAA 解释器: %w", err)
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(response.Body)
-	if err != nil {
-		return "", err
-	}
+	var data []byte
 	switch {
 	case response.StatusCode == http.StatusNotModified && cached != "":
 		data = []byte(cached)
 	case response.StatusCode != http.StatusOK:
 		return "", fmt.Errorf("下载 WAA 解释器返回 HTTP %d", response.StatusCode)
+	default:
+		data, err = io.ReadAll(response.Body)
+		if err != nil {
+			return "", err
+		}
 	}
 	if hash := waa.InterpreterHash(data); hash != challenge.InterpreterHash {
 		return "", fmt.Errorf("WAA 解释器摘要不一致 expected=%s actual=%s", challenge.InterpreterHash, hash)

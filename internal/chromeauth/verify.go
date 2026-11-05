@@ -127,15 +127,15 @@ func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.St
 		return "", fmt.Errorf("访问 AI Studio 登录页: %w", err)
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return "", fmt.Errorf("读取 AI Studio 登录页: %w", err)
-	}
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		return "", ErrSignedOut
 	}
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("AI Studio 登录页返回 HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取 AI Studio 登录页: %w", err)
 	}
 	var email string
 	if match := accountEmailPattern.FindSubmatch(body); match == nil || json.Unmarshal(match[1], &email) != nil || !strings.Contains(email, "@") {

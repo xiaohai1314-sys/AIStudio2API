@@ -257,7 +257,12 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 				return nil, nil, fmt.Errorf("合并写代码助手附件上传响应 Cookie: %w", err)
 			}
 		}
-		raw, err := io.ReadAll(response.Body)
+		var raw []byte
+		if response.StatusCode != http.StatusOK {
+			raw, err = readErrorResponseBody(response.Body)
+		} else {
+			raw, err = io.ReadAll(response.Body)
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("读取写代码助手附件上传响应: %w", err)
 		}

@@ -40,7 +40,7 @@
   </tr>
 </table>
 
-**三步开始使用**：下载 [Releases](https://github.com/Mag1cFall/AIStudio2API/releases) 并启动 → 在“账户”页添加 Google 账户 → 点击“启动服务”，把 `http://127.0.0.1:2048` 作为 OpenAI、Anthropic 或 Gemini 客户端的 Base URL
+**三步开始使用**：下载 [Releases](https://github.com/xiaohai1314-sys/AIStudio2API/releases) 并启动 → 在“账户”页添加 Google 账户 → 点击“启动服务”，把 `http://127.0.0.1:2048` 作为 OpenAI、Anthropic 或 Gemini 客户端的 Base URL
 
 ## 🧩 Google 反代全家桶
 
@@ -49,8 +49,8 @@
 <table>
   <tr>
     <td width="33%" valign="top">
-      <p align="center"><a href="https://github.com/Mag1cFall/AIStudio2API"><img src="build/appicon.png" width="72" alt="AIStudio2API"></a><br>
-      <a href="https://github.com/Mag1cFall/AIStudio2API"><b>AIStudio&shy;2API</b></a></p>
+      <p align="center"><a href="https://github.com/xiaohai1314-sys/AIStudio2API"><img src="build/appicon.png" width="72" alt="AIStudio2API"></a><br>
+      <a href="https://github.com/xiaohai1314-sys/AIStudio2API"><b>AIStudio&shy;2API</b></a></p>
       官方 WAA proof 由 Camou&shy;fox 或进程内 Spider&shy;Monkey 生成，账户像在官网一样对话
     </td>
     <td width="33%" valign="top">
@@ -113,7 +113,7 @@
 
 ### 方式一：Windows 一键启动（推荐）
 
-从 [Releases](https://github.com/Mag1cFall/AIStudio2API/releases) 下载 `windows-amd64.zip` 发布包，解压后双击 `aistudio2api.exe`：
+从 [Releases](https://github.com/xiaohai1314-sys/AIStudio2API/releases) 下载 `windows-amd64.zip` 发布包，解压后双击 `aistudio2api.exe`：
 
 - 管理页面在桌面窗口中打开；启动时先显示启动画面，管理服务就绪后进入管理页面
 - 关闭窗口后程序在系统托盘继续运行：双击托盘图标显示窗口，右键打开托盘菜单；菜单可以显示窗口、在浏览器中打开管理页面、开关开机自启动或退出
@@ -122,7 +122,7 @@
 从源码启动时：
 
 ```powershell
-git clone https://github.com/Mag1cFall/AIStudio2API.git
+git clone https://github.com/xiaohai1314-sys/AIStudio2API.git
 cd AIStudio2API
 copy .env.example .env
 cd web
@@ -182,7 +182,7 @@ sudo apt install ./aistudio2api-<版本>-linux-amd64.deb
 #### 2. 克隆项目
 
 ```bash
-git clone https://github.com/Mag1cFall/AIStudio2API.git
+git clone https://github.com/xiaohai1314-sys/AIStudio2API.git
 cd AIStudio2API
 cp .env.example .env
 ```
@@ -214,7 +214,7 @@ Linux 与 macOS 同样在需要时自动准备对应平台的 Camoufox。
 
 ```bash
 mkdir aistudio2api && cd aistudio2api
-curl -fsSLO https://raw.githubusercontent.com/Mag1cFall/AIStudio2API/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/xiaohai1314-sys/AIStudio2API/main/docker-compose.yml
 mkdir data
 cat > data/.env <<'EOF'
 PROXY_API_KEY=<API key>
@@ -730,10 +730,10 @@ Go 负责编码、调度、流式解码与公开协议；`WAA_BACKEND=camoufox` 
 
 ## 📈 Star History
 
-<a href="https://star-history.com/#Mag1cFall/AIStudio2API&Date">
+<a href="https://star-history.com/#xiaohai1314-sys/AIStudio2API&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Mag1cFall/AIStudio2API&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xiaohai1314-sys/AIStudio2API&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xiaohai1314-sys/AIStudio2API&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xiaohai1314-sys/AIStudio2API&type=Date" />
   </picture>
 </a>

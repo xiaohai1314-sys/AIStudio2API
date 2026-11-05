@@ -1271,13 +1271,18 @@ func (t *MakerSuiteHTTPTransport) loadDriveDiscovery(ctx context.Context, lease 
 	if err != nil {
 		return fmt.Errorf("读取 Drive discovery: %w", err)
 	}
-	body, readErr := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		body, readErr := readErrorResponseBody(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil || closeErr != nil {
+			return errors.Join(readErr, closeErr)
+		}
+		return driveUploadRPCError("DriveDiscovery", response.StatusCode, body)
+	}
+	_, readErr := io.Copy(io.Discard, response.Body)
 	closeErr := response.Body.Close()
 	if readErr != nil || closeErr != nil {
 		return errors.Join(readErr, closeErr)
-	}
-	if response.StatusCode != http.StatusOK {
-		return driveUploadRPCError("DriveDiscovery", response.StatusCode, body)
 	}
 	t.driveMu.Lock()
 	t.driveDiscovered[account.ID] = true
@@ -1352,13 +1357,18 @@ func uploadDriveResumable(ctx context.Context, client *http.Client, token string
 	if err != nil {
 		return FileRef{}, fmt.Errorf("创建 Drive 上传会话: %w", err)
 	}
-	initBody, readErr := io.ReadAll(initResponse.Body)
+	if initResponse.StatusCode < 200 || initResponse.StatusCode >= 300 {
+		initBody, readErr := readErrorResponseBody(initResponse.Body)
+		closeErr := initResponse.Body.Close()
+		if readErr != nil || closeErr != nil {
+			return FileRef{}, errors.Join(readErr, closeErr)
+		}
+		return FileRef{}, driveUploadRPCError("DriveUploadInit", initResponse.StatusCode, initBody)
+	}
+	_, readErr := io.Copy(io.Discard, initResponse.Body)
 	closeErr := initResponse.Body.Close()
 	if readErr != nil || closeErr != nil {
 		return FileRef{}, errors.Join(readErr, closeErr)
-	}
-	if initResponse.StatusCode < 200 || initResponse.StatusCode >= 300 {
-		return FileRef{}, driveUploadRPCError("DriveUploadInit", initResponse.StatusCode, initBody)
 	}
 	sessionURL := strings.TrimSpace(initResponse.Header.Get("Location"))
 	if sessionURL == "" {
@@ -1410,14 +1420,15 @@ func putDriveUploadChunk(
 		return err
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
 	if response.StatusCode != http.StatusPermanentRedirect {
+		responseBody, err := readErrorResponseBody(response.Body)
+		if err != nil {
+			return err
+		}
 		return driveUploadRPCError("DriveUploadChunk", response.StatusCode, responseBody)
 	}
-	return nil
+	_, err = io.Copy(io.Discard, response.Body)
+	return err
 }
 
 func sendDriveUploadChunk(
@@ -1452,12 +1463,16 @@ func sendDriveUploadChunk(
 
 func parseDriveUploadResponse(response *http.Response, request UploadRequest) (FileRef, error) {
 	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		responseBody, err := readErrorResponseBody(response.Body)
+		if err != nil {
+			return FileRef{}, err
+		}
+		return FileRef{}, driveUploadRPCError("DriveUpload", response.StatusCode, responseBody)
+	}
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		return FileRef{}, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return FileRef{}, driveUploadRPCError("DriveUpload", response.StatusCode, responseBody)
 	}
 	var result struct {
 		ID string `json:"id"`
@@ -1506,7 +1521,7 @@ func (t *MakerSuiteHTTPTransport) DownloadDrive(ctx context.Context, accountID s
 		return MediaStream{}, release(fmt.Errorf("下载 Drive 文件: %w", err))
 	}
 	if response.StatusCode != http.StatusOK {
-		data, readErr := io.ReadAll(response.Body)
+		data, readErr := readErrorResponseBody(response.Body)
 		closeErr := response.Body.Close()
 		if readErr != nil || closeErr != nil {
 			return MediaStream{}, release(errors.Join(readErr, closeErr))
@@ -1546,14 +1561,15 @@ func (t *MakerSuiteHTTPTransport) DeleteDrive(ctx context.Context, accountID str
 		return fmt.Errorf("删除 Drive 文件: %w", err)
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		responseBody, err := readErrorResponseBody(response.Body)
+		if err != nil {
+			return err
+		}
 		return driveUploadRPCError("DriveDelete", response.StatusCode, responseBody)
 	}
-	return nil
+	_, err = io.Copy(io.Discard, response.Body)
+	return err
 }
 
 // DriveFileExists 通过当前账户固定出口按官网视频页的元数据请求查询 Drive 文件是否存在
@@ -1579,15 +1595,18 @@ func (t *MakerSuiteHTTPTransport) DriveFileExists(ctx context.Context, accountID
 		return false, fmt.Errorf("查询 Drive 文件: %w", err)
 	}
 	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return false, err
-	}
 	switch {
 	case response.StatusCode == http.StatusNotFound:
 		return false, nil
 	case response.StatusCode < 200 || response.StatusCode >= 300:
+		responseBody, err := readErrorResponseBody(response.Body)
+		if err != nil {
+			return false, err
+		}
 		return false, driveUploadRPCError("DriveGet", response.StatusCode, responseBody)
+	}
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		return false, err
 	}
 	return true, nil
 }
