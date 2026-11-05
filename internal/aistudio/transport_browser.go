@@ -291,21 +291,34 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 	paniclog.Go("transport_browser.go:272", func() {
 		func() {
 			var conn *http2.ClientConn
-			raw, err := pool.dial(address, class.anonymous)
+			var err error
+			// 记账与结果回送放进 defer：拨号 panic 时也要归还连接名额并唤醒等待方，
+			// 否则该 key 永久少一个名额、等待方又没有超时分支会一直挂住
+			defer func() {
+				recovered := recover()
+				if recovered != nil {
+					conn, err = nil, fmt.Errorf("浏览器连接拨号 panic: %v", recovered)
+				}
+				pool.mu.Lock()
+				pool.dialing[key]--
+				if err == nil {
+					pool.conns[key] = append(pool.conns[key], conn)
+				}
+				result <- dialed{conn: conn, err: err}
+				pool.notifyLocked()
+				pool.mu.Unlock()
+				if recovered != nil {
+					panic(recovered)
+				}
+			}()
+			var raw net.Conn
+			raw, err = pool.dial(address, class.anonymous)
 			if err == nil {
 				conn, err = pool.transport.NewClientConn(raw)
 				if err != nil {
 					_ = raw.Close()
 				}
 			}
-			pool.mu.Lock()
-			pool.dialing[key]--
-			if err == nil {
-				pool.conns[key] = append(pool.conns[key], conn)
-			}
-			result <- dialed{conn: conn, err: err}
-			pool.notifyLocked()
-			pool.mu.Unlock()
 		}()
 	})
 	for {

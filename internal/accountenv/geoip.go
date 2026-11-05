@@ -81,8 +81,10 @@ func ExitIP(ctx context.Context, client *http.Client) (netip.Addr, error) {
 
 // DownloadGeoIP 下载 DB-IP 免费国家库并解压保存到 path，当月文件未发布时回退到上月
 func DownloadGeoIP(ctx context.Context, client *http.Client, path string, now time.Time) error {
+	// 上月从当月 1 号倒推，避免 AddDate 在月末被归一化回当月（如 3 月 31 日减一月得到 3 月 3 日）
+	firstOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	var lastErr error
-	for _, month := range []time.Time{now, now.AddDate(0, -1, 0)} {
+	for _, month := range []time.Time{now, firstOfMonth.AddDate(0, -1, 0)} {
 		if err := downloadGeoIPMonth(ctx, client, path, month); err == nil {
 			return nil
 		} else {
@@ -92,7 +94,11 @@ func DownloadGeoIP(ctx context.Context, client *http.Client, path string, now ti
 	return lastErr
 }
 
-// downloadGeoIPMonth 下载指定月份的国家库，先写临时文件再替换，避免半成品被读取
+// maxGeoIPDatabaseBytes 是解压后数据库的大小上限：国家库正常在数 MiB 量级，
+// 上限用于挡住高压缩比文件把磁盘写满
+const maxGeoIPDatabaseBytes int64 = 128 << 20
+
+// downloadGeoIPMonth 下载指定月份的国家库，先写临时文件、校验是合法 MMDB 再替换，避免半成品或坏文件被读取
 func downloadGeoIPMonth(ctx context.Context, client *http.Client, path string, month time.Time) error {
 	address := "https://download.db-ip.com/free/dbip-country-lite-" + month.Format("2006-01") + ".mmdb.gz"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
@@ -120,12 +126,31 @@ func downloadGeoIPMonth(ctx context.Context, client *http.Client, path string, m
 		temporary.Close()
 		return fmt.Errorf("解压 GeoIP 数据库: %w", err)
 	}
-	if _, err := io.Copy(temporary, reader); err != nil {
+	written, err := io.Copy(temporary, io.LimitReader(reader, maxGeoIPDatabaseBytes+1))
+	if err != nil {
 		temporary.Close()
 		return fmt.Errorf("写入 GeoIP 数据库: %w", err)
 	}
+	if written > maxGeoIPDatabaseBytes {
+		temporary.Close()
+		return fmt.Errorf("GeoIP 数据库超过大小上限 %d MiB", maxGeoIPDatabaseBytes>>20)
+	}
 	if err := temporary.Close(); err != nil {
 		return err
+	}
+	// 替换前先按 MMDB 打开并校验内容：上游返回合法 gzip 包裹的非数据库内容时，
+	// 不能把已可用的数据库换成坏文件、让 GeoIP 功能静默失效
+	probe, err := maxminddb.Open(temporary.Name())
+	if err != nil {
+		return fmt.Errorf("校验 GeoIP 数据库: %w", err)
+	}
+	verifyErr := probe.Verify()
+	closeErr := probe.Close()
+	if verifyErr != nil {
+		return fmt.Errorf("校验 GeoIP 数据库: %w", verifyErr)
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	if err := os.Rename(temporary.Name(), path); err != nil {
 		return fmt.Errorf("替换 GeoIP 数据库: %w", err)

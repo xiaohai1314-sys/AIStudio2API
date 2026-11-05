@@ -53,6 +53,13 @@ func StartInputTokenEstimate(request GenerateRequest) <-chan int64 {
 	result := make(chan int64, 1)
 	paniclog.Go("usage.go:53", func() {
 		func() {
+			// panic 时也要回送已累计的估算值，否则调用方无超时地永久等待
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					result <- inputTokens
+					panic(recovered)
+				}
+			}()
 			for _, text := range texts {
 				inputTokens += localTextTokens(text)
 			}

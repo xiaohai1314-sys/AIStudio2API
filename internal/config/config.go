@@ -384,6 +384,19 @@ var configChecks = []configCheck{
 		return nil
 	}},
 	{[]string{"LISTEN_ADDR"}, func(c Config) error { return validateListenAddr("LISTEN_ADDR", c.ListenAddr) }},
+	{[]string{"PPROF_ADDR"}, func(c Config) error {
+		if strings.TrimSpace(c.PProfAddr) == "" {
+			return nil
+		}
+		if err := validateListenAddr("PPROF_ADDR", c.PProfAddr); err != nil {
+			return err
+		}
+		// pprof 无鉴权且 heap 导出可泄露进程内的凭据，只允许回环监听
+		if !loopbackListenAddr(c.PProfAddr) {
+			return fmt.Errorf("PPROF_ADDR 只能监听回环地址")
+		}
+		return nil
+	}},
 	{[]string{"PREVIEW_LISTEN_ADDR"}, func(c Config) error { return validateListenAddr("PREVIEW_LISTEN_ADDR", c.PreviewListenAddr) }},
 	{[]string{"LISTEN_ADDR", "PREVIEW_LISTEN_ADDR"}, func(c Config) error {
 		if listenPort(c.ListenAddr) == listenPort(c.PreviewListenAddr) {

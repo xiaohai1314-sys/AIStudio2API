@@ -398,6 +398,9 @@ func (c *Client) openAssistantGeneration(ctx context.Context, request GenerateRe
 	}
 	rpc := newRPCRequest(assistantOfflineMethod, request.AccountID, request.ID, body, false)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return "", nil, nil, err
+	}
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err == nil {
 		response, err = validateRPCResponse(assistantOfflineMethod, response)

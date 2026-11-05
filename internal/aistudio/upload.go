@@ -1064,6 +1064,13 @@ func (s *PooledService) UploadInlineMediaToLease(
 		for index, job := range pending {
 			paniclog.Go("upload.go:1042", func() {
 				func(index int, job uploadJob) {
+					// panic 时也要回送一条错误结果，否则收集循环永久阻塞、账户租约不释放
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							resultChannel <- uploadResult{index: index, err: fmt.Errorf("上传 worker panic: %v", recovered)}
+							panic(recovered)
+						}
+					}()
 					folder, err := s.client.appFolder(uploadCtx, targetID)
 					var file FileRef
 					if err == nil {
@@ -1293,6 +1300,13 @@ func uploadDriveMultipart(ctx context.Context, client *http.Client, address stri
 	encoded, writer := io.Pipe()
 	paniclog.Go("upload.go:1267", func() {
 		func() {
+			// panic 时也要以错误关闭管道写端，否则读端只能等上层超时才解脱
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					writer.CloseWithError(fmt.Errorf("编码上传正文 panic: %v", recovered))
+					panic(recovered)
+				}
+			}()
 			encoder := base64.NewEncoder(base64.StdEncoding, writer)
 			_, err := io.Copy(encoder, request.Reader)
 			if err == nil {

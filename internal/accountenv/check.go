@@ -37,6 +37,31 @@ var countryLanguages = map[string]string{
 	"VN": "vi", "ZA": "en",
 }
 
+// countryZoneOverrides 修正生成表的代表时区：生成表取 zone1970.tab 中首个列出该国的时区，
+// 会选到离岛或他国时区（如 AU 选到 Lord_Howe、UA 选到 Simferopol），这里改为各国的主流主时区
+var countryZoneOverrides = map[string]string{
+	"AU": "Australia/Sydney",
+	"BR": "America/Sao_Paulo",
+	"CA": "America/Toronto",
+	"DE": "Europe/Berlin",
+	"DK": "Europe/Copenhagen",
+	"IS": "Atlantic/Reykjavik",
+	"NL": "Europe/Amsterdam",
+	"NO": "Europe/Oslo",
+	"RU": "Europe/Moscow",
+	"SE": "Europe/Stockholm",
+	"UA": "Europe/Kyiv",
+}
+
+// representativeZone 返回国家或地区的代表时区
+func representativeZone(country string) (string, bool) {
+	if zone, ok := countryZoneOverrides[country]; ok {
+		return zone, true
+	}
+	zone, ok := countryZones[country]
+	return zone, ok
+}
+
 // Check 校验语言与时区的自洽性，返回警告与建议；不涉及网络
 func Check(locale, timezone string) ([]Warning, Suggestion) {
 	warnings := make([]Warning, 0, 2)
@@ -57,7 +82,7 @@ func Check(locale, timezone string) ([]Warning, Suggestion) {
 			Code:    "locale_timezone_mismatch",
 			Message: fmt.Sprintf("语言地区 %s 与时区 %s（%s）不一致", region, zone, strings.Join(countries, "/")),
 		})
-		if representative, ok := countryZones[region]; ok {
+		if representative, ok := representativeZone(region); ok {
 			suggestion.Timezone = representative
 		}
 		if len(countries) == 1 {
@@ -65,7 +90,7 @@ func Check(locale, timezone string) ([]Warning, Suggestion) {
 		}
 	}
 	if !zoneValid && region != "" {
-		if representative, ok := countryZones[region]; ok {
+		if representative, ok := representativeZone(region); ok {
 			suggestion.Timezone = representative
 		}
 	}
@@ -95,7 +120,13 @@ func CheckExit(locale, timezone, country string) ([]Warning, Suggestion) {
 			Message: fmt.Sprintf("出口 IP 位于 %s，与时区 %s（%s）不一致", country, strings.TrimSpace(timezone), strings.Join(countries, "/")),
 		})
 	}
-	if representative, ok := countryZones[country]; ok {
+	// 当前时区已与出口国家相符时不要给改时区的建议：代表时区只是该国的某一个时区，
+	// 无条件覆盖会把本来正确的时区（如 America/Chicago）诱导改成另一个（如 America/New_York）
+	zoneFits := false
+	if countries, ok := ZoneCountries(timezone); ok && slices.Contains(countries, country) {
+		zoneFits = true
+	}
+	if representative, ok := representativeZone(country); ok && !zoneFits {
 		suggestion.Timezone = representative
 	}
 	suggestion.Locale = suggestLocale(language, country)
@@ -108,28 +139,66 @@ func SuggestForCountry(country string) (locale, timezone string) {
 	if country == "" {
 		return "", ""
 	}
-	return suggestLocale("", country), countryZones[country]
+	zone, _ := representativeZone(country)
+	return suggestLocale("", country), zone
 }
 
 // SplitLocale 拆分语言与地区，语言小写、地区大写；地区可省略，格式无效时 valid 为 false
+// 接受 BCP 47 的脚本子标签（如 zh-Hans-CN、sr-Latn-RS），地区取脚本之后的段
 func SplitLocale(locale string) (language, region string, valid bool) {
 	locale = strings.TrimSpace(locale)
 	if locale == "" {
 		return "", "", false
 	}
-	language, region, found := strings.Cut(strings.ReplaceAll(locale, "_", "-"), "-")
-	language = strings.ToLower(language)
+	parts := strings.Split(strings.ReplaceAll(locale, "_", "-"), "-")
+	language = strings.ToLower(parts[0])
 	if len(language) < 2 || len(language) > 3 || !letters(language) {
 		return "", "", false
 	}
-	if !found {
+	if len(parts) == 1 {
 		return language, "", true
 	}
-	region = strings.ToUpper(region)
+	rest := parts[1:]
+	if len(rest) > 1 && len(rest[0]) == 4 && letters(rest[0]) {
+		rest = rest[1:]
+	}
+	if len(rest) != 1 {
+		return "", "", false
+	}
+	region = strings.ToUpper(rest[0])
 	if len(region) == 2 && letters(region) || len(region) == 3 && digits(region) {
 		return language, region, true
 	}
 	return "", "", false
+}
+
+// zoneAliases 是 tzdb 的向后兼容链接名到规范时区名的映射：
+// 别名能被 LoadLocation 加载，但生成表里只有规范名，不映射就会查空集合、整段一致性检查被跳过
+var zoneAliases = map[string]string{
+	"America/Godthab":      "America/Nuuk",
+	"America/Indianapolis": "America/Indiana/Indianapolis",
+	"America/Montreal":     "America/Toronto",
+	"Asia/Calcutta":        "Asia/Kolkata",
+	"Asia/Chongqing":       "Asia/Shanghai",
+	"Asia/Chungking":       "Asia/Shanghai",
+	"Asia/Harbin":          "Asia/Shanghai",
+	"Asia/Istanbul":        "Europe/Istanbul",
+	"Asia/Katmandu":        "Asia/Kathmandu",
+	"Asia/Saigon":          "Asia/Ho_Chi_Minh",
+	"Canada/Atlantic":      "America/Halifax",
+	"Canada/Central":       "America/Winnipeg",
+	"Canada/Eastern":       "America/Toronto",
+	"Canada/Mountain":      "America/Edmonton",
+	"Canada/Newfoundland":  "America/St_Johns",
+	"Canada/Pacific":       "America/Vancouver",
+	"Europe/Belfast":       "Europe/London",
+	"Europe/Kiev":          "Europe/Kyiv",
+	"US/Alaska":            "America/Anchorage",
+	"US/Central":           "America/Chicago",
+	"US/Eastern":           "America/New_York",
+	"US/Hawaii":            "Pacific/Honolulu",
+	"US/Mountain":          "America/Denver",
+	"US/Pacific":           "America/Los_Angeles",
 }
 
 // ZoneCountries 返回时区使用的国家或地区集合，时区非法时 valid 为 false；UTC 等无国家时区返回空集合
@@ -140,9 +209,22 @@ func ZoneCountries(timezone string) ([]string, bool) {
 	}
 	location, err := tzcache.Load(timezone)
 	if err != nil {
-		return nil, false
+		// 本地 tzdata 可能没有别名的链接条目（如裁剪过的镜像缺 Europe/Kiev），
+		// 已知别名改用规范名重试，避免把合法时区误报为无效
+		canonical, ok := zoneAliases[timezone]
+		if !ok {
+			return nil, false
+		}
+		location, err = tzcache.Load(canonical)
+		if err != nil {
+			return nil, false
+		}
 	}
-	return zoneCountries[location.String()], true
+	name := location.String()
+	if canonical, ok := zoneAliases[name]; ok {
+		name = canonical
+	}
+	return zoneCountries[name], true
 }
 
 // suggestLocale 按国家的主要语言给出语言-地区，主要语言缺失时沿用当前语言

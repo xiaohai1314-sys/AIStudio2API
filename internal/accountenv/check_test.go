@@ -56,6 +56,24 @@ func TestCheckExit(t *testing.T) {
 	}
 }
 
+// TestCheckExitConsistentZone 验证时区已与出口国家相符时不给改时区建议，别名时区也能查到国家
+func TestCheckExitConsistentZone(t *testing.T) {
+	_, suggestion := CheckExit("en-US", "America/Chicago", "US")
+	if suggestion.Timezone != "" {
+		t.Fatalf("一致时建议时区 = %q，期望为空", suggestion.Timezone)
+	}
+	countries, valid := ZoneCountries("Europe/Kiev")
+	if !valid || len(countries) != 1 || countries[0] != "UA" {
+		t.Fatalf("别名时区 Europe/Kiev 的国家 = %v, %v，期望 [UA]", countries, valid)
+	}
+	if _, zone := SuggestForCountry("UA"); zone != "Europe/Kyiv" {
+		t.Fatalf("UA 代表时区 = %q，期望 Europe/Kyiv", zone)
+	}
+	if _, zone := SuggestForCountry("AU"); zone != "Australia/Sydney" {
+		t.Fatalf("AU 代表时区 = %q，期望 Australia/Sydney", zone)
+	}
+}
+
 // TestSplitLocale 验证语言地区拆分与规范化
 func TestSplitLocale(t *testing.T) {
 	cases := []struct {
@@ -66,6 +84,9 @@ func TestSplitLocale(t *testing.T) {
 	}{
 		{"en-US", "en", "US", true},
 		{"zh_cn", "zh", "CN", true},
+		{"zh-Hans-CN", "zh", "CN", true},
+		{"zh-Hant-TW", "zh", "TW", true},
+		{"sr-Latn-RS", "sr", "RS", true},
 		{"pt", "pt", "", true},
 		{"en-419", "en", "419", true},
 		{"", "", "", false},

@@ -67,6 +67,9 @@ func (c *Client) GenerateImage(ctx context.Context, request ImageRequest) ([]Gen
 	}
 	rpc := newRPCRequest("GenerateImage", request.AccountID, "", EncodeGenerateImageRequest(request), false)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return nil, err
+	}
 	response, err := c.protected.(ImageProtectedTransport).DoProtectedImage(ctx, request, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio GenerateImage: %w", err)

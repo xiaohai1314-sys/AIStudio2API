@@ -268,6 +268,9 @@ func (c *Client) generateInteraction(ctx context.Context, request GenerateReques
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	bindingRequest := request
 	bindingRequest.Contents = binding
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return nil, err
+	}
 	response, err := c.protected.DoProtected(ctx, bindingRequest, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio CreateInteractionStream: %w", err)
@@ -778,6 +781,9 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	bindingRequest := request
 	bindingRequest.Contents = binding
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return nil, err
+	}
 	response, err := c.protected.DoProtected(ctx, bindingRequest, rpc)
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio CreateInteraction: %w", err)
@@ -825,6 +831,10 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 	// GetInteractionStream 的 WAA 绑定输入是 interaction ID
 	streamRequest := request
 	streamRequest.Contents = []Content{{Role: RoleUser, Parts: []Part{{Text: id}}}}
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		cancel()
+		return nil, err
+	}
 	response, err = c.protected.DoProtected(ctx, streamRequest, stream)
 	if err != nil {
 		cancel()

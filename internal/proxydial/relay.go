@@ -132,13 +132,14 @@ func (relay *Relay) handle(client net.Conn) {
 
 // pipe 单向转发到源端结束，正常结束时只关闭对端写方向，出错或对端不支持半关闭时关闭两端
 func pipe(destination, source net.Conn, done chan<- struct{}) {
+	// 完成通知放进 defer：pipe panic 时 handle 也能收到信号退出等待
+	defer func() { done <- struct{}{} }()
 	_, err := io.Copy(destination, source)
 	writer, halfClose := destination.(interface{ CloseWrite() error })
 	if err != nil || !halfClose || writer.CloseWrite() != nil {
 		_ = destination.Close()
 		_ = source.Close()
 	}
-	done <- struct{}{}
 }
 
 // readSocksConnect 读取无认证 SOCKS5 握手与 CONNECT 请求，返回未解析的目标地址

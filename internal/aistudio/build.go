@@ -1072,6 +1072,9 @@ func (c *Client) sendBuildMode(ctx context.Context, request GenerateRequest, ent
 	reportUpstreamMode(ctx, method, mode, reason)
 	rpc := newRPCRequest(method, request.AccountID, request.ID, proxy, !unary)
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
+	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
+		return nil, nil, err
+	}
 	response, err := c.protected.DoProtected(ctx, request, rpc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)

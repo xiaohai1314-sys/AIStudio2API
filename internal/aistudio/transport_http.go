@@ -107,14 +107,19 @@ func NewMakerSuiteHTTPTransport(options HTTPTransportOptions) (*MakerSuiteHTTPTr
 	return transport, nil
 }
 
-// sendHTTP 发送 HTTP 请求，请求失败时错误中的地址不含查询参数
-func sendHTTP(client *http.Client, request *http.Request) (*http.Response, error) {
-	response, err := client.Do(request)
+// stripErrorQuery 剥掉请求错误中 URL 的查询参数，避免 key、upload_id 等会话凭据随错误进入日志或响应
+func stripErrorQuery(err error) error {
 	var requestErr *url.Error
 	if errors.As(err, &requestErr) {
 		requestErr.URL, _, _ = strings.Cut(requestErr.URL, "?")
 	}
-	return response, err
+	return err
+}
+
+// sendHTTP 发送 HTTP 请求，请求失败时错误中的地址不含查询参数
+func sendHTTP(client *http.Client, request *http.Request) (*http.Response, error) {
+	response, err := client.Do(request)
+	return response, stripErrorQuery(err)
 }
 
 // DiscoverPublicHeaders 从 AI Studio 首页读取普通 RPC 所需的公开头
@@ -288,7 +293,8 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 // 健康的长时间思考流会超过任何固定上限，超时由调用方 ctx 控制；非流式包 unaryRPCTimeout 兜底
 func doClientRequest(ctx context.Context, client *http.Client, request *http.Request, streaming bool) (*http.Response, error) {
 	if streaming {
-		return client.Do(request)
+		response, err := client.Do(request)
+		return response, stripErrorQuery(err)
 	}
 	return unaryClientDo(ctx, client, request)
 }
@@ -313,7 +319,7 @@ func unaryClientDoWithTimeout(ctx context.Context, client *http.Client, request 
 	response, err := client.Do(request.WithContext(ctx))
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, stripErrorQuery(err)
 	}
 	response.Body = &cancelOnCloseBody{ReadCloser: response.Body, cancel: cancel}
 	return response, nil

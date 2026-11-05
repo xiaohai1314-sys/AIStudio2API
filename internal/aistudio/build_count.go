@@ -85,6 +85,9 @@ func (c *Client) buildCountTokens(ctx context.Context, accountID string, request
 	selection := AccountSelection{
 		ModelID: request.Model, ModelAccessScope: ModelAccessKey("count-tokens", request.Model), Method: "countTokens", AccountID: accountID, Channel: ChannelBuild,
 	}
+	if err := c.pacer.Wait(ctx, accountID); err != nil {
+		return TokenCount{}, err
+	}
 	response, err := transport.DoProtectedBuild(ctx, selection, contentsText(request.Contents), rpc)
 	if err != nil {
 		return TokenCount{}, fmt.Errorf("发送 AI Studio %s: %w", buildProxyUnaryMethod, err)

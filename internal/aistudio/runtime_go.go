@@ -266,12 +266,25 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	}
 	loggingDone := make(chan loggingContext, 1)
 	paniclog.Go("runtime_go.go:266", func() {
+		// panic 时也要回送结果，否则 open() 永久卡在接收上
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				loggingDone <- loggingContext{err: fmt.Errorf("loggingContextHeader panic: %v", recovered)}
+				panic(recovered)
+			}
+		}()
 		extension, body, err := runtime.loggingContextHeader(ctx, apiKey, visitID)
 		loggingDone <- loggingContext{extension, body, err}
 	})
 	pageDone := make(chan [][]byte, 1)
 	pageStarted := time.Now()
 	paniclog.Go("runtime_go.go:272", func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				pageDone <- nil
+				panic(recovered)
+			}
+		}()
 		pageDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, "", pageStartupRPCs)
 	})
 	challenge, err := runtime.createChallenge(ctx, nil)
@@ -301,8 +314,9 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	reportGoStartup(options, camoufoxnative.StartupBootstrappingWAA)
 	followupDone := make(chan struct{})
 	paniclog.Go("runtime_go.go:301", func() {
+		// close 放进 defer：sendFollowupRPCs panic 时 open() 也能继续走错误路径
+		defer close(followupDone)
 		runtime.sendFollowupRPCs(ctx, apiKey, visitID, extension, startup)
-		close(followupDone)
 	})
 	vm, err := runtime.startVM(ctx, challenge)
 	<-followupDone

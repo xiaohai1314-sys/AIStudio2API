@@ -103,12 +103,18 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 	defer stopShell()
 	var restarting atomic.Bool
 	paniclog.Go("app.go:97", func() {
-		started, err := runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready)
+		var started bool
+		// 完成信号放进 defer：runService panic 时也要关闭 stopped，
+		// 否则 stopService 的等待永久阻塞，进程无法正常退出
+		defer func() {
+			close(stopped)
+			if started {
+				stopShell()
+			}
+		}()
+		var err error
+		started, err = runService(ctx, cancel, cfg, options, logs, executable, &restarting, ready)
 		serviceErr = err
-		close(stopped)
-		if started {
-			stopShell()
-		}
 	})
 	shellErr := shell.run(shellCtx, func() (serviceReady, error) {
 		select {

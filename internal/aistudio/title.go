@@ -48,6 +48,9 @@ func (c *Client) GenerateTitle(ctx context.Context, accountID string, request Ti
 	body, _ := json.Marshal([]any{request.Prompt, answer, nil})
 	rpc := newRPCRequest("GenerateTitle", accountID, "", body, false)
 	c.applyBenefitTier(rpc.Method, accountID, rpc.Header)
+	if err := c.pacer.Wait(ctx, accountID); err != nil {
+		return "", err
+	}
 	response, err := c.protected.(TitleProtectedTransport).DoProtectedTitle(ctx, request, rpc)
 	if err != nil {
 		return "", fmt.Errorf("发送 AI Studio GenerateTitle: %w", err)

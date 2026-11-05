@@ -77,7 +77,7 @@ func (s *App) bindTray(tray *application.SystemTray, click func(), popup func(in
 			defer conn.RemoveSignal(signals)
 			name := fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
 			for signal := range signals {
-				if signal.Name != "org.freedesktop.DBus.NameAcquired" || signal.Body[0] != name {
+				if signal.Name != "org.freedesktop.DBus.NameAcquired" || len(signal.Body) == 0 || signal.Body[0] != name {
 					continue
 				}
 				err := conn.ExportMethodTable(map[string]interface{}{
