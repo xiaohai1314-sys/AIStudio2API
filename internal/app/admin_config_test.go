@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -21,7 +22,8 @@ func TestAdminConfig(t *testing.T) {
 	cfg.AdminAuthEnabled = true
 	cfg.AdminUsername = "operator"
 	cfg.AdminPassword = "test-password"
-	cfg.EncryptCredentials = true
+	// 凭据加密依赖 Windows DPAPI，非 Windows 平台配置校验会拒绝该选项
+	cfg.EncryptCredentials = runtime.GOOS == "windows"
 	cfg.PProfAddr = "127.0.0.1:6060"
 	cfg.GeoIPDBPath = "custom-geoip.mmdb"
 	if err := cfg.Save(path); err != nil {
@@ -62,7 +64,7 @@ func TestAdminConfig(t *testing.T) {
 	if !saved.AutoStart {
 		t.Fatal("auto_start was not saved")
 	}
-	if !saved.AuthFailurePause || !saved.EncryptCredentials || saved.PProfAddr != cfg.PProfAddr || saved.GeoIPDBPath != cfg.GeoIPDBPath {
+	if !saved.AuthFailurePause || saved.EncryptCredentials != cfg.EncryptCredentials || saved.PProfAddr != cfg.PProfAddr || saved.GeoIPDBPath != cfg.GeoIPDBPath {
 		t.Fatalf("environment-only config changed: auth=%v encrypt=%v pprof=%q geoip=%q", saved.AuthFailurePause, saved.EncryptCredentials, saved.PProfAddr, saved.GeoIPDBPath)
 	}
 	manager := &runtimeManager{activeManagement: cfg}
