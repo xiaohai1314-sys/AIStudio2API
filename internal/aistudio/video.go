@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -14,6 +13,8 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 )
+
+const maxVideoFileBytes int64 = 512 << 20
 
 // VideoService 定义长任务视频适配器依赖的能力
 type VideoService interface {
@@ -127,8 +128,21 @@ func (s *PooledService) downloadFileBlob(ctx context.Context, fileID string) (*B
 	if err != nil {
 		return nil, err
 	}
+	return readVideoMedia(stream, maxVideoFileBytes)
+}
+
+func readVideoMedia(stream MediaStream, maxBytes int64) (*Blob, error) {
+	if stream.Body == nil {
+		return nil, fmt.Errorf("video media response body is missing")
+	}
 	defer stream.Body.Close()
-	data, err := io.ReadAll(stream.Body)
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("video media response limit must be positive")
+	}
+	if stream.Size > maxBytes {
+		return nil, fmt.Errorf("video media exceeds %d bytes", maxBytes)
+	}
+	data, err := ReadResponseBody(stream.Body, maxBytes)
 	if err != nil {
 		return nil, err
 	}

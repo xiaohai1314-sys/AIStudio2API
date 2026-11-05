@@ -224,7 +224,7 @@ EOF
 docker compose up -d
 ```
 
-The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.0.0:2048` inside the container. `data/` holds `.env`, `auth/`, and `runtime/`; with the Camoufox backend, the first start downloads Camoufox to `data/runtime/camoufox/`. To migrate an existing installation, copy these three items into `data/`. The container runs as root, so files the service writes in `data/` are owned by root; edit them with `sudo` on Linux hosts.
+The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.0.0:2048` inside the container. `data/` holds `.env`, `auth/`, and `runtime/`; with the Camoufox backend, the first start downloads Camoufox to `data/runtime/camoufox/`. To migrate an existing installation, copy these three items into `data/`. The container runs as the non-root `app` user; permissions for files mounted at `data/` depend on the host directory permissions and the container UID.
 
 - The container always listens on `0.0.0.0:2048` inside, so `data/.env` must set `PROXY_API_KEY` even when Compose publishes the ports on the host loopback interface; without it the service refuses to start. Only when remote access is required, change the mapping in `docker-compose.yml` to `0.0.0.0:2048:2048` (and expose the preview port only if needed) and use a strong key. Opening the console from outside the container also requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
 - Add accounts: choose "Sign in with browser" in "Add account" on the console and sign in to Google in the sign-in window that opens in the console; you can also paste cookies, or copy `auth/<Google email>/` from a computer that can sign in to Google into `data/auth/`.

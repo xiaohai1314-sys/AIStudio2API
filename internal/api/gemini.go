@@ -502,12 +502,14 @@ func (s *server) handleGeminiAction(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "unknown method: "+method)
 		return
 	}
-	if err := inlineRemoteMedia(r.Context(), generateRequest.Contents); err != nil {
+	releaseMedia, err := inlineRemoteMediaWithBudget(r.Context(), generateRequest.Contents)
+	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		}
 		return
 	}
+	defer releaseMedia()
 	if method == "countTokens" {
 		s.handleGeminiCountTokens(w, r, generateRequest, cache)
 		return

@@ -128,7 +128,11 @@ func (s *server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		generateRequest, err = s.resolveMCPTools(r.Context(), generateRequest)
 	}
 	if err == nil {
-		err = inlineRemoteMedia(r.Context(), generateRequest.Contents)
+		var releaseMedia func()
+		releaseMedia, err = inlineRemoteMediaWithBudget(r.Context(), generateRequest.Contents)
+		if err == nil {
+			defer releaseMedia()
+		}
 	}
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -304,7 +308,11 @@ func (s *server) countAnthropicTokens(w http.ResponseWriter, r *http.Request, re
 		generateRequest, err = s.resolveMCPTools(r.Context(), generateRequest)
 	}
 	if err == nil {
-		err = inlineRemoteMedia(r.Context(), generateRequest.Contents)
+		var releaseMedia func()
+		releaseMedia, err = inlineRemoteMediaWithBudget(r.Context(), generateRequest.Contents)
+		if err == nil {
+			defer releaseMedia()
+		}
 	}
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())

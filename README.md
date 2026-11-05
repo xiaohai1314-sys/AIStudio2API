@@ -224,7 +224,7 @@ EOF
 docker compose up -d
 ```
 
-镜像支持 linux/amd64 与 linux/arm64，服务在容器内监听 `0.0.0.0:2048`。`data/` 保存 `.env`、`auth/` 与 `runtime/`，Camoufox 后端首次启动时把 Camoufox 下载到 `data/runtime/camoufox/`；迁移已有安装时把这三项复制到 `data/`。容器以 root 运行，服务写入 `data/` 的文件属于 root，Linux 宿主机上用 `sudo` 编辑。
+镜像支持 linux/amd64 与 linux/arm64，服务在容器内监听 `0.0.0.0:2048`。`data/` 保存 `.env`、`auth/` 与 `runtime/`，Camoufox 后端首次启动时把 Camoufox 下载到 `data/runtime/camoufox/`；迁移已有安装时把这三项复制到 `data/`。容器以非 root 的 `app` 用户运行；挂载到 `data/` 的文件权限由宿主目录权限和容器内 UID 决定。
 
 - 容器内固定监听 `0.0.0.0:2048`，因此即使 Compose 只把端口绑定到宿主机回环地址，`data/.env` 也必须设置 `PROXY_API_KEY`，否则服务拒绝启动。确需供其他机器访问时，再将 `docker-compose.yml` 的端口改为 `0.0.0.0:2048:2048`（预览端口按需开放）并使用高强度 key；从容器外打开管理页面还需要 `ADMIN_AUTH_ENABLED=true` 与管理密码，用户名默认为 `admin`
 - 添加账户：在管理页面“添加账户”中选择“浏览器登录”，在管理页面打开的登录窗口中登录 Google；也可以粘贴 Cookie，或把能登录 Google 的电脑上的 `auth/<Google 邮箱>/` 复制到 `data/auth/`

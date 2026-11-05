@@ -461,16 +461,24 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	releaseMedia := prepared.releaseMedia
+	defer func() {
+		if releaseMedia != nil {
+			releaseMedia()
+		}
+	}()
 	if responsesCompactionTrigger(request.Input) {
 		s.handleCompactionTrigger(w, r, request, prepared, responseID)
 		return
 	}
 	if request.Background && !request.Stream {
 		s.respondBackground(w, r, request, prepared, responseID)
+		releaseMedia = nil
 		return
 	}
 	if request.Background {
 		s.streamBackground(w, r, request, prepared, responseID)
+		releaseMedia = nil
 		return
 	}
 	if !request.Stream {
@@ -485,6 +493,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	releaseMedia = prepared.releaseMedia
 	generateRequest := prepared.generate
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
 	events, err := s.service.Generate(r.Context(), generateRequest)
@@ -500,6 +509,9 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	if request.Stream {
 		s.streamResponses(w, r, request, prepared, responseID, created, events, compaction)
+		if request.storesResponse() {
+			releaseMedia = nil
+		}
 		return
 	}
 	result, err := consumeEvents(r.Context(), events)
@@ -516,6 +528,7 @@ func (s *server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.storesResponse() {
 		s.storeResponse(responseID, request, prepared, result, response)
+		releaseMedia = nil
 	}
 	writeJSON(w, http.StatusOK, officialOrder("responses", responseView(response, request.Include)))
 }
@@ -564,6 +577,7 @@ type responsesPreparation struct {
 	contents           []aistudio.Content
 	inlineInstructions []string
 	input              []storedItem
+	releaseMedia       func()
 	// approved 是批准后由服务执行的 mcp_call 项，排在输出首位
 	approved []map[string]any
 	// stream 为后台流式响应的事件记录，随响应对象保存
@@ -594,7 +608,11 @@ func (s *server) compactOverThreshold(ctx context.Context, request *responsesReq
 		return nil, err
 	}
 	compacted.approved = prepared.approved
+	oldRelease := prepared.releaseMedia
 	*prepared = compacted
+	if oldRelease != nil {
+		oldRelease()
+	}
 	return item, nil
 }
 
@@ -628,9 +646,16 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 		return responsesPreparation{}, err
 	}
 	generateRequest = s.prepareSearch(generateRequest)
-	if err := inlineRemoteMedia(ctx, generateRequest.Contents); err != nil {
+	releaseMedia, err := inlineRemoteMediaWithBudget(ctx, generateRequest.Contents)
+	if err != nil {
 		return responsesPreparation{}, err
 	}
+	keepMedia := false
+	defer func() {
+		if !keepMedia {
+			releaseMedia()
+		}
+	}()
 	if tool := imageGenerationTool(request.Tools); tool != nil {
 		if _, _, err := openAIImageEncoding(tool.OutputFormat, tool.OutputCompression); err != nil {
 			return responsesPreparation{}, fmt.Errorf("image_generation: %w", err)
@@ -649,7 +674,7 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	}
 	prepared := responsesPreparation{
 		generate: generateRequest, contents: cloneResponseContents(generateRequest.Contents),
-		inlineInstructions: append([]string(nil), inlineInstructions...), input: responsesInputItems(input, id), approved: approved,
+		inlineInstructions: append([]string(nil), inlineInstructions...), input: responsesInputItems(input, id), approved: approved, releaseMedia: releaseMedia,
 	}
 	if tool := imageGenerationTool(request.Tools); tool != nil && tool.InputImageMask != nil {
 		mask, err := s.imageGenerationMask(ctx, *tool.InputImageMask)
@@ -660,6 +685,7 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 		prepared.generate.Contents = generateRequest.Contents
 	}
 	if request.PreviousResponseID == "" {
+		keepMedia = true
 		return prepared, nil
 	}
 	previous, ok := s.responseStates.Load(request.PreviousResponseID)
@@ -670,6 +696,7 @@ func (s *server) prepareResponses(ctx context.Context, request *responsesRequest
 	prepared.generate.Contents = append(cloneResponseContents(previous.Contents), generateRequest.Contents...)
 	inlineInstructions = append(append([]string(nil), previous.InlineInstructions...), inlineInstructions...)
 	prepared.generate.System = systemSegments(strings.Join(request.instructions(inlineInstructions), "\n"))
+	keepMedia = true
 	return prepared, nil
 }
 

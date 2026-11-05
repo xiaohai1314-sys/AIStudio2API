@@ -279,10 +279,29 @@ func (s *server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 // writeMediaStream 写出 200 与文件内容，不声明 Content-Length，避免元数据大小与实际流不一致时截断响应；复制或关闭出错时记入访问日志
 func writeMediaStream(w http.ResponseWriter, r *http.Request, body io.ReadCloser) {
 	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, body)
+	_, copyErr := copyMediaStream(w, body, openAIFileMaxBytes)
 	if err := errors.Join(copyErr, body.Close()); err != nil {
 		SetAccessLogError(r.Context(), err)
 	}
+}
+
+func copyMediaStream(dst io.Writer, source io.Reader, maxBytes int64) (int64, error) {
+	if maxBytes <= 0 {
+		return 0, fmt.Errorf("media response limit must be positive")
+	}
+	written, err := io.Copy(dst, io.LimitReader(source, maxBytes))
+	if err != nil || written < maxBytes {
+		return written, err
+	}
+	var extra [1]byte
+	count, err := io.ReadFull(source, extra[:])
+	if count > 0 {
+		return written, fmt.Errorf("media response exceeds %d bytes", maxBytes)
+	}
+	if err != nil && err != io.EOF {
+		return written, err
+	}
+	return written, nil
 }
 
 // handleFileDelete 删除上传文件

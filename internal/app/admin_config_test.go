@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
@@ -17,6 +18,7 @@ import (
 
 // TestAdminConfig 验证凭据保存、密码保留与管理重启标记
 func TestAdminConfig(t *testing.T) {
+	defer aistudio.SetUnaryRPCTimeout(config.Default().UnaryRPCTimeout)
 	path := filepath.Join(t.TempDir(), ".env")
 	cfg := config.Default()
 	cfg.AdminAuthEnabled = true
@@ -54,12 +56,16 @@ func TestAdminConfig(t *testing.T) {
 	}
 	value.Proxy = "http://127.0.0.1:1234"
 	value.AutoStart = true
+	value.UnaryRPCTimeout = "37s"
 	if _, err := admin.UpdateRuntimeConfig(ctx, value); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := config.Load(path)
 	if err != nil || saved.AdminPassword != cfg.AdminPassword {
 		t.Fatalf("password changed: %v", err)
+	}
+	if saved.UnaryRPCTimeout != 37*time.Second {
+		t.Fatalf("unary rpc timeout = %s, want 37s", saved.UnaryRPCTimeout)
 	}
 	if !saved.AutoStart {
 		t.Fatal("auto_start was not saved")

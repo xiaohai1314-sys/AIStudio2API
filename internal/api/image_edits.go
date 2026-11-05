@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -66,6 +67,12 @@ func (s *server) handleOpenAIImageEdits(w http.ResponseWriter, r *http.Request) 
 		if mimeType == "" {
 			mimeType = http.DetectContentType(data)
 		}
+		if strings.HasPrefix(mimeType, "image/") {
+			if err := validateImagePayload(data); err != nil {
+				writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+				return
+			}
+		}
 		mimeType, data = normalizeImagePayload(mimeType, data)
 		inputs = append(inputs, aistudio.Part{InlineData: &aistudio.Blob{MIME: mimeType, Data: data}})
 	}
@@ -89,12 +96,22 @@ func (s *server) handleOpenAIImageEdits(w http.ResponseWriter, r *http.Request) 
 
 // readMultipartFile 读取 multipart 文件段的全部内容
 func readMultipartFile(header *multipart.FileHeader) ([]byte, error) {
+	if header.Size > remoteMediaMaxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", remoteMediaMaxBytes)
+	}
 	file, err := header.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	return io.ReadAll(file)
+	data, err := io.ReadAll(io.LimitReader(file, remoteMediaMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > remoteMediaMaxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", remoteMediaMaxBytes)
+	}
+	return data, nil
 }
 
 // responsesImageMask 是 image_generation 工具的编辑遮罩，image_url 为 data URL 或 http(s) URL
@@ -115,20 +132,28 @@ func (s *server) imageGenerationMask(ctx context.Context, mask responsesImageMas
 			return nil, err
 		}
 		defer media.Body.Close()
-		data, err := io.ReadAll(media.Body)
+		if media.Size > remoteMediaMaxBytes {
+			return nil, fmt.Errorf("file exceeds %d bytes", remoteMediaMaxBytes)
+		}
+		data, err := io.ReadAll(io.LimitReader(media.Body, remoteMediaMaxBytes+1))
 		if err != nil {
 			return nil, err
 		}
+		if int64(len(data)) > remoteMediaMaxBytes {
+			return nil, fmt.Errorf("file exceeds %d bytes", remoteMediaMaxBytes)
+		}
 		return imageEditMask(data)
 	}
-	part, err := fileOrInlinePart(mask.ImageURL, "")
+	part, err := imageMaskPart(mask.ImageURL)
 	if err != nil {
 		return nil, err
 	}
 	contents := []aistudio.Content{{Parts: []aistudio.Part{part}}}
-	if err := inlineRemoteMedia(ctx, contents); err != nil {
+	releaseMedia, err := inlineRemoteMediaWithBudget(ctx, contents)
+	if err != nil {
 		return nil, err
 	}
+	defer releaseMedia()
 	if contents[0].Parts[0].InlineData == nil {
 		return nil, fmt.Errorf("image_url must be a data URL or an http(s) URL")
 	}
@@ -158,6 +183,18 @@ func withImageMask(contents []aistudio.Content, mask []byte) []aistudio.Content 
 
 // imageEditMask 把 OpenAI 遮罩中完全透明的像素转换为白色、其余像素转换为黑色，返回灰度 PNG
 func imageEditMask(data []byte) ([]byte, error) {
+	if int64(len(data)) > remoteMediaMaxBytes {
+		return nil, fmt.Errorf("mask exceeds %d bytes", remoteMediaMaxBytes)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("mask must be a valid image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > remoteMediaMaxDimension || config.Height > remoteMediaMaxDimension || int64(config.Width)*int64(config.Height) > remoteMediaMaxPixels {
+		return nil, fmt.Errorf("mask dimensions exceed %dx%d or %d pixels", remoteMediaMaxDimension, remoteMediaMaxDimension, remoteMediaMaxPixels)
+	}
+	remoteImageDecodeMu.Lock()
+	defer remoteImageDecodeMu.Unlock()
 	source, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("mask must be a PNG image: %w", err)
@@ -175,5 +212,63 @@ func imageEditMask(data []byte) ([]byte, error) {
 	if err := png.Encode(&encoded, mask); err != nil {
 		return nil, err
 	}
+	if int64(encoded.Len()) > remoteMediaMaxBytes {
+		return nil, fmt.Errorf("encoded mask exceeds %d bytes", remoteMediaMaxBytes)
+	}
 	return encoded.Bytes(), nil
+}
+
+// imageMaskPart is deliberately narrower than fileOrInlinePart: data URLs are
+// decoded under the image byte limit, and remote URLs still use the request
+// scoped downloader/budget.
+func imageMaskPart(value string) (aistudio.Part, error) {
+	if !strings.HasPrefix(value, "data:") {
+		if remoteMediaURL(value) {
+			return aistudio.Part{File: &aistudio.FileRef{ID: value}}, nil
+		}
+		return fileOrInlinePart(value, "")
+	}
+	metadata, encoded, ok := strings.Cut(strings.TrimPrefix(value, "data:"), ",")
+	if !ok {
+		return aistudio.Part{}, fmt.Errorf("data URL must contain a comma")
+	}
+	if strings.HasSuffix(metadata, ";base64") && int64(len(encoded)) > (remoteMediaMaxBytes*4/3+4) {
+		return aistudio.Part{}, fmt.Errorf("data URL exceeds %d bytes", remoteMediaMaxBytes)
+	}
+	var data []byte
+	var err error
+	if mediaType, base64Encoded := strings.CutSuffix(metadata, ";base64"); base64Encoded {
+		data, err = decodeBase64Flexible(encoded)
+		metadata = mediaType
+	} else {
+		var decoded string
+		decoded, err = pathUnescapeLimited(encoded, remoteMediaMaxBytes)
+		data = []byte(decoded)
+	}
+	if err != nil {
+		return aistudio.Part{}, fmt.Errorf("data URL: %w", err)
+	}
+	if int64(len(data)) > remoteMediaMaxBytes {
+		return aistudio.Part{}, fmt.Errorf("data URL exceeds %d bytes", remoteMediaMaxBytes)
+	}
+	return aistudio.Part{InlineData: &aistudio.Blob{MIME: metadata, Data: data}}, nil
+}
+
+func pathUnescapeLimited(encoded string, limit int64) (string, error) {
+	decodedSize := int64(0)
+	for index := 0; index < len(encoded); {
+		if encoded[index] == '%' {
+			if index+2 >= len(encoded) {
+				return "", fmt.Errorf("invalid URL escape")
+			}
+			index += 3
+		} else {
+			index++
+		}
+		decodedSize++
+		if decodedSize > limit {
+			return "", fmt.Errorf("data URL exceeds %d bytes", limit)
+		}
+	}
+	return url.PathUnescape(encoded)
 }

@@ -1,10 +1,14 @@
 package camoufoxnative
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -25,6 +29,23 @@ func TestVerifyCamoufoxArchive(t *testing.T) {
 	}
 	if err := verifyCamoufoxArchive(filepath.Join(t.TempDir(), "missing.zip"), strings.Repeat("0", 64)); err == nil {
 		t.Error("缺失文件被接受")
+	}
+}
+
+func TestDownloadCamoufoxArchiveRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.FormatInt(maxCamoufoxArchiveBytes+1, 10))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	archivePath := filepath.Join(t.TempDir(), "archive.part")
+	err := downloadCamoufoxArchive(context.Background(), server.URL, archivePath, "")
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("download error = %v, want oversized archive error", err)
+	}
+	if _, err := os.Stat(archivePath); !os.IsNotExist(err) {
+		t.Fatalf("oversized archive was left on disk: %v", err)
 	}
 }
 

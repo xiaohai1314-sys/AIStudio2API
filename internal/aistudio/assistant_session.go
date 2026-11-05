@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -238,7 +237,7 @@ func (s *PooledService) deleteAssistantApplet(ctx context.Context, accountID str
 	body, _ := json.Marshal([]any{applet})
 	response, err := s.client.do(ctx, "DeleteApplet", accountID, "", body, false)
 	if err == nil {
-		_, err = io.Copy(io.Discard, response.Body)
+		_, err = DrainResponseBody(response.Body, maxUnaryResponseBytes)
 		err = errors.Join(err, response.Body.Close())
 	}
 	var rpcErr *RPCError

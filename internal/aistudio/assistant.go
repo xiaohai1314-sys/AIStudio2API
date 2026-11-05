@@ -541,7 +541,7 @@ func (c *Client) createAssistantApplet(ctx context.Context, accountID string) (s
 		return "", err
 	}
 	defer response.Body.Close()
-	raw, err := io.ReadAll(response.Body)
+	raw, err := ReadResponseBody(response.Body, maxUnaryResponseBytes)
 	if err != nil {
 		return "", fmt.Errorf("读取 AI Studio CreateApplet: %w", err)
 	}
@@ -605,7 +605,7 @@ func (cleanup *assistantCleanup) run() {
 			body, _ := json.Marshal([]any{*generation, cleanup.session.applet})
 			response, err := cleanup.client.do(ctx, "CancelCodeAssistantOfflineGeneration", cleanup.accountID, "", body, false)
 			if err == nil {
-				_, err = io.Copy(io.Discard, response.Body)
+				_, err = DrainResponseBody(response.Body, maxUnaryResponseBytes)
 				err = errors.Join(err, response.Body.Close())
 			}
 			if err != nil {

@@ -374,9 +374,11 @@ func (s *server) compactionSummary(ctx context.Context, request responsesRequest
 		return "", nil, err
 	}
 	generate = s.prepareSearch(generate)
-	if err := inlineRemoteMedia(ctx, generate.Contents); err != nil {
+	releaseMedia, err := inlineRemoteMediaWithBudget(ctx, generate.Contents)
+	if err != nil {
 		return "", nil, err
 	}
+	defer releaseMedia()
 	generate.Contents = append(generate.Contents, aistudio.Content{Role: aistudio.RoleUser, Parts: []aistudio.Part{{Text: fmt.Sprintf(compactionInstructions, prompt)}}})
 	generate.Tools.ToolConfig.Mode = "none"
 	generate.Unary = true
@@ -413,6 +415,7 @@ func (s *server) handleResponsesCompact(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
+	defer prepared.releaseMedia()
 	item, retained, _, usage, err := s.compactResponses(r.Context(), request, prepared.previous, id)
 	if err != nil {
 		if shouldWriteRequestError(r, err) {
@@ -491,12 +494,23 @@ func (s *server) storeCompaction(ctx context.Context, id string, request respons
 	encodedItem, _ := json.Marshal(item)
 	window, _ := json.Marshal(append(slices.Clone(retained), encodedItem))
 	contents, inlineInstructions, err := responsesContents(window)
-	if err != nil || inlineRemoteMedia(ctx, contents) != nil {
+	if err != nil {
 		return
 	}
+	releaseMedia, err := inlineRemoteMediaWithBudget(ctx, contents)
+	if err != nil {
+		return
+	}
+	keepMedia := false
+	defer func() {
+		if !keepMedia {
+			releaseMedia()
+		}
+	}()
 	prepared.contents = contents
 	prepared.inlineInstructions = append(slices.Clone(prepared.previous.InlineInstructions), inlineInstructions...)
 	prepared.input = responsesInputItems(window, id)
 	prepared.previous = responseHistory{}
 	s.storeResponse(id, request, prepared, generationResult{}, response)
+	keepMedia = true
 }

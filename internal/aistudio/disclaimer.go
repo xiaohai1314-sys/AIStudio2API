@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"time"
 )
 
@@ -71,7 +70,7 @@ func (c *Client) readRPC(ctx context.Context, method string, accountID string, b
 		return nil, err
 	}
 	defer response.Body.Close()
-	raw, err := io.ReadAll(response.Body)
+	raw, err := ReadResponseBody(response.Body, maxUnaryResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读取 %s: %w", method, err)
 	}

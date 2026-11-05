@@ -28,6 +28,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 )
 
@@ -188,8 +189,12 @@ func (u *selfUpdater) fetchRelease(ctx context.Context) (*githubRelease, error) 
 		return nil, fmt.Errorf("读取最新发行版本: %w", err)
 	}
 	defer response.Body.Close()
+	raw, err := aistudio.ReadResponseBody(response.Body, 1<<20)
+	if err != nil {
+		return nil, fmt.Errorf("读取最新发行版本: %w", err)
+	}
 	var release githubRelease
-	if err := json.NewDecoder(response.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(raw, &release); err != nil {
 		return nil, fmt.Errorf("解析最新发行版本: %w", err)
 	}
 	return &release, nil
@@ -208,7 +213,7 @@ func (u *selfUpdater) download(ctx context.Context, release *githubRelease, name
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s: %w", name, err)
 	}
-	archive, err := io.ReadAll(response.Body)
+	archive, err := aistudio.ReadResponseBody(response.Body, 256<<20)
 	response.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("下载 %s: %w", name, err)

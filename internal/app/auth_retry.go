@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -466,7 +465,7 @@ func authenticationFailed(response *aistudio.RPCResponse) bool {
 
 // readAuthenticationFailure 读取并关闭认证失败响应，返回原始原因
 func readAuthenticationFailure(method string, response *aistudio.RPCResponse) (*aistudio.RPCError, error) {
-	body, readErr := io.ReadAll(response.Body)
+	body, readErr := aistudio.ReadResponseBody(response.Body, 1<<20)
 	if err := errors.Join(readErr, response.Body.Close()); err != nil {
 		return nil, fmt.Errorf("读取认证失败响应: %w", err)
 	}

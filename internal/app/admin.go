@@ -1049,6 +1049,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err := cfg.Save(admin.configPath); err != nil {
 		return api.RuntimeConfig{}, err
 	}
+	aistudio.SetUnaryRPCTimeout(cfg.UnaryRPCTimeout)
 	admin.pool.SetRoutingStrategy(cfg.RoutingStrategy)
 	admin.pool.SetModelChannels(modelChannels(cfg.ModelChannels))
 	admin.requests.log("service", "INFO", "服务配置已保存")

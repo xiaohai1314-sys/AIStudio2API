@@ -559,7 +559,7 @@ func (runtime *goWAARuntime) loadPage(ctx context.Context) (string, pageDocument
 			_ = response.Body.Close()
 			return "", pageDocument{}, fmt.Errorf("AI Studio 页面返回 HTTP %d", response.StatusCode)
 		}
-		body, readErr := io.ReadAll(response.Body)
+		body, readErr := ReadResponseBody(response.Body, maxHTMLResponseBytes)
 		_ = response.Body.Close()
 		if readErr != nil {
 			return "", pageDocument{}, fmt.Errorf("读取 AI Studio 页面: %w", readErr)
@@ -631,7 +631,7 @@ func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey st
 		}
 		return "", nil, DecodeRPCError("GetLoggingContext", response.StatusCode, body)
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := ReadResponseBody(response.Body, maxWAAResponseBytes)
 	if err != nil {
 		return "", nil, err
 	}
@@ -687,7 +687,7 @@ func (runtime *goWAARuntime) drain(response *http.Response, err error) []byte {
 	if response.StatusCode != http.StatusOK {
 		return nil
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := ReadResponseBody(response.Body, maxWAAResponseBytes)
 	if err != nil {
 		return nil
 	}
@@ -764,7 +764,7 @@ func (runtime *goWAARuntime) createChallenge(ctx context.Context, refresh []stri
 		}
 		return waa.Challenge{}, fmt.Errorf("Waa/Create 返回 HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
 	}
-	raw, err := io.ReadAll(response.Body)
+	raw, err := ReadResponseBody(response.Body, maxWAAResponseBytes)
 	if err != nil {
 		return waa.Challenge{}, err
 	}
@@ -814,7 +814,7 @@ func (runtime *goWAARuntime) loadInterpreter(ctx context.Context, challenge waa.
 	case response.StatusCode != http.StatusOK:
 		return "", fmt.Errorf("下载 WAA 解释器返回 HTTP %d", response.StatusCode)
 	default:
-		data, err = io.ReadAll(response.Body)
+		data, err = ReadResponseBody(response.Body, maxWAAResponseBytes)
 		if err != nil {
 			return "", err
 		}

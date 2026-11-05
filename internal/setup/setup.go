@@ -204,7 +204,13 @@ func (target *remoteTarget) Save(
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	decodeErr := json.NewDecoder(response.Body).Decode(&result)
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20+1))
+	decodeErr := readErr
+	if len(raw) > 1<<20 {
+		decodeErr = fmt.Errorf("远程实例响应超过 1 MiB")
+	} else if readErr == nil {
+		decodeErr = json.Unmarshal(raw, &result)
+	}
 	if response.StatusCode != http.StatusCreated {
 		if result.Error.Message != "" {
 			return "", fmt.Errorf("远程实例导入失败: HTTP %d: %s", response.StatusCode, result.Error.Message)

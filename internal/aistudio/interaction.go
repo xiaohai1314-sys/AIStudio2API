@@ -792,7 +792,7 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 	if err != nil {
 		return nil, err
 	}
-	created, err := io.ReadAll(response.Body)
+	created, err := ReadResponseBody(response.Body, maxInteractionResponseBytes)
 	if closeErr := response.Body.Close(); err == nil {
 		err = closeErr
 	}

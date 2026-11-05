@@ -1,17 +1,21 @@
 package api
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"mime"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -19,6 +23,157 @@ import (
 
 // remoteMediaUserAgent 是下载外部媒体时声明的客户端标识
 const remoteMediaUserAgent = "AIStudio2API (+https://github.com/Mag1cFall/AIStudio2API)"
+
+const (
+	remoteMediaMaxBytes     int64 = 32 << 20
+	remoteMediaRequestBytes int64 = 64 << 20
+	remoteMediaGlobalBytes  int64 = 256 << 20
+	remoteMediaMaxPixels          = 40_000_000
+	remoteMediaMaxDimension       = 10_000
+)
+
+var remoteMediaGlobalBudget = struct {
+	sync.Mutex
+	used    int64
+	changed chan struct{}
+}{changed: make(chan struct{})}
+
+var remoteImageDecodeMu sync.Mutex
+
+type remoteMediaReservation struct {
+	mu       sync.Mutex
+	global   int64
+	request  *remoteMediaRequestBudget
+	released bool
+}
+
+type remoteMediaRequestBudget struct {
+	mu           sync.Mutex
+	used         int64
+	reservations []*remoteMediaReservation
+	released     bool
+}
+
+func (b *remoteMediaRequestBudget) reserve(ctx context.Context, n int64) (*remoteMediaReservation, error) {
+	b.mu.Lock()
+	if b.released || n <= 0 || n > remoteMediaMaxBytes || b.used+n > remoteMediaRequestBytes {
+		b.mu.Unlock()
+		return nil, fmt.Errorf("media request exceeds %d byte budget", remoteMediaRequestBytes)
+	}
+	b.used += n
+	b.mu.Unlock()
+	for {
+		if err := ctx.Err(); err != nil {
+			b.mu.Lock()
+			b.used -= n
+			b.mu.Unlock()
+			return nil, err
+		}
+		remoteMediaGlobalBudget.Lock()
+		if remoteMediaGlobalBudget.used+n <= remoteMediaGlobalBytes {
+			remoteMediaGlobalBudget.used += n
+			remoteMediaGlobalBudget.Unlock()
+			reservation := &remoteMediaReservation{global: n, request: b}
+			b.mu.Lock()
+			if b.released {
+				b.used -= n
+				b.mu.Unlock()
+				reservation.releaseGlobal(n)
+				return nil, fmt.Errorf("media request budget was released")
+			}
+			b.reservations = append(b.reservations, reservation)
+			b.mu.Unlock()
+			return reservation, nil
+		}
+		changed := remoteMediaGlobalBudget.changed
+		remoteMediaGlobalBudget.Unlock()
+		select {
+		case <-ctx.Done():
+			b.mu.Lock()
+			b.used -= n
+			b.mu.Unlock()
+			return nil, ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (b *remoteMediaRequestBudget) release() {
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		return
+	}
+	b.released = true
+	reservations := append([]*remoteMediaReservation(nil), b.reservations...)
+	b.mu.Unlock()
+	for _, reservation := range reservations {
+		reservation.release()
+	}
+}
+
+func (r *remoteMediaReservation) resize(n int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.released || n < 0 || n > r.global {
+		return fmt.Errorf("invalid media reservation size %d", n)
+	}
+	delta := r.global - n
+	if delta == 0 {
+		return nil
+	}
+	r.request.mu.Lock()
+	r.request.used -= delta
+	r.request.mu.Unlock()
+	r.global = n
+	r.releaseGlobal(delta)
+	return nil
+}
+
+func (r *remoteMediaReservation) release() {
+	r.mu.Lock()
+	if r.released {
+		r.mu.Unlock()
+		return
+	}
+	r.released = true
+	n := r.global
+	r.global = 0
+	r.mu.Unlock()
+	r.request.mu.Lock()
+	r.request.used -= n
+	r.request.mu.Unlock()
+	r.releaseGlobal(n)
+}
+
+func (r *remoteMediaReservation) releaseGlobal(n int64) {
+	if n <= 0 {
+		return
+	}
+	remoteMediaGlobalBudget.Lock()
+	remoteMediaGlobalBudget.used -= n
+	close(remoteMediaGlobalBudget.changed)
+	remoteMediaGlobalBudget.changed = make(chan struct{})
+	remoteMediaGlobalBudget.Unlock()
+}
+
+func holdRemoteMediaReservation(blob *aistudio.Blob, reservation *remoteMediaReservation) {
+	runtime.SetFinalizer(blob, func(*aistudio.Blob) { reservation.release() })
+}
+
+func validateImagePayload(data []byte) error {
+	if int64(len(data)) > remoteMediaMaxBytes {
+		return fmt.Errorf("image exceeds %d bytes", remoteMediaMaxBytes)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("invalid image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > remoteMediaMaxDimension || config.Height > remoteMediaMaxDimension || int64(config.Width)*int64(config.Height) > remoteMediaMaxPixels {
+		return fmt.Errorf("image dimensions exceed %dx%d or %d pixels", remoteMediaMaxDimension, remoteMediaMaxDimension, remoteMediaMaxPixels)
+	}
+	return nil
+}
 
 // publicOutboundTransport 禁用环境代理并在实际拨号前重新解析及验证地址，避免校验后 DNS 重绑定到内网。
 var publicOutboundTransport = newPublicOutboundTransport()
@@ -38,9 +193,11 @@ func newPublicOutboundTransport() *http.Transport {
 	return transport
 }
 
-// inlineRemoteMedia 把内容中 http(s) URL 形式的文件引用下载为内联媒体，同一 URL 只下载一次，Gemini Files API 的文件 URI 保持文件引用
-func inlineRemoteMedia(ctx context.Context, contents []aistudio.Content) error {
+// inlineRemoteMediaWithBudget downloads media and returns an explicit release
+// for the request lifetime. Keep it until all consumers finish with the blobs.
+func inlineRemoteMediaWithBudget(ctx context.Context, contents []aistudio.Content) (func(), error) {
 	downloaded := make(map[string]*aistudio.Blob)
+	budget := &remoteMediaRequestBudget{}
 	for contentIndex := range contents {
 		for partIndex := range contents[contentIndex].Parts {
 			part := &contents[contentIndex].Parts[partIndex]
@@ -50,8 +207,9 @@ func inlineRemoteMedia(ctx context.Context, contents []aistudio.Content) error {
 			blob, ok := downloaded[part.File.ID]
 			if !ok {
 				var err error
-				if blob, err = downloadRemoteMedia(ctx, part.File.ID, part.File.MIME); err != nil {
-					return fmt.Errorf("Error while downloading %s: %w", part.File.ID, err)
+				if blob, err = downloadRemoteMediaWithBudget(ctx, budget, part.File.ID, part.File.MIME); err != nil {
+					budget.release()
+					return nil, fmt.Errorf("Error while downloading %s: %w", part.File.ID, err)
 				}
 				downloaded[part.File.ID] = blob
 			}
@@ -59,7 +217,13 @@ func inlineRemoteMedia(ctx context.Context, contents []aistudio.Content) error {
 			part.File, part.InlineData = nil, blob
 		}
 	}
-	return nil
+	return budget.release, nil
+}
+
+// inlineRemoteMedia is the compatibility wrapper for existing handlers.
+func inlineRemoteMedia(ctx context.Context, contents []aistudio.Content) error {
+	_, err := inlineRemoteMediaWithBudget(ctx, contents)
+	return err
 }
 
 // remoteMediaURL 返回值是否为 http 或 https URL
@@ -161,6 +325,10 @@ func dialPublicRemote(ctx context.Context, network, address string) (net.Conn, e
 
 // downloadRemoteMedia 在请求 context 内下载外部媒体，MIME 依次取响应 Content-Type、声明值与内容判断
 func downloadRemoteMedia(ctx context.Context, url string, declared string) (*aistudio.Blob, error) {
+	return downloadRemoteMediaWithBudget(ctx, &remoteMediaRequestBudget{}, url, declared)
+}
+
+func downloadRemoteMediaWithBudget(ctx context.Context, budget *remoteMediaRequestBudget, url string, declared string) (*aistudio.Blob, error) {
 	parsed, err := validatePublicHTTPURL(ctx, url)
 	if err != nil {
 		return nil, err
@@ -178,17 +346,24 @@ func downloadRemoteMedia(ctx context.Context, url string, declared string) (*ais
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("HTTP %s", response.Status)
 	}
-	if response.ContentLength > openAIFileMaxBytes {
-		return nil, fmt.Errorf("content exceeds %d bytes", openAIFileMaxBytes)
+	if response.ContentLength > remoteMediaMaxBytes {
+		return nil, fmt.Errorf("content exceeds %d bytes", remoteMediaMaxBytes)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, openAIFileMaxBytes+1))
+	reservation, err := budget.reserve(ctx, remoteMediaMaxBytes)
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(data)) > openAIFileMaxBytes {
-		return nil, fmt.Errorf("content exceeds %d bytes", openAIFileMaxBytes)
+	data, err := io.ReadAll(io.LimitReader(response.Body, remoteMediaMaxBytes+1))
+	if err != nil {
+		reservation.release()
+		return nil, err
+	}
+	if int64(len(data)) > remoteMediaMaxBytes {
+		reservation.release()
+		return nil, fmt.Errorf("content exceeds %d bytes", remoteMediaMaxBytes)
 	}
 	if len(data) == 0 {
+		reservation.release()
 		return nil, fmt.Errorf("response body is empty")
 	}
 	mimeType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -198,6 +373,22 @@ func downloadRemoteMedia(ctx context.Context, url string, declared string) (*ais
 			mimeType = detectMediaType("", data)
 		}
 	}
+	if strings.HasPrefix(strings.ToLower(mimeType), "image/") || (len(data) >= 3 && string(data[:3]) == "GIF") {
+		if err := validateImagePayload(data); err != nil {
+			reservation.release()
+			return nil, err
+		}
+	}
 	mimeType, data = normalizeImagePayload(mimeType, data)
-	return &aistudio.Blob{MIME: mimeType, Data: data}, nil
+	if int64(len(data)) > remoteMediaMaxBytes {
+		reservation.release()
+		return nil, fmt.Errorf("normalized content exceeds %d bytes", remoteMediaMaxBytes)
+	}
+	if err := reservation.resize(int64(len(data))); err != nil {
+		reservation.release()
+		return nil, err
+	}
+	blob := &aistudio.Blob{MIME: mimeType, Data: data}
+	holdRemoteMediaReservation(blob, reservation)
+	return blob, nil
 }

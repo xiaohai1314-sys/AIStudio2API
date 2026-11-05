@@ -251,12 +251,14 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIRequestError(w, err)
 		return
 	}
-	if err := inlineRemoteMedia(r.Context(), generateRequest.Contents); err != nil {
+	releaseMedia, err := inlineRemoteMediaWithBudget(r.Context(), generateRequest.Contents)
+	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		}
 		return
 	}
+	defer releaseMedia()
 	generateRequest = s.prepareSearch(generateRequest)
 	generateRequest.Unary = !request.Stream || s.responseModes().FakeStream
 	if !request.Stream {

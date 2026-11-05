@@ -20,6 +20,7 @@ import (
 )
 
 const camoufoxRelease = "152.0.4-beta.29"
+const maxCamoufoxArchiveBytes int64 = 1 << 30
 
 // camoufoxChecksums 是固定发行版各平台压缩包的 sha256，升级 camoufoxRelease 时须同步更新
 // 注意信任模型：本表与二进制同源发布，只能防传输损坏与镜像替换，不能防发布源本身被攻破
@@ -169,6 +170,9 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 	if info, err := os.Stat(archivePath); err == nil {
 		offset = info.Size()
 	}
+	if offset > maxCamoufoxArchiveBytes {
+		return fmt.Errorf("Camoufox archive exceeds %d bytes", maxCamoufoxArchiveBytes)
+	}
 	slog.Info("正在下载 Camoufox", "version", camoufoxRelease, "platform", runtime.GOOS+"/"+runtime.GOARCH, "egress", egress)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
@@ -195,6 +199,10 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 	default:
 		return fmt.Errorf("下载 Camoufox: HTTP %d", response.StatusCode)
 	}
+	if response.ContentLength > 0 && response.ContentLength > maxCamoufoxArchiveBytes-offset {
+		_ = os.Remove(archivePath)
+		return fmt.Errorf("Camoufox archive exceeds %d bytes", maxCamoufoxArchiveBytes)
+	}
 	state := &downloadState{}
 	state.received.Store(offset)
 	if response.ContentLength > 0 {
@@ -207,8 +215,15 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 	}
 	activeDownload.Store(state)
 	defer activeDownload.Store(nil)
-	_, copyErr := io.Copy(io.MultiWriter(archive, state), contextReader{ctx: ctx, reader: response.Body})
+	remaining := maxCamoufoxArchiveBytes - offset
+	written, copyErr := io.Copy(io.MultiWriter(archive, state), io.LimitReader(contextReader{ctx: ctx, reader: response.Body}, remaining+1))
+	if copyErr == nil && written > remaining {
+		copyErr = fmt.Errorf("Camoufox archive exceeds %d bytes", maxCamoufoxArchiveBytes)
+	}
 	if closeErr := archive.Close(); copyErr != nil || closeErr != nil {
+		if written > remaining {
+			_ = os.Remove(archivePath)
+		}
 		return fmt.Errorf("保存 Camoufox: %w", firstError(copyErr, closeErr))
 	}
 	return nil

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"slices"
@@ -133,7 +132,7 @@ func verifyChatPage(ctx context.Context, client *http.Client, state *aistudio.St
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("AI Studio 登录页返回 HTTP %d", response.StatusCode)
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := aistudio.ReadResponseBody(response.Body, 16<<20)
 	if err != nil {
 		return "", fmt.Errorf("读取 AI Studio 登录页: %w", err)
 	}
@@ -172,7 +171,7 @@ func verifyModels(ctx context.Context, client *http.Client, state *aistudio.Stor
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, response.Body)
+		_, _ = aistudio.DrainResponseBody(response.Body, 1<<20)
 		return 0, fmt.Errorf("AI Studio ListModels 返回 HTTP %d", response.StatusCode)
 	}
 	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), aistudio.JSONProtobufContentType) {

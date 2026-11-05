@@ -717,21 +717,28 @@ func decodeBase64Flexible(s string) ([]byte, error) {
 func normalizeImagePayload(mimeType string, data []byte) (string, []byte) {
 	lowerMIME := strings.ToLower(strings.TrimSpace(mimeType))
 	if lowerMIME == "image/gif" || (len(data) >= 3 && string(data[:3]) == "GIF") {
-		if frame, config, ok := decodeGIFFrame(data); ok {
-			canvas := image.NewNRGBA(image.Rect(0, 0, config.Width, config.Height))
-			transparent := false
-			for _, entry := range frame.Palette {
-				_, _, _, alpha := entry.RGBA()
-				transparent = transparent || alpha == 0
-			}
-			// GIF 背景色来自全局色表，透明首帧保留透明画布
-			if palette, ok := config.ColorModel.(color.Palette); ok && !transparent && int(data[11]) < len(palette) {
-				draw.Draw(canvas, canvas.Bounds(), image.NewUniform(palette[data[11]]), image.Point{}, draw.Src)
-			}
-			draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
-			var buf bytes.Buffer
-			if err := png.Encode(&buf, canvas); err == nil {
-				return "image/png", buf.Bytes()
+		config, configErr := gif.DecodeConfig(bytes.NewReader(data))
+		if configErr == nil && config.Width > 0 && config.Height > 0 && config.Width <= remoteMediaMaxDimension && config.Height <= remoteMediaMaxDimension && int64(config.Width)*int64(config.Height) <= remoteMediaMaxPixels {
+			remoteImageDecodeMu.Lock()
+			defer remoteImageDecodeMu.Unlock()
+			if frame, config, ok := decodeGIFFrame(data); ok {
+				canvas := image.NewNRGBA(image.Rect(0, 0, config.Width, config.Height))
+				transparent := false
+				for _, entry := range frame.Palette {
+					_, _, _, alpha := entry.RGBA()
+					transparent = transparent || alpha == 0
+				}
+				// GIF 背景色来自全局色表，透明首帧保留透明画布
+				if palette, ok := config.ColorModel.(color.Palette); ok && !transparent && int(data[11]) < len(palette) {
+					draw.Draw(canvas, canvas.Bounds(), image.NewUniform(palette[data[11]]), image.Point{}, draw.Src)
+				}
+				draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
+				var buf bytes.Buffer
+				if err := png.Encode(&buf, canvas); err == nil {
+					if int64(buf.Len()) <= remoteMediaMaxBytes {
+						return "image/png", buf.Bytes()
+					}
+				}
 			}
 		}
 	}

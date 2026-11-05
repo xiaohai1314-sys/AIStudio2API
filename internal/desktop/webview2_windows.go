@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +17,7 @@ import (
 
 // webview2BootstrapperURL 为微软 WebView2 Evergreen 引导程序的下载地址
 const webview2BootstrapperURL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+const maxWebView2BootstrapperBytes int64 = 64 << 20
 
 // webview2Cancelled 为用户在引导程序窗口中取消安装时引导程序的退出码
 const webview2Cancelled = 0x80040810
@@ -87,11 +87,14 @@ func downloadWebView2Bootstrapper(ctx context.Context) (string, error) {
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("下载 WebView2 引导程序返回 HTTP %d", response.StatusCode)
 	}
+	if response.ContentLength > maxWebView2BootstrapperBytes {
+		return "", fmt.Errorf("WebView2 引导程序超过 %d 字节", maxWebView2BootstrapperBytes)
+	}
 	file, err := os.CreateTemp("", "MicrosoftEdgeWebview2Setup-*.exe")
 	if err != nil {
 		return "", err
 	}
-	_, err = io.Copy(file, response.Body)
+	_, err = copyWithLimit(file, response.Body, maxWebView2BootstrapperBytes)
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}

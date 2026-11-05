@@ -536,7 +536,7 @@ func (s *BidiSession) handshake(ctx context.Context, protocolHeaders http.Header
 	if response.StatusCode != http.StatusOK {
 		body, err = readErrorResponseBody(response.Body)
 	} else {
-		body, err = io.ReadAll(response.Body)
+		body, err = ReadResponseBody(response.Body, maxInteractionResponseBytes)
 	}
 	if err != nil {
 		return fmt.Errorf("读取 bidi WebChannel handshake: %w", err)
@@ -724,7 +724,7 @@ func (s *BidiSession) postBatch(ctx context.Context, batch []bidiOutgoing) (resu
 	if response.StatusCode != http.StatusOK {
 		body, err = readErrorResponseBody(response.Body)
 	} else {
-		body, err = io.ReadAll(response.Body)
+		body, err = ReadResponseBody(response.Body, maxInteractionResponseBytes)
 	}
 	if err != nil {
 		return fmt.Errorf("读取 bidi WebChannel ACK: %w", err)
@@ -1109,7 +1109,7 @@ func (s *BidiSession) terminate() error {
 		return fmt.Errorf("执行 bidi WebChannel terminate: %w", err)
 	}
 	defer response.Body.Close()
-	_, readErr := io.Copy(io.Discard, response.Body)
+	_, readErr := DrainResponseBody(response.Body, maxErrorResponseBytes)
 	return readErr
 }
 

@@ -60,8 +60,12 @@ func (c *Client) GenerateTitle(ctx context.Context, accountID string, request Ti
 		return "", err
 	}
 	defer response.Body.Close()
+	raw, err := ReadResponseBody(response.Body, maxUnaryResponseBytes)
+	if err != nil {
+		return "", fmt.Errorf("读取 AI Studio GenerateTitle 响应: %w", err)
+	}
 	var title []string
-	if err := json.NewDecoder(response.Body).Decode(&title); err != nil {
+	if err := json.Unmarshal(raw, &title); err != nil {
 		return "", fmt.Errorf("解析 AI Studio GenerateTitle 响应: %w", err)
 	}
 	if len(title) == 0 {

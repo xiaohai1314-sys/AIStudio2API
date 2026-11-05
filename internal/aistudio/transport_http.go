@@ -144,7 +144,7 @@ func DiscoverPublicHeaders(ctx context.Context, client *http.Client) (http.Heade
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("AI Studio 首页返回 HTTP %d", response.StatusCode)
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := ReadResponseBody(response.Body, maxHTMLResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读取 AI Studio 首页正文: %w", err)
 	}
@@ -261,7 +261,7 @@ func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accou
 		if response.StatusCode != http.StatusOK {
 			raw, err = readErrorResponseBody(response.Body)
 		} else {
-			raw, err = io.ReadAll(response.Body)
+			raw, err = ReadResponseBody(response.Body, maxUploadResponseBytes)
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("读取写代码助手附件上传响应: %w", err)

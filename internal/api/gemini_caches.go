@@ -328,12 +328,19 @@ func (s *server) handleGeminiCacheCreate(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
-	if err := inlineRemoteMedia(r.Context(), cached.Contents); err != nil {
-		if shouldWriteRequestError(r, err) {
-			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+	releaseMedia, mediaErr := inlineRemoteMediaWithBudget(r.Context(), cached.Contents)
+	if mediaErr != nil {
+		if shouldWriteRequestError(r, mediaErr) {
+			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", mediaErr.Error())
 		}
 		return
 	}
+	cacheStored := false
+	defer func() {
+		if !cacheStored {
+			releaseMedia()
+		}
+	}()
 	counted := s.prepareSearch(cached)
 	count, err := s.service.CountTokens(r.Context(), aistudio.TokenCountRequest{
 		Model: counted.Model, System: counted.System, Contents: counted.Contents, Tools: counted.Tools,
@@ -348,7 +355,9 @@ func (s *server) handleGeminiCacheCreate(w http.ResponseWriter, r *http.Request)
 		name: "cachedContents/" + strings.ToLower(rand.Text()), model: model, displayName: request.DisplayName,
 		created: now, updated: now, expires: expires.UTC(), tokens: count.InputTokens, details: count.PromptTokensDetails, tools: count.Tools, request: cached,
 	}
-	writeJSON(w, http.StatusOK, s.caches.add(cache))
+	result := s.caches.add(cache)
+	cacheStored = true
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleGeminiCacheList 按创建时间从新到旧分页列出未过期的缓存

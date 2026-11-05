@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -266,7 +265,7 @@ func (runtime *goWAARuntime) fetchCached(ctx context.Context, target string, hea
 		_ = response.Body.Close()
 		return fmt.Errorf("HTTP %d", response.StatusCode)
 	}
-	_, err = io.Copy(io.Discard, response.Body)
+	_, err = DrainResponseBody(response.Body, maxPageResourceBytes)
 	_ = response.Body.Close()
 	if err != nil {
 		return err
@@ -292,7 +291,7 @@ func (runtime *goWAARuntime) navigateFrame(ctx context.Context, target string) b
 		if err != nil {
 			return false
 		}
-		_, _ = io.Copy(io.Discard, response.Body)
+		_, _ = DrainResponseBody(response.Body, maxHTMLResponseBytes)
 		_ = response.Body.Close()
 		if response.StatusCode < 300 || response.StatusCode >= 400 {
 			return true

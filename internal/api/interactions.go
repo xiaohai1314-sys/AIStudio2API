@@ -41,11 +41,15 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := inlineRemoteMedia(r.Context(), generate.Contents); err != nil {
+	releaseMedia, err := inlineRemoteMediaWithBudget(r.Context(), generate.Contents)
+	if err != nil {
 		if shouldWriteRequestError(r, err) {
 			writeGeminiError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 		}
 		return
+	}
+	if !request.Background && request.Store != nil && !*request.Store {
+		defer releaseMedia()
 	}
 	generate = s.prepareSearch(generate)
 	generate.Unary = !request.Stream || s.responseModes().FakeStream

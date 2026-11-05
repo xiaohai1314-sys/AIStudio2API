@@ -1279,7 +1279,7 @@ func (t *MakerSuiteHTTPTransport) loadDriveDiscovery(ctx context.Context, lease 
 		}
 		return driveUploadRPCError("DriveDiscovery", response.StatusCode, body)
 	}
-	_, readErr := io.Copy(io.Discard, response.Body)
+	_, readErr := DrainResponseBody(response.Body, maxDriveResponseBytes)
 	closeErr := response.Body.Close()
 	if readErr != nil || closeErr != nil {
 		return errors.Join(readErr, closeErr)
@@ -1365,7 +1365,7 @@ func uploadDriveResumable(ctx context.Context, client *http.Client, token string
 		}
 		return FileRef{}, driveUploadRPCError("DriveUploadInit", initResponse.StatusCode, initBody)
 	}
-	_, readErr := io.Copy(io.Discard, initResponse.Body)
+	_, readErr := DrainResponseBody(initResponse.Body, maxUploadResponseBytes)
 	closeErr := initResponse.Body.Close()
 	if readErr != nil || closeErr != nil {
 		return FileRef{}, errors.Join(readErr, closeErr)
@@ -1427,7 +1427,7 @@ func putDriveUploadChunk(
 		}
 		return driveUploadRPCError("DriveUploadChunk", response.StatusCode, responseBody)
 	}
-	_, err = io.Copy(io.Discard, response.Body)
+	_, err = DrainResponseBody(response.Body, maxDriveResponseBytes)
 	return err
 }
 
@@ -1470,7 +1470,7 @@ func parseDriveUploadResponse(response *http.Response, request UploadRequest) (F
 		}
 		return FileRef{}, driveUploadRPCError("DriveUpload", response.StatusCode, responseBody)
 	}
-	responseBody, err := io.ReadAll(response.Body)
+	responseBody, err := ReadResponseBody(response.Body, maxUploadResponseBytes)
 	if err != nil {
 		return FileRef{}, err
 	}
@@ -1568,7 +1568,7 @@ func (t *MakerSuiteHTTPTransport) DeleteDrive(ctx context.Context, accountID str
 		}
 		return driveUploadRPCError("DriveDelete", response.StatusCode, responseBody)
 	}
-	_, err = io.Copy(io.Discard, response.Body)
+	_, err = DrainResponseBody(response.Body, maxDriveResponseBytes)
 	return err
 }
 
@@ -1605,7 +1605,7 @@ func (t *MakerSuiteHTTPTransport) DriveFileExists(ctx context.Context, accountID
 		}
 		return false, driveUploadRPCError("DriveGet", response.StatusCode, responseBody)
 	}
-	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+	if _, err := DrainResponseBody(response.Body, maxDriveResponseBytes); err != nil {
 		return false, err
 	}
 	return true, nil

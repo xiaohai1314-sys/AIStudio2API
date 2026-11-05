@@ -1191,7 +1191,7 @@ func (c *Client) BuildModelsForAccount(ctx context.Context, accountID string) ([
 		if err != nil {
 			return nil, err
 		}
-		raw, err := io.ReadAll(response.Body)
+		raw, err := ReadResponseBody(response.Body, maxUnaryResponseBytes)
 		response.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("读取 AI Studio %s: %w", buildProxyUnaryMethod, err)

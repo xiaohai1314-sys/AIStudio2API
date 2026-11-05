@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 )
@@ -62,7 +61,7 @@ func (c *Client) acceptTerms(ctx context.Context, accountID string, logging []by
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(io.Discard, response.Body)
+		_, err = DrainResponseBody(response.Body, maxUnaryResponseBytes)
 		response.Body.Close()
 		if err != nil {
 			return fmt.Errorf("读取 AcceptTerms: %w", err)

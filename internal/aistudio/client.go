@@ -20,7 +20,13 @@ const (
 	// MakerSuiteRPCBase 是 AI Studio RPC 根地址
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
 	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
-	JSONProtobufContentType = "application/json+protobuf"
+	JSONProtobufContentType           = "application/json+protobuf"
+	maxHTMLResponseBytes        int64 = 16 << 20
+	maxPageResourceBytes        int64 = 32 << 20
+	maxWAAResponseBytes         int64 = 32 << 20
+	maxUploadResponseBytes      int64 = 1 << 20
+	maxDriveResponseBytes       int64 = 1 << 20
+	maxInteractionResponseBytes int64 = 64 << 20
 )
 
 // RPCRequest 描述交给认证传输层的单次 MakerSuite 请求
@@ -217,6 +223,40 @@ func readErrorResponseBody(body io.Reader) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// ReadResponseBody 读取非流式网络响应并拒绝超过 limit 的正文；不会静默截断后解析。
+func ReadResponseBody(body io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("响应正文上限必须为正数")
+	}
+	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("响应正文超过 %d MiB", limit>>20)
+	}
+	return raw, nil
+}
+
+// DrainResponseBody 消费并校验非流式响应正文上限，不保留正文。
+func DrainResponseBody(body io.Reader, limit int64) (int64, error) {
+	if limit <= 0 {
+		return 0, fmt.Errorf("响应正文上限必须为正数")
+	}
+	var count limitedCountWriter
+	if _, err := io.Copy(&count, io.LimitReader(body, limit+1)); err != nil {
+		return count.n, err
+	}
+	if count.n > limit {
+		return count.n, fmt.Errorf("响应正文超过 %d MiB", limit>>20)
+	}
+	return count.n, nil
+}
+
+type limitedCountWriter struct{ n int64 }
+
+func (w *limitedCountWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); return len(p), nil }
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
 	if err := c.pacer.Wait(ctx, accountID); err != nil {

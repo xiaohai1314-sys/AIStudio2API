@@ -159,7 +159,8 @@ func pushRenewal(ctx context.Context, client *http.Client, renewal remoteRenewal
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if json.NewDecoder(response.Body).Decode(&result) == nil && result.Error.Message != "" {
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20+1))
+	if len(raw) <= 1<<20 && json.Unmarshal(raw, &result) == nil && result.Error.Message != "" {
 		return fmt.Errorf("远程实例续签失败: HTTP %d: %s", response.StatusCode, result.Error.Message)
 	}
 	return fmt.Errorf("远程实例续签失败: HTTP %d", response.StatusCode)

@@ -24,6 +24,7 @@ func (s *server) handleResponsesInputTokens(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
+	defer prepared.releaseMedia()
 	if prepared.generate.Model == "" {
 		prepared.generate.Model = prepared.previous.Model
 	}
