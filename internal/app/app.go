@@ -223,6 +223,9 @@ func parseFlags(args []string, cfg *config.Config) (commandOptions, error) {
 	return options, nil
 }
 
+// mediaLimit 是 runtime/media 的总字节上限
+const mediaLimit = 1 << 30
+
 // runServer 管理 HTTP 监听，就绪后以管理页面地址调用 onReady，运行到 ctx 结束或监听出错；started 表示监听曾经就绪
 func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, updater api.UpdateService, onReady func(address string)) (started bool, err error) {
 	trustedProxies, err := config.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
@@ -258,7 +261,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 		APIKey: cfg.ProxyAPIKey, PublicRateLimit: cfg.PublicRateLimit, PublicRateBurst: cfg.PublicRateBurst, APIKeyRateLimits: apiKeyRateLimits(cfg.ProxyAPIKey, cfg.APIKeyRateLimits), MaxPublicInFlight: max(16, 2*cfg.MaxActiveWorkers), TrustedProxyCIDRs: trustedProxies, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
-		MediaDir:         filepath.Join("runtime", "media"), MediaLinks: manager.mediaLinks,
+		MediaDir:         filepath.Join("runtime", "media"), MediaLimit: mediaLimit, MediaLinks: manager.mediaLinks,
 		ResponseModes: manager.responseModes, WaitLaunch: manager.WaitLaunch,
 		SearchSettings: manager.searchSettings, EgressProxy: manager.egressProxy, States: manager.states,
 		Lifecycle: ctx,

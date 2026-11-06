@@ -148,8 +148,10 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 			following.Add(1)
 			go func() {
 				defer following.Done()
-				if streamHeaders(w) == nil {
-					_ = request.stream.follow(client, w, -1)
+				out, err := openStream(w, sseHeartbeat)
+				defer out.stop()
+				if err == nil {
+					_ = request.stream.follow(client, out, -1)
 				}
 			}()
 		}
@@ -159,7 +161,11 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.Stream {
-		_ = s.streamInteraction(w, r, request, generate, audioExpected, previous, current, created, events)
+		out, err := openStream(w, sseHeartbeat)
+		defer out.stop()
+		if err == nil {
+			_ = s.streamInteraction(out, r, request, generate, audioExpected, previous, current, created, events)
+		}
 		return
 	}
 	result, err := consumeEvents(ctx, events)

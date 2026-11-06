@@ -369,9 +369,6 @@ func downloadRemoteMediaWithBudget(ctx context.Context, budget *remoteMediaReque
 	mimeType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || mimeType == "application/octet-stream" || mimeType == "binary/octet-stream" {
 		mimeType = declared
-		if mimeType == "" {
-			mimeType = detectMediaType("", data)
-		}
 	}
 	if strings.HasPrefix(strings.ToLower(mimeType), "image/") || (len(data) >= 3 && string(data[:3]) == "GIF") {
 		if err := validateImagePayload(data); err != nil {
@@ -379,7 +376,7 @@ func downloadRemoteMediaWithBudget(ctx context.Context, budget *remoteMediaReque
 			return nil, err
 		}
 	}
-	mimeType, data = normalizeImagePayload(mimeType, data)
+	mimeType, data = normalizeImagePayload(attachmentMIME(mimeType, "", data), data)
 	if int64(len(data)) > remoteMediaMaxBytes {
 		reservation.release()
 		return nil, fmt.Errorf("normalized content exceeds %d bytes", remoteMediaMaxBytes)
