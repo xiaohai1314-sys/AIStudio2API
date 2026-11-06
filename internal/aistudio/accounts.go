@@ -2420,6 +2420,15 @@ func (p *AccountPool) unbindResourceContext(ctx context.Context, resourceID stri
 	return err
 }
 
+// unbindResourceIfPresentContext 解除资源绑定；清理时绑定已不存在等价于成功
+func (p *AccountPool) unbindResourceIfPresentContext(ctx context.Context, resourceID string) error {
+	err := p.unbindResourceContext(ctx, resourceID)
+	if errors.Is(err, ErrResourceNotFound) {
+		return nil
+	}
+	return err
+}
+
 // MarkAuthRequired 将账户标记为需要重新登录
 func (p *AccountPool) MarkAuthRequired(accountID string, reason string) error {
 	return p.setAccountState(accountID, AccountAuthRequired, reason)

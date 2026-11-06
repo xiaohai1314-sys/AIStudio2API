@@ -205,7 +205,7 @@ func (s *PooledService) transcribeWithLease(
 			cleanupErr = nil
 		}
 		if cleanupErr == nil && bound {
-			cleanupErr = s.pool.unbindResourceContext(cleanupCtx, file.ID)
+			cleanupErr = s.pool.unbindResourceIfPresentContext(cleanupCtx, file.ID)
 		}
 		cancel()
 		if cleanupErr == nil {

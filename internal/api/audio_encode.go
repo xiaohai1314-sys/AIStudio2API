@@ -37,8 +37,12 @@ type audioOutput struct {
 	BitRate    int
 }
 
-// maxAudioSampleRate 为音频输出采样率上限，192 kHz 已覆盖高解析度音频，超过视为无效请求
-const maxAudioSampleRate = 192000
+// 音频采样率限定在 8..192 kHz，避免不合理下采样滤波器造成超大系数表；声道上限与 FLAC/WAV 常见多声道输入一致
+const (
+	minAudioSampleRate = 8000
+	maxAudioSampleRate = 192000
+	maxAudioChannels   = 8
+)
 
 // maxResampledBytes 为单次重采样输出正文上限，在分配前校验，避免异常参数造成超大分配
 const maxResampledBytes int64 = 128 << 20
@@ -141,19 +145,59 @@ func supportedSampleRate(rate int, rates []int) int {
 
 // resamplePCM 把 PCM 转换为 rate 采样率；采样率与输出大小在分配前校验，异常参数直接报错
 func resamplePCM(audio audioPCM, rate int) (audioPCM, error) {
+	if audio.SampleRate < minAudioSampleRate || audio.SampleRate > maxAudioSampleRate {
+		return audioPCM{}, fmt.Errorf("源音频 sample_rate %d 超出有效范围 %d..%d", audio.SampleRate, minAudioSampleRate, maxAudioSampleRate)
+	}
+	if audio.Channels < 1 || audio.Channels > maxAudioChannels {
+		return audioPCM{}, fmt.Errorf("audio channels %d 超出有效范围 1..%d", audio.Channels, maxAudioChannels)
+	}
+	if rate < minAudioSampleRate || rate > maxAudioSampleRate {
+		return audioPCM{}, fmt.Errorf("audio sample_rate %d 超出有效范围 %d..%d", rate, minAudioSampleRate, maxAudioSampleRate)
+	}
+	frameBytes := audio.Channels * 2
+	if len(audio.Data)%frameBytes != 0 {
+		return audioPCM{}, fmt.Errorf("PCM 音频数据未对齐到完整帧")
+	}
 	if rate == audio.SampleRate {
 		return audio, nil
 	}
-	if rate <= 0 || rate > maxAudioSampleRate {
-		return audioPCM{}, fmt.Errorf("audio sample_rate %d 超出有效范围 1..%d", rate, maxAudioSampleRate)
+	frames := int64(len(audio.Data) / frameBytes)
+	outputBytes, err := resampledOutputBytes(frames, audio.SampleRate, rate, audio.Channels)
+	if err != nil {
+		return audioPCM{}, err
 	}
-	// 输出帧数以 int64 计算（帧数与已校验的采样率相乘不会溢出），超过正文上限时拒绝分配
-	frames := int64(len(audio.Data)) / 2 / int64(audio.Channels)
-	outFrames := (frames*int64(rate) + int64(audio.SampleRate) - 1) / int64(audio.SampleRate)
-	if outFrames*int64(audio.Channels)*2 > maxResampledBytes {
-		return audioPCM{}, fmt.Errorf("重采样输出超过 %d MiB 上限", maxResampledBytes>>20)
+	data := resample.PCM(audio.Data, audio.Channels, audio.SampleRate, rate)
+	if int64(len(data)) != outputBytes {
+		return audioPCM{}, fmt.Errorf("重采样器输出大小异常：得到 %d 字节，期望 %d 字节", len(data), outputBytes)
 	}
-	return audioPCM{Data: resample.PCM(audio.Data, audio.Channels, audio.SampleRate, rate), SampleRate: rate, Channels: audio.Channels}, nil
+	return audioPCM{Data: data, SampleRate: rate, Channels: audio.Channels}, nil
+}
+
+// resampledOutputBytes 安全计算重采样后的字节数；分解商余数，避免帧数×采样率及帧数×声道数溢出
+func resampledOutputBytes(frames int64, from, to, channels int) (int64, error) {
+	if frames < 0 || from < minAudioSampleRate || from > maxAudioSampleRate || to < minAudioSampleRate || to > maxAudioSampleRate {
+		return 0, fmt.Errorf("重采样采样率或帧数无效")
+	}
+	if channels < 1 || channels > maxAudioChannels {
+		return 0, fmt.Errorf("audio channels %d 超出有效范围 1..%d", channels, maxAudioChannels)
+	}
+	fromRate, toRate := int64(from), int64(to)
+	maxFrames := maxResampledBytes / 2 / int64(channels)
+	whole, remainder := frames/fromRate, frames%fromRate
+	if whole > maxFrames/toRate {
+		return 0, fmt.Errorf("重采样输出超过 %d MiB 上限", maxResampledBytes>>20)
+	}
+	outFrames := whole * toRate
+	// remainder 与 toRate 均不超过 maxAudioSampleRate，乘积安全地落在 int64 范围内。
+	partialProduct := remainder * toRate
+	partialFrames := partialProduct / fromRate
+	if partialProduct%fromRate != 0 {
+		partialFrames++
+	}
+	if partialFrames > maxFrames-outFrames {
+		return 0, fmt.Errorf("重采样输出超过 %d MiB 上限", maxResampledBytes>>20)
+	}
+	return (outFrames + partialFrames) * int64(channels) * 2, nil
 }
 
 // mp3DefaultBitRate 为未指定码率时的 MP3 码率
