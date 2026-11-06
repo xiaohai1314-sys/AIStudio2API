@@ -37,6 +37,12 @@ type audioOutput struct {
 	BitRate    int
 }
 
+// maxAudioSampleRate 为音频输出采样率上限，192 kHz 已覆盖高解析度音频，超过视为无效请求
+const maxAudioSampleRate = 192000
+
+// maxResampledBytes 为单次重采样输出正文上限，在分配前校验，避免异常参数造成超大分配
+const maxResampledBytes int64 = 128 << 20
+
 // mp3SampleRates 为 MPEG-1 Layer III 编码器接受的输入采样率
 var mp3SampleRates = []int{32000, 44100, 48000}
 
@@ -98,9 +104,12 @@ func encodeAudio(audio audioPCM, output audioOutput) ([]byte, audioPCM, error) {
 	case "opus":
 		rate = supportedSampleRate(rate, opusSampleRates)
 	}
-	audio = resamplePCM(audio, rate)
-	var data []byte
 	var err error
+	audio, err = resamplePCM(audio, rate)
+	if err != nil {
+		return nil, audioPCM{}, err
+	}
+	var data []byte
 	switch output.Format {
 	case "pcm":
 		data = audio.Data
@@ -130,12 +139,21 @@ func supportedSampleRate(rate int, rates []int) int {
 	return rates[len(rates)-1]
 }
 
-// resamplePCM 把 PCM 转换为 rate 采样率
-func resamplePCM(audio audioPCM, rate int) audioPCM {
+// resamplePCM 把 PCM 转换为 rate 采样率；采样率与输出大小在分配前校验，异常参数直接报错
+func resamplePCM(audio audioPCM, rate int) (audioPCM, error) {
 	if rate == audio.SampleRate {
-		return audio
+		return audio, nil
 	}
-	return audioPCM{Data: resample.PCM(audio.Data, audio.Channels, audio.SampleRate, rate), SampleRate: rate, Channels: audio.Channels}
+	if rate <= 0 || rate > maxAudioSampleRate {
+		return audioPCM{}, fmt.Errorf("audio sample_rate %d 超出有效范围 1..%d", rate, maxAudioSampleRate)
+	}
+	// 输出帧数以 int64 计算（帧数与已校验的采样率相乘不会溢出），超过正文上限时拒绝分配
+	frames := int64(len(audio.Data)) / 2 / int64(audio.Channels)
+	outFrames := (frames*int64(rate) + int64(audio.SampleRate) - 1) / int64(audio.SampleRate)
+	if outFrames*int64(audio.Channels)*2 > maxResampledBytes {
+		return audioPCM{}, fmt.Errorf("重采样输出超过 %d MiB 上限", maxResampledBytes>>20)
+	}
+	return audioPCM{Data: resample.PCM(audio.Data, audio.Channels, audio.SampleRate, rate), SampleRate: rate, Channels: audio.Channels}, nil
 }
 
 // mp3DefaultBitRate 为未指定码率时的 MP3 码率

@@ -200,6 +200,10 @@ func (s *PooledService) transcribeWithLease(
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(attemptCtx), driveCleanupTimeout)
 		cleanupErr := s.client.deleteDriveFile(cleanupCtx, accountID, token, file.ID)
+		if driveFileNotFound(cleanupErr, "DriveDelete") {
+			// 上游文件已不存在与删除成功等价，与通用删除路径一致：按已清理处理并继续解绑
+			cleanupErr = nil
+		}
 		if cleanupErr == nil && bound {
 			cleanupErr = s.pool.unbindResourceContext(cleanupCtx, file.ID)
 		}

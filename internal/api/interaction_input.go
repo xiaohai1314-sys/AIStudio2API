@@ -295,8 +295,8 @@ func (request interactionRequest) toGenerateRequest(id string) (aistudio.Generat
 			if _, ok := outputAudioEncodings[format.MIME]; format.MIME != "" && !ok {
 				return generate, fmt.Errorf("audio mime_type must be audio/wav, audio/l16, audio/mp3, audio/ogg_opus, audio/alaw or audio/mulaw")
 			}
-			if format.SampleRate < 0 || format.BitRate < 0 {
-				return generate, fmt.Errorf("audio sample_rate and bit_rate must not be negative")
+			if format.SampleRate < 0 || format.SampleRate > maxAudioSampleRate || format.BitRate < 0 {
+				return generate, fmt.Errorf("audio sample_rate must be between 0 and %d, bit_rate must not be negative", maxAudioSampleRate)
 			}
 			generate.Config.ResponseModalities = append(generate.Config.ResponseModalities, aistudio.ResponseModalityAudio)
 		case "image":

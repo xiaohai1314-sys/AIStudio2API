@@ -795,6 +795,9 @@ func (config geminiGenerationConfig) audioFormat() (*outputAudioFormat, error) {
 					return nil, fmt.Errorf("generationConfig.responseFormat.audio.mimeType %q is not supported", audio.MIMEType)
 				}
 			}
+			if audio.SampleRate < 0 || audio.SampleRate > maxAudioSampleRate || audio.BitRate < 0 {
+				return nil, fmt.Errorf("generationConfig.responseFormat.audio sampleRate must be between 0 and %d, bitRate must not be negative", maxAudioSampleRate)
+			}
 			return &outputAudioFormat{MIME: mimeType, SampleRate: audio.SampleRate, BitRate: audio.BitRate}, nil
 		}
 	}
