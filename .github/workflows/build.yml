@@ -347,7 +347,7 @@ jobs:
           MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
         run: |
           go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sign-release" ./cmd/sign-release
-          mapfile -d '' files < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+          mapfile -d '' files < <(find dist -type f -print0 | sort -z)
           if [[ ${#files[@]} -eq 0 ]]; then
             echo "::error::dist 中没有可签名的发行包"
             exit 1
