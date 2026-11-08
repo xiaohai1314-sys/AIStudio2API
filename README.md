@@ -131,9 +131,11 @@ npm run build
 cd ..
 mkdir spidermonkey
 curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-windows-amd64.tar.gz
+if ((Get-FileHash spidermonkey\windows.tar.gz -Algorithm SHA256).Hash -ne "942A3B57B202F899D799CAC678B7471D01D0B34714070F0810C18FCA37FFD721") { throw "spidermonkey checksum mismatch" }
 tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
 mkdir libwebp
 curl.exe -L -o libwebp\libwebp.tar.gz https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-windows-amd64.tar.gz
+if ((Get-FileHash libwebp\libwebp.tar.gz -Algorithm SHA256).Hash -ne "CA38CA4CFAE9BFE5808DBCFA11707D81EFD534D723D2B7622CD32EF1114DEA1D") { throw "libwebp checksum mismatch" }
 tar -xzf libwebp\libwebp.tar.gz -C libwebp
 $env:CC = "x86_64-w64-mingw32-clang"
 $env:CXX = "x86_64-w64-mingw32-clang++"
@@ -143,7 +145,7 @@ go build -o aistudio2api.exe ./cmd/aistudio2api
 .\aistudio2api.exe
 ```
 
-`x86_64-w64-mingw32-clang` 来自 llvm-mingw 的 `ucrt-x86_64` 包，解压后把其中的 `bin` 目录加入 `PATH`。
+`x86_64-w64-mingw32-clang` 来自 llvm-mingw 的 `ucrt-x86_64` 包，解压后把其中的 `bin` 目录加入 `PATH`。上面的 SHA256 来自 GitHub Release 资产的 `digest`，与 `build/dependency-checksums.txt` 相同；校验失败时不要解压。llvm-mingw `20261020` 的 `ucrt-ubuntu-22.04-x86_64` 包摘要是 `55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335`，依据同样是 GitHub 记录的资产摘要，发布说明里没有维护者签名。
 
 `WAA_BACKEND=camoufox` 时启动生成服务，或第一次使用浏览器登录时，程序自动下载当前平台的 Camoufox 到 `runtime/camoufox/`：
 
@@ -201,10 +203,9 @@ npm run build
 cd ..
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
-mkdir -p spidermonkey
-curl -L https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
-mkdir -p libwebp
-curl -L https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C libwebp
+mkdir -p spidermonkey libwebp
+sh build/fetch-verified.sh "https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz" "spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz" spidermonkey build/dependency-checksums.txt tar.gz
+sh build/fetch-verified.sh "https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz" "libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz" libwebp build/dependency-checksums.txt tar.gz
 export CGO_CPPFLAGS="-I$PWD/spidermonkey/include -I$PWD/libwebp/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib -L$PWD/libwebp/lib"
 if [ "$platform" = darwin ]; then
   go build -o aistudio2api ./cmd/aistudio2api
@@ -235,7 +236,8 @@ docker compose up -d
 
 - 容器内固定监听 `0.0.0.0:2048`，因此即使 Compose 只把端口绑定到宿主机回环地址，`data/.env` 也必须设置 `PROXY_API_KEY`，否则服务拒绝启动。确需供其他机器访问时，再将 `docker-compose.yml` 的端口改为 `0.0.0.0:2048:2048`（预览端口按需开放）并使用高强度 key；从容器外打开管理页面还需要 `ADMIN_AUTH_ENABLED=true` 与管理密码，用户名默认为 `admin`
 - 添加账户：在管理页面“添加账户”中选择“浏览器登录”，在管理页面打开的登录窗口中登录 Google；也可以粘贴 Cookie，或把能登录 Google 的电脑上的 `auth/<Google 邮箱>/` 复制到 `data/auth/`
-- `PROXY` 与账户代理从容器内访问，代理运行在宿主机时填写宿主机的局域网地址，并允许代理接受局域网连接
+- `PROXY` 与账户代理从容器内访问，代理运行在宿主机时填写宿主机的局域网地址，并允许代理接受局域网连接。`PROXY` 不转发外部媒体下载和 webhook
+- 需要加密 `data/auth` 时，把 `ENCRYPT_CREDENTIALS=true` 写进 `data/.env`，密钥用环境变量 `CREDENTIALS_KEY` 或挂到 `/data` 之外的 `CREDENTIALS_KEY_FILE`。不要把密钥放进 `data/`
 - 容器时区为 UTC，新账户的指纹时区、日志时间与用量页的按日统计取容器时区；在 `docker-compose.yml` 中加入 `environment: { TZ: <IANA 时区> }` 改用其他时区，账户时区也可在账户页单独设置
 - 修改 `data/.env` 后执行 `docker compose restart`；更新镜像执行 `docker compose pull && docker compose up -d`；在源码目录中执行 `docker compose up -d --build` 从源码构建
 
@@ -603,7 +605,7 @@ cp .env.example .env
 | `PROXY_API_KEY` | 空 | 公开 API key；`LISTEN_ADDR` 不是本机回环地址时必填 |
 | `PUBLIC_RATE_LIMIT` | `30` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数；超限返回 429 |
 | `PUBLIC_RATE_BURST` | `4` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` |
-| `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；也可在设置页按 key 勾选账户，保存后立即生效 |
+| `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；生成、上传、文件列表、文件详情、下载和删除都受这个范围约束，范围外的文件与不存在的文件一样返回 404；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `API_KEY_RATE_LIMITS` | 空 | 为个别 API key 指定每分钟请求上限，每项写成 `key:每分钟`，未列出的 key 使用 `PUBLIC_RATE_LIMIT`；也可在设置页填写 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `HIDE_DOCK_ICON` | `false` | macOS 桌面版只在菜单栏显示图标、不显示 Dock 图标，关闭窗口后服务继续运行；在设置页修改立即生效 |
@@ -614,7 +616,7 @@ cp .env.example .env
 | `ADMIN_AUTH_ENABLED` | `false` | 管理控制台账号密码登录开关 |
 | `ADMIN_USERNAME` | `admin` | 管理员账号 |
 | `ADMIN_PASSWORD` | 空 | 管理员密码，开启登录时必填 |
-| `ENCRYPT_CREDENTIALS` | `false` | 用 Windows DPAPI 加密保存账户认证状态与管理会话文件；仅 Windows 支持，开启后这些文件不能复制到其他机器或用户 |
+| `ENCRYPT_CREDENTIALS` | `false` | 加密账户认证状态与管理会话文件。Windows 用 DPAPI。Linux 与 Docker 用 AES-256-GCM，必须另给密钥，见下面的凭据加密 |
 | `TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理的逗号分隔 CIDR，例如 `127.0.0.1/32`；仅这些来源的 `X-Forwarded-Proto` 可使管理会话 Cookie 标记为 Secure |
 | `PPROF_ADDR` | 空 | 性能分析监听地址，例如 `127.0.0.1:6060`；留空不启用，启用后可在 `/debug/pprof/` 获取 CPU、内存与 goroutine 剖析 |
 | `GEOIP_DB_PATH` | `runtime/geoip/dbip-country-lite.mmdb` | 本地 GeoIP 数据库路径，供账户环境检查比对出口 IP 所在国家；缺省文件时可在账户页一键下载 DB-IP 免费库（CC BY 4.0） |
@@ -636,7 +638,7 @@ cp .env.example .env
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 启用 Build 通道时非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
-| `NONSTREAM_KEEPALIVE` | `true` | 非流式请求等待结果超过 10 秒时先返回 200，之后每 10 秒写出一个换行直到写出 JSON 正文，经 Cloudflare 等反向代理时连接不会因长时间无数据断开；此后才出现的错误以协议错误正文返回 |
+| `NONSTREAM_KEEPALIVE` | `false` | 默认关闭，慢响应保持真实 HTTP 状态。设为 `true` 时，非流式请求超过 10 秒先返回 200，之后每 10 秒写一个换行，避免 Cloudflare 等反代掐断空闲连接；响应头提交后，429 和认证失败只能出现在 JSON 正文里，访问日志仍记录真实状态 |
 | `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |
 | `YOUTUBE_LINKS` | `false` | 用户消息文本中的 YouTube 链接作为视频发送给模型，并从文本中移除 |
 | `STRIP_THOUGHT_SIGNATURES` | `false` | 发往上游前去掉对话历史中的思考签名，函数调用带 `skip_thought_signature_validator`；之前各轮的思考内容不随签名发给模型，长对话的输入 token 较少 |
@@ -681,6 +683,7 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 3. 在“账户”页面编辑单个账户时可以设置账户专用代理
 4. 账户代理同时用于登录、WAA 与业务请求
 5. 带账号密码的代理由程序在本机回环地址提供无认证 SOCKS5 中转供 Camoufox 使用，账号密码不写入浏览器 profile；中转运行期间，本机其他进程也能经它使用该代理
+6. `PROXY` 不是全流量代理。客户端传来的外部媒体 URL，以及 Interactions 的 webhook，固定直连公网：拨号前拒绝本机、私网、链路本地、运营商级 NAT 和文档地址，并在真正连接时重新解析，避免 DNS 重绑定。这两类请求不读取 `PROXY`。若改走可配置的正向代理，代理就能访问进程已经拒绝的地址，因此这里没有可选开关
 
 ### 认证文件管理
 
@@ -696,6 +699,21 @@ API 试用页的 HTML 预览运行在 `PREVIEW_LISTEN_ADDR` 提供的独立来�
 | `[用户缓存]/AIStudio2API/runtime-leases/<Google 邮箱>.lock` | 当前电脑上该邮箱的 WAA Worker 占用锁 |
 
 账户邮箱同时作为目录名、管理页面标识和日志来源，统一使用小写形式。`.leases` 协调账户目录读写，用户缓存中的 runtime lease 保证同一邮箱在当前电脑上只有一个 WAA Worker。
+
+### 凭据加密
+
+`ENCRYPT_CREDENTIALS` 默认关闭。关闭时，已有明文或密文都按原样读取；程序不会在启动时批量加密或解密 `auth/`。开启后，只有下次保存某个认证文件或管理会话时，那个文件才会写成密文。
+
+Windows 使用 DPAPI。密文绑在这台机器的当前用户上，不能复制到另一台机器或另一个用户。
+
+Linux 和 Docker 使用 AES-256-GCM。密钥必须单独提供，程序不会在 `runtime/` 里自动生成一把密钥再把它当成保护：
+
+- `CREDENTIALS_KEY`：32 字节密钥的十六进制或标准 Base64，只能放在进程环境变量里。写在 `.env` 中会拒绝启动，保存设置时也不会把这个值写回 `.env`。
+- `CREDENTIALS_KEY_FILE`：权限为 `0600` 的普通文件，内容正好 32 字节。路径不能位于程序工作目录或 `AISTUDIO_AUTH_STATES` 指向的目录中。文件不存在、是符号链接、权限过宽或长度不对时，进程拒绝启动，并且不会创建该文件。
+
+两种来源只能设置一个。密钥丢失或与密文不匹配时，读取失败并留下原来的文件，不会改写成空内容，也不会假装解密成功。Docker 里把密钥放在 `/run/secrets/` 这类独立挂载，或用编排系统注入 `CREDENTIALS_KEY`。同一块磁盘上、数据目录之外的密钥文件可以避开随 `data/` 一起拷走，但不能防止整块磁盘被拿走。
+
+以前在非 Windows 上把 `ENCRYPT_CREDENTIALS=true` 写进配置时，程序会忽略它并继续以明文运行。现在这种情况会拒绝启动。要保持原来的明文行为，把它改回 `false`。
 
 账户页的“添加账户”支持从 Chrome 导入、粘贴 Cookie、从指纹浏览器导入、隔离 Camoufox 登录和远程添加：
 

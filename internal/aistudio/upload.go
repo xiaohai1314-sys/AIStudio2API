@@ -557,22 +557,31 @@ func (p *AccountPool) bindFileResource(ctx context.Context, file FileRef, accoun
 	return err
 }
 
-// FileMetadata 返回 runtime-state 中的公开文件元数据
+// FileMetadata 返回 runtime-state 中的公开文件元数据。
+// 当前 API key 绑定了账户时，只返回这些账户名下的文件；其他文件与不存在的文件都是 ErrResourceNotFound，响应里看不出资源是否存在。
+// 未绑定的 key 保持可见全部账户。
 func (p *AccountPool) FileMetadata(ctx context.Context, fileID string) (FileMetadata, error) {
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {
 		return FileMetadata{}, fmt.Errorf("%w: 文件 ID 为空", ErrResourceNotFound)
 	}
-	if err := p.refreshResource(ctx, fileID); err != nil {
-		return FileMetadata{}, err
-	}
+	refreshErr := p.refreshResource(ctx, fileID)
+	bound, allowed := p.apiKeyScope(ctx)
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	accountID, exists := p.resources[fileID]
-	if !exists {
-		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
+	var binding ResourceBinding
+	if exists {
+		binding = p.byID[accountID].runtime.Resources[fileID]
 	}
-	binding, exists := p.byID[accountID].runtime.Resources[fileID]
+	p.mu.Unlock()
+	if exists && bound {
+		if _, visible := allowed[accountID]; !visible {
+			return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
+		}
+	}
+	if refreshErr != nil {
+		return FileMetadata{}, refreshErr
+	}
 	if !exists || binding.Kind != "drive-file" || binding.Name == "" || binding.MIME == "" || binding.Size <= 0 || binding.Purpose == "" {
 		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
 	}
@@ -587,7 +596,7 @@ func (binding ResourceBinding) fileMetadata(fileID string) FileMetadata {
 	}
 }
 
-// ListFiles 返回全部公开上传文件的持久元数据
+// ListFiles 返回当前 API key 可见的公开上传文件。未绑定账户的 key 仍返回全部文件。
 func (s *PooledService) ListFiles(ctx context.Context) ([]FileMetadata, error) {
 	return s.pool.ListFiles(ctx)
 }
@@ -608,15 +617,22 @@ func (p *AccountPool) refreshAllRuntimes(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-// ListFiles 刷新全部账户 runtime-state 后返回公开上传文件，按创建时间从新到旧排列
+// ListFiles 刷新全部账户 runtime-state 后返回公开上传文件，按创建时间从新到旧排列。
+// 已绑定账户的 API key 只能看到这些账户的文件；未绑定的 key 仍看到全部账户。已删除账户的文件会在刷新时移除。
 func (p *AccountPool) ListFiles(ctx context.Context) ([]FileMetadata, error) {
 	if err := p.refreshAllRuntimes(ctx); err != nil {
 		return nil, err
 	}
+	bound, allowed := p.apiKeyScope(ctx)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	files := []FileMetadata{}
 	for fileID, accountID := range p.resources {
+		if bound {
+			if _, visible := allowed[accountID]; !visible {
+				continue
+			}
+		}
 		binding := p.byID[accountID].runtime.Resources[fileID]
 		if binding.Kind != "drive-file" || binding.Name == "" || binding.MIME == "" || binding.Size <= 0 || binding.Purpose == "" {
 			continue

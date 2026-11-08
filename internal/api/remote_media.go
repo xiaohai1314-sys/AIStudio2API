@@ -175,7 +175,11 @@ func validateImagePayload(data []byte) error {
 	return nil
 }
 
-// publicOutboundTransport 禁用环境代理并在实际拨号前重新解析及验证地址，避免校验后 DNS 重绑定到内网。
+// publicOutboundTransport 供外部媒体下载和 interaction webhook 使用。
+// 它故意不走 PROXY、账户代理或环境变量中的 HTTP(S)_PROXY。这两类请求的目标来自公开 API，
+// 必须在每次拨号前重新解析，并且只连接当时判定为公网的地址；每次重定向也会重新检查主机。
+// 如果改成信任调用方配置的正向代理，代理可以访问这里拒绝的私网地址，也可以在校验和连接之间换掉解析结果，DNS 重绑定防护不再成立。
+// 因此没有“可选走 PROXY”的开关。PROXY 只覆盖访问 AI Studio 的账户流量，不是进程的全流量代理。
 var publicOutboundTransport = newPublicOutboundTransport()
 
 // remoteMediaClient 是下载外部媒体的 HTTP 客户端，每次重定向前检查目标主机。

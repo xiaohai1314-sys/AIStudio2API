@@ -8,10 +8,14 @@ import (
 	"time"
 )
 
-// keepaliveWriter 在非流式响应写出前每隔心跳间隔写出一个换行，首个换行以 200 与 JSON 类型提交响应头，状态码只记入访问日志
+// nonstreamKeepaliveInterval 是非流式保活第一次写出和后续间隔。测试可以改短，避免真实等待 10 秒。
+var nonstreamKeepaliveInterval = streamHeartbeatInterval
+
+// keepaliveWriter 在非流式响应写出前每隔心跳间隔写出一个换行。首个换行会以 200 提交响应头，之后的真实状态码只能记入访问日志。
 type keepaliveWriter struct {
 	http.ResponseWriter
 	ctx       context.Context
+	interval  time.Duration
 	mu        sync.Mutex
 	timer     *time.Timer
 	committed bool
@@ -26,13 +30,19 @@ func (s *server) responseModes() ResponseModes {
 	return s.config.ResponseModes()
 }
 
-// nonstreamKeepalive 在开启非流式保活时返回带保活的 ResponseWriter，以及在处理函数返回前调用的停止函数
+// nonstreamKeepalive 在显式开启非流式保活时返回带保活的 ResponseWriter，以及在处理函数返回前调用的停止函数。
+// 默认关闭：等待期间不提交响应头，429、认证失败等仍按真实 HTTP 状态返回。
+// 开启后，间隔到达时先写出 200，此后的失败状态不再出现在 HTTP 状态码里。
 func (s *server) nonstreamKeepalive(w http.ResponseWriter, r *http.Request) (http.ResponseWriter, func()) {
 	if !s.responseModes().NonstreamKeepalive {
 		return w, func() {}
 	}
-	writer := &keepaliveWriter{ResponseWriter: w, ctx: r.Context()}
-	writer.timer = time.AfterFunc(streamHeartbeatInterval, writer.beat)
+	interval := nonstreamKeepaliveInterval
+	if interval <= 0 {
+		interval = streamHeartbeatInterval
+	}
+	writer := &keepaliveWriter{ResponseWriter: w, ctx: r.Context(), interval: interval}
+	writer.timer = time.AfterFunc(interval, writer.beat)
 	return writer, writer.stop
 }
 
@@ -55,7 +65,7 @@ func (writer *keepaliveWriter) beat() {
 	if http.NewResponseController(writer.ResponseWriter).Flush() != nil {
 		return
 	}
-	writer.timer.Reset(streamHeartbeatInterval)
+	writer.timer.Reset(writer.interval)
 }
 
 // stop 停止保活，之后的写入直接到达底层 ResponseWriter

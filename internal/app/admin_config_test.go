@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,8 +23,9 @@ func TestAdminConfig(t *testing.T) {
 	cfg.AdminAuthEnabled = true
 	cfg.AdminUsername = "operator"
 	cfg.AdminPassword = "test-password"
-	// 凭据加密依赖 Windows DPAPI，非 Windows 平台配置校验会拒绝该选项
-	cfg.EncryptCredentials = runtime.GOOS == "windows"
+	// 非 Windows 的凭据加密需要数据目录之外的密钥。本测试保持关闭，只确认保存设置不会改掉这项。
+	cfg.EncryptCredentials = false
+	cfg.CredentialsKeyFile = "/run/secrets/aistudio-credentials"
 	cfg.PProfAddr = "127.0.0.1:6060"
 	cfg.GeoIPDBPath = "custom-geoip.mmdb"
 	if err := cfg.Save(path); err != nil {
@@ -70,8 +70,8 @@ func TestAdminConfig(t *testing.T) {
 	if !saved.AutoStart {
 		t.Fatal("auto_start was not saved")
 	}
-	if !saved.AuthFailurePause || saved.EncryptCredentials != cfg.EncryptCredentials || saved.PProfAddr != cfg.PProfAddr || saved.GeoIPDBPath != cfg.GeoIPDBPath {
-		t.Fatalf("environment-only config changed: auth=%v encrypt=%v pprof=%q geoip=%q", saved.AuthFailurePause, saved.EncryptCredentials, saved.PProfAddr, saved.GeoIPDBPath)
+	if !saved.AuthFailurePause || saved.EncryptCredentials != cfg.EncryptCredentials || saved.CredentialsKeyFile != cfg.CredentialsKeyFile || saved.PProfAddr != cfg.PProfAddr || saved.GeoIPDBPath != cfg.GeoIPDBPath {
+		t.Fatalf("environment-only config changed: auth=%v encrypt=%v keyfile=%q pprof=%q geoip=%q", saved.AuthFailurePause, saved.EncryptCredentials, saved.CredentialsKeyFile, saved.PProfAddr, saved.GeoIPDBPath)
 	}
 	manager := &runtimeManager{activeManagement: cfg}
 	password := "new-test-password"

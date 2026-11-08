@@ -159,7 +159,7 @@ func LoadStorageState(filePath string) (StorageState, error) {
 	return state, nil
 }
 
-// WriteStorageState 原子写回 Playwright storage state，启用凭证加密时以 DPAPI 密文保存
+// WriteStorageState 原子写回 Playwright storage state。启用凭证加密时写成平台密文；未启用时保持明文。读取方对两种内容都能解密，启动时不批量改写已有文件。
 func WriteStorageState(filePath string, state StorageState) error {
 	if err := state.Validate(); err != nil {
 		return err

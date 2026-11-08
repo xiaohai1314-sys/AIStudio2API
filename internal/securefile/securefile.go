@@ -15,9 +15,13 @@ const envelopePrefix = "AISTUDIO2API-DPAPI1:"
 // aesEnvelopePrefix 标记 AES-256-GCM 加密的凭证内容
 const aesEnvelopePrefix = "AISTUDIO2API-AESGCM1:"
 
+// aesKeySize 是 AES-256 密钥的字节数
+const aesKeySize = 32
+
 var (
-	enabled atomic.Bool
-	keyPath atomic.Value
+	enabled   atomic.Bool
+	keyPath   atomic.Value
+	inlineKey atomic.Value
 )
 
 // Configure 设置写出凭证文件时是否加密，进程启动时调用一次
@@ -25,9 +29,32 @@ func Configure(value bool) {
 	enabled.Store(value)
 }
 
-// ConfigureKeyPath 设置非 Windows 平台 AES 密钥文件路径，进程启动时调用一次
+// ConfigureKeyPath 设置非 Windows 平台 AES 密钥文件路径，进程启动时调用一次。
+// 路径必须由调用方明确给出。读取时不会在缺失时自动生成密钥。
 func ConfigureKeyPath(path string) {
 	keyPath.Store(strings.TrimSpace(path))
+}
+
+// ConfigureKey 设置进程内的 AES-256 密钥。传 nil 或空切片表示不使用进程内密钥。
+// 密钥应由进程环境注入，不要把它写到账户数据旁边。
+func ConfigureKey(key []byte) {
+	if len(key) == 0 {
+		inlineKey.Store([]byte(nil))
+		return
+	}
+	inlineKey.Store(append([]byte(nil), key...))
+}
+
+// configuredInlineKey 返回进程内密钥的副本。未配置时返回 nil。
+func configuredInlineKey() ([]byte, error) {
+	key, _ := inlineKey.Load().([]byte)
+	if len(key) == 0 {
+		return nil, nil
+	}
+	if len(key) != aesKeySize {
+		return nil, fmt.Errorf("凭证密钥长度应为 %d 字节", aesKeySize)
+	}
+	return append([]byte(nil), key...), nil
 }
 
 // configuredKeyPath 返回 AES 密钥文件路径，未配置时为空
