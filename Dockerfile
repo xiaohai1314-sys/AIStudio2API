@@ -11,12 +11,15 @@ ARG TARGETARCH
 ARG ZIG=0.16.0
 ARG SPIDERMONKEY=v152.0.4-aistudio2api.1
 ARG LIBWEBP=v1.6.0-aistudio2api.1
-RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://ziglang.org/download/$ZIG/zig-$(uname -m)-linux-$ZIG.tar.xz | tar -xJ -C /opt \
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/*
+COPY build/dependency-checksums.txt build/fetch-verified.sh /opt/verify/
+# 摘要来源写在 dependency-checksums.txt。校验失败不会解压。
+RUN arch=$(uname -m) \
+    && sh /opt/verify/fetch-verified.sh "https://ziglang.org/download/${ZIG}/zig-${arch}-linux-${ZIG}.tar.xz" "zig-${arch}-linux-${ZIG}.tar.xz" /opt /opt/verify/dependency-checksums.txt tar.xz \
     && mv /opt/zig-* /opt/zig \
-    && mkdir /opt/spidermonkey /opt/libwebp \
-    && curl -fsSL https://github.com/Mag1cFall/firefox/releases/download/$SPIDERMONKEY/spidermonkey-$SPIDERMONKEY-linux-$TARGETARCH.tar.gz | tar -xz -C /opt/spidermonkey \
-    && curl -fsSL https://github.com/Mag1cFall/libwebp/releases/download/$LIBWEBP/libwebp-$LIBWEBP-linux-$TARGETARCH.tar.gz | tar -xz -C /opt/libwebp
+    && mkdir -p /opt/spidermonkey /opt/libwebp \
+    && sh /opt/verify/fetch-verified.sh "https://github.com/Mag1cFall/firefox/releases/download/${SPIDERMONKEY}/spidermonkey-${SPIDERMONKEY}-linux-${TARGETARCH}.tar.gz" "spidermonkey-${SPIDERMONKEY}-linux-${TARGETARCH}.tar.gz" /opt/spidermonkey /opt/verify/dependency-checksums.txt tar.gz \
+    && sh /opt/verify/fetch-verified.sh "https://github.com/Mag1cFall/libwebp/releases/download/${LIBWEBP}/libwebp-${LIBWEBP}-linux-${TARGETARCH}.tar.gz" "libwebp-${LIBWEBP}-linux-${TARGETARCH}.tar.gz" /opt/libwebp /opt/verify/dependency-checksums.txt tar.gz
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

@@ -2878,6 +2878,10 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 			if account.ID == accountID {
 				if allowed != nil {
 					if _, exists := allowed[accountID]; !exists {
+						// 资源属于当前 key 不可用的账户时，与资源不存在使用同一错误，避免泄漏资源是否存在。
+						if strings.TrimSpace(selection.ResourceID) != "" {
+							return nil, fmt.Errorf("%w: %s", ErrResourceNotFound, strings.TrimSpace(selection.ResourceID))
+						}
 						return nil, ErrNoEligibleAccount
 					}
 				}

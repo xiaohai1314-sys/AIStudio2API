@@ -1044,7 +1044,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		RequestBodyLog:   value.RequestBodyLog,
 		AuthFailurePause: saved.AuthFailurePause,
 		LogFile:          value.LogFile, LogMaxTotalMB: value.LogMaxTotalMB,
-		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password, EncryptCredentials: saved.EncryptCredentials, TrustedProxyCIDRs: saved.TrustedProxyCIDRs,
+		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password, EncryptCredentials: saved.EncryptCredentials, CredentialsKeyFile: saved.CredentialsKeyFile, CredentialsKey: append([]byte(nil), saved.CredentialsKey...), TrustedProxyCIDRs: saved.TrustedProxyCIDRs,
 		BuildNativeNonstream: value.BuildNativeNonstream,
 		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
 		SearchModelAliases: value.SearchModelAliases, GoogleSearch: value.GoogleSearch, StripThoughtSignatures: value.StripThoughtSignatures,

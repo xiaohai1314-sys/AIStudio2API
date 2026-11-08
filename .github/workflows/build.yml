@@ -111,7 +111,7 @@ jobs:
           restore-keys: go-windows-amd64-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
       - name: Install Windows C Compiler
         run: |
-          curl -fsSL https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          sh build/fetch-verified.sh https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz "$RUNNER_TEMP" build/dependency-checksums.txt tar.xz
           echo "$RUNNER_TEMP/llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64/bin" >> "$GITHUB_PATH"
       - uses: ./.github/actions/static-libraries
         with:

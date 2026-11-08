@@ -10,3 +10,13 @@ services:
       - "127.0.0.1:2050:2050"
     volumes:
       - ./data:/data
+    # PROXY 只作用于访问 AI Studio 的账户流量。外部媒体下载和 Interactions webhook 固定直连，并拒绝私网目标。
+    # 开启 ENCRYPT_CREDENTIALS 时不要把密钥放进 ./data。用进程环境变量，或挂载数据卷之外的 0600 密钥文件：
+    # secrets:
+    #   aistudio_credentials:
+    #     file: ./credentials.key
+    # environment:
+    #   ENCRYPT_CREDENTIALS: "true"
+    #   CREDENTIALS_KEY_FILE: /run/secrets/aistudio_credentials
+    # secrets:
+    #   - aistudio_credentials
