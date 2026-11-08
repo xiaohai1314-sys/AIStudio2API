@@ -2868,6 +2868,11 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 		if !exists {
 			return nil, ErrResourceNotFound
 		}
+		if allowed != nil && !accountAllowed(allowed, owner) {
+			// 资源属于当前 key 不可用的账户时，与资源不存在使用同一错误。
+			// 先于账户不匹配的错误返回，避免把资源属主的账户 ID 带进错误消息。
+			return nil, fmt.Errorf("%w: %s", ErrResourceNotFound, strings.TrimSpace(selection.ResourceID))
+		}
 		if accountID != "" && accountID != owner {
 			return nil, fmt.Errorf("资源 %s 绑定账户 %s", selection.ResourceID, owner)
 		}
@@ -2878,6 +2883,10 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 			if account.ID == accountID {
 				if allowed != nil {
 					if _, exists := allowed[accountID]; !exists {
+						// 资源属于当前 key 不可用的账户时，与资源不存在使用同一错误，避免泄漏资源是否存在。
+						if strings.TrimSpace(selection.ResourceID) != "" {
+							return nil, fmt.Errorf("%w: %s", ErrResourceNotFound, strings.TrimSpace(selection.ResourceID))
+						}
 						return nil, ErrNoEligibleAccount
 					}
 				}

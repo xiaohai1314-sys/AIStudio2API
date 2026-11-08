@@ -131,9 +131,11 @@ npm run build
 cd ..
 mkdir spidermonkey
 curl.exe -L -o spidermonkey\windows.tar.gz https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-windows-amd64.tar.gz
+if ((Get-FileHash spidermonkey\windows.tar.gz -Algorithm SHA256).Hash -ne "942A3B57B202F899D799CAC678B7471D01D0B34714070F0810C18FCA37FFD721") { throw "spidermonkey checksum mismatch" }
 tar -xzf spidermonkey\windows.tar.gz -C spidermonkey
 mkdir libwebp
 curl.exe -L -o libwebp\libwebp.tar.gz https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-windows-amd64.tar.gz
+if ((Get-FileHash libwebp\libwebp.tar.gz -Algorithm SHA256).Hash -ne "CA38CA4CFAE9BFE5808DBCFA11707D81EFD534D723D2B7622CD32EF1114DEA1D") { throw "libwebp checksum mismatch" }
 tar -xzf libwebp\libwebp.tar.gz -C libwebp
 $env:CC = "x86_64-w64-mingw32-clang"
 $env:CXX = "x86_64-w64-mingw32-clang++"
@@ -143,7 +145,7 @@ go build -o aistudio2api.exe ./cmd/aistudio2api
 .\aistudio2api.exe
 ```
 
-`x86_64-w64-mingw32-clang` comes from the llvm-mingw `ucrt-x86_64` package; add its `bin` directory to `PATH` after extracting it.
+`x86_64-w64-mingw32-clang` comes from the llvm-mingw `ucrt-x86_64` package; add its `bin` directory to `PATH` after extracting it. The SHA256 values above are the GitHub Release asset digests also listed in `build/dependency-checksums.txt`. Do not extract an archive whose hash does not match. The llvm-mingw `20261020` `ucrt-ubuntu-22.04-x86_64` archive digest is `55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335`, also from GitHub's asset digest; the release notes do not include a maintainer signature.
 
 With `WAA_BACKEND=camoufox`, starting the generation service, or the first browser sign-in, downloads Camoufox for the current platform to `runtime/camoufox/`:
 
@@ -201,10 +203,9 @@ npm run build
 cd ..
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 platform=$([ "$(uname -s)" = Darwin ] && echo darwin || echo linux)
-mkdir -p spidermonkey
-curl -L https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C spidermonkey
-mkdir -p libwebp
-curl -L https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz | tar -xz -C libwebp
+mkdir -p spidermonkey libwebp
+sh build/fetch-verified.sh "https://github.com/Mag1cFall/firefox/releases/download/v152.0.4-aistudio2api.1/spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz" "spidermonkey-v152.0.4-aistudio2api.1-$platform-$arch.tar.gz" spidermonkey build/dependency-checksums.txt tar.gz
+sh build/fetch-verified.sh "https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz" "libwebp-v1.6.0-aistudio2api.1-$platform-$arch.tar.gz" libwebp build/dependency-checksums.txt tar.gz
 export CGO_CPPFLAGS="-I$PWD/spidermonkey/include -I$PWD/libwebp/include" CGO_LDFLAGS="-L$PWD/spidermonkey/lib -L$PWD/libwebp/lib"
 if [ "$platform" = darwin ]; then
   go build -o aistudio2api ./cmd/aistudio2api
@@ -235,7 +236,8 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
 
 - The container always listens on `0.0.0.0:2048` inside, so `data/.env` must set `PROXY_API_KEY` even when Compose publishes the ports on the host loopback interface; without it the service refuses to start. Only when remote access is required, change the mapping in `docker-compose.yml` to `0.0.0.0:2048:2048` (and expose the preview port only if needed) and use a strong key. Opening the console from outside the container also requires `ADMIN_AUTH_ENABLED=true` and a console password; the default username is `admin`.
 - Add accounts: choose "Sign in with browser" in "Add account" on the console and sign in to Google in the sign-in window that opens in the console; you can also paste cookies, or copy `auth/<Google email>/` from a computer that can sign in to Google into `data/auth/`.
-- `PROXY` and account proxies are reached from inside the container; when the proxy runs on the host, use the host's LAN address and allow LAN connections on the proxy.
+- `PROXY` and account proxies are reached from inside the container; when the proxy runs on the host, use the host's LAN address and allow LAN connections on the proxy. `PROXY` does not carry remote media downloads or webhooks
+- To encrypt `data/auth`, set `ENCRYPT_CREDENTIALS=true` in `data/.env` and supply `CREDENTIALS_KEY` as an environment variable, or mount `CREDENTIALS_KEY_FILE` outside `/data`. Do not put the key inside `data/`
 - The container time zone is UTC. New accounts' fingerprint time zone, log timestamps, and daily usage totals follow the container time zone; add `environment: { TZ: <IANA time zone> }` to `docker-compose.yml` to use another one. Each account's time zone can also be set on the Accounts page.
 - Run `docker compose restart` after editing `data/.env`, `docker compose pull && docker compose up -d` to update the image, and `docker compose up -d --build` in the source directory to build from source.
 
@@ -603,7 +605,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `PROXY_API_KEY` | empty | Public API key; required when `LISTEN_ADDR` is not a loopback address |
 | `PUBLIC_RATE_LIMIT` | `30` | Public API requests allowed per minute for each API key, or each peer IP when no key is configured; excess requests receive 429 |
 | `PUBLIC_RATE_BURST` | `4` | Requests an API key/IP can make immediately; must not exceed `PUBLIC_RATE_LIMIT` |
-| `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
+| `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`. Keys not listed can use every account; a miss in that list is reported in the logs at startup and when saving settings. Generation, upload, file list, file metadata, download, and delete all stay inside that set; a file outside it is a 404, same as a missing file. You can also tick accounts per key on the Settings page; takes effect when saved |
 | `API_KEY_RATE_LIMITS` | empty | Per-minute request limit for individual API keys, each item `key:requests-per-minute`; keys not listed use `PUBLIC_RATE_LIMIT`; also editable on the Settings page |
 | `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
 | `HIDE_DOCK_ICON` | `false` | On the macOS desktop app, show the icon only in the menu bar instead of the Dock; the service keeps running after the window closes. Changes in Settings take effect immediately |
@@ -614,7 +616,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ADMIN_AUTH_ENABLED` | `false` | Enable username/password login for the console |
 | `ADMIN_USERNAME` | `admin` | Administrator username |
 | `ADMIN_PASSWORD` | empty | Administrator password, required when login is enabled |
-| `ENCRYPT_CREDENTIALS` | `false` | Encrypt account auth states and the console session file with Windows DPAPI; Windows only, and encrypted files cannot be copied to another machine or user |
+| `ENCRYPT_CREDENTIALS` | `false` | Encrypt account auth states and the console session file. Windows uses DPAPI. Linux and Docker use AES-256-GCM and require a separate key; see Credential encryption below |
 | `TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of trusted reverse proxies, such as `127.0.0.1/32`; only their `X-Forwarded-Proto` may mark a console-session cookie Secure |
 | `PPROF_ADDR` | empty | Listen address for profiling, such as `127.0.0.1:6060`; empty disables it, and when enabled `/debug/pprof/` serves CPU, memory and goroutine profiles |
 | `GEOIP_DB_PATH` | `runtime/geoip/dbip-country-lite.mmdb` | Local GeoIP database used by the account environment check to compare the exit IP country; when missing, the Accounts page can download the free DB-IP database (CC BY 4.0) |
@@ -636,7 +638,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `MODEL_CHANNELS` | empty | Limit a model to one channel, each item `model ID:playground` or `model ID:build`; also selectable in model details on the Model catalog page, applied on save |
 | `BUILD_NATIVE_NONSTREAM` | `true` | With the Build channel enabled, prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
-| `NONSTREAM_KEEPALIVE` | `true` | When a non-streaming request waits longer than 10 seconds, return 200 first and write a newline every 10 seconds until the JSON body, so reverse proxies such as Cloudflare keep the connection open; errors after that point come back as the protocol error body |
+| `NONSTREAM_KEEPALIVE` | `false` | Off by default, so a slow response keeps its real HTTP status. Set `true` to return 200 after 10 seconds and write a newline every 10 seconds, which keeps proxies such as Cloudflare from closing an idle connection. Once those headers are sent, a later 429 or authentication failure can only be reported in the JSON body; the access log still records the real status |
 | `FAKE_STREAM` | `false` | Streaming requests get the full result as a non-streaming generation, retry on another account if it fails midway, then stream it in the protocol format; heartbeats continue while waiting |
 | `YOUTUBE_LINKS` | `false` | Send YouTube links in user message text to the model as video and remove them from the text |
 | `STRIP_THOUGHT_SIGNATURES` | `false` | Remove thought signatures from conversation history before sending upstream and send function calls with `skip_thought_signature_validator`; earlier turns' thinking is not passed to the model with the signatures, so long conversations use fewer input tokens |
@@ -680,6 +682,7 @@ HTTP, HTTPS, and SOCKS5 proxies are supported. For proxies that require authenti
 3. Edit an account to set an account-specific proxy
 4. The account proxy is used for login, WAA, and business requests
 5. For authenticated proxies, the program gives Camoufox a credential-free SOCKS5 relay on the loopback address; the credentials are not written to the browser profile. While the relay runs, other local processes can also use the proxy through it
+6. `PROXY` is not a process-wide proxy. Remote media URLs supplied by clients, and Interactions webhooks, dial the public internet directly. Before connecting they reject loopback, private, link-local, carrier-grade NAT, and documentation addresses, and they resolve the name again at dial time to stop DNS rebinding. Those requests do not read `PROXY`. Sending them through a caller-configured forward proxy would let that proxy reach addresses this process already refused, so there is no optional switch
 
 ### Authentication File Management
 
@@ -695,6 +698,21 @@ Authentication files are stored in `auth/` by default:
 | `[user cache]/AIStudio2API/runtime-leases/<Google email>.lock` | WAA Worker lease for that email on the current computer |
 
 The lowercase Google email is the account directory, management UI identity, and log source. `.leases` coordinates account-directory access, while the runtime lease in the user cache allows one WAA Worker per email on the current computer.
+
+### Credential encryption
+
+`ENCRYPT_CREDENTIALS` defaults to off. Existing plaintext and ciphertext are read as they are; startup does not rewrite `auth/`. After it is turned on, a file is encrypted the next time that auth file or the console session is saved.
+
+Windows uses DPAPI. The ciphertext is bound to the current user on this machine and cannot be copied to another machine or user.
+
+Linux and Docker use AES-256-GCM. The key has to be supplied separately. The program does not generate one under `runtime/` and treat that as protection:
+
+- `CREDENTIALS_KEY`: hex or standard Base64 for 32 bytes, and only as a process environment variable. A value stored in `.env` prevents startup, and saving settings does not write this value back to `.env`.
+- `CREDENTIALS_KEY_FILE`: a regular file with mode `0600` whose contents are exactly 32 bytes. The path must be outside the working directory and outside every directory named by `AISTUDIO_AUTH_STATES`. If the file is missing, a symlink, too widely readable, or the wrong length, the process refuses to start and does not create the file.
+
+Only one of the two sources may be set. If the key is missing or does not match, reads fail and the original file is left in place. In Docker, mount the key at `/run/secrets/` or inject `CREDENTIALS_KEY` from the orchestrator. A key file on the same disk but outside the data directory is not copied along with `data/`; it does not protect against theft of the whole disk.
+
+On non-Windows systems, `ENCRYPT_CREDENTIALS=true` used to be ignored and the process kept storing plaintext. It now refuses to start. Set it back to `false` to keep that plaintext behavior.
 
 "Add account" on the Accounts page supports Chrome import, pasted cookies, antidetect browser import, isolated Camoufox login, and remote adding:
 

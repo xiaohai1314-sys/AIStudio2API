@@ -70,7 +70,8 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 		return false, err
 	}
 	securefile.Configure(cfg.EncryptCredentials)
-	securefile.ConfigureKeyPath(filepath.Join("runtime", "credentials.key"))
+	securefile.ConfigureKey(cfg.CredentialsKey)
+	securefile.ConfigureKeyPath(cfg.CredentialsKeyFile)
 	if err := logs.set(cfg.LogFile, cfg.LogMaxTotalMB); err != nil {
 		return false, err
 	}

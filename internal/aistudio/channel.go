@@ -68,6 +68,23 @@ func (p *AccountPool) SetAPIKeyAccounts(accounts map[string][]string) {
 	p.notifyLocked()
 }
 
+// apiKeyScope 返回请求 API key 是否绑定了账户，以及允许的账户集合。
+// 上下文没有 key，或该 key 没有出现在 API_KEY_ACCOUNTS 中时，bound 为 false，调用方保持“可用全部账户”的行为。
+// 绑定到空列表时 bound 为 true 且 allowed 为空，任何账户都不可见。
+func (p *AccountPool) apiKeyScope(ctx context.Context) (bound bool, allowed map[string]struct{}) {
+	selection := p.keyScopedSelection(ctx, AccountSelection{})
+	if selection.AllowedAccountIDs == nil {
+		return false, nil
+	}
+	allowed = make(map[string]struct{}, len(selection.AllowedAccountIDs))
+	for _, accountID := range selection.AllowedAccountIDs {
+		if accountID = strings.TrimSpace(accountID); accountID != "" {
+			allowed[accountID] = struct{}{}
+		}
+	}
+	return true, allowed
+}
+
 // keyScopedSelection 把请求所用 API key 绑定的账户并入选择的允许账户
 func (p *AccountPool) keyScopedSelection(ctx context.Context, selection AccountSelection) AccountSelection {
 	key, _ := ctx.Value(apiKeyContextKey{}).(string)

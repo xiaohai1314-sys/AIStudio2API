@@ -198,7 +198,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `PUBLIC_RATE_LIMIT` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数 | `30` |
 | `PUBLIC_RATE_BURST` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` | `4` |
 | `API_KEY_RATE_LIMITS` | 为个别 API key 指定每分钟请求上限，每项写成 `key:每分钟`，多个用逗号分隔；未列出的 key 使用 `PUBLIC_RATE_LIMIT` | 空 |
-| `API_KEY_ACCOUNTS` | 逗号分隔，每项以最后一个 `:` 分成 `PROXY_API_KEY` 中的 key 与以 `\|` 分隔的账户 ID，该 key 的请求与文件上传只在这些账户中选号，未列出的 key 可用全部账户，不在 `PROXY_API_KEY` 中的项不起作用；保存后立即生效，同时修改 `PROXY_API_KEY` 时，管理服务重启前仍被接受的 key 沿用原来的绑定 | 空 |
+| `API_KEY_ACCOUNTS` | 逗号分隔，每项以最后一个 `:` 分成 `PROXY_API_KEY` 中的 key 与以 `\|` 分隔的账户 ID。该 key 的生成、上传、文件列表、文件详情、下载和删除只使用这些账户；范围外的文件与不存在的文件都是资源不存在，响应不说明它是否存在。未列出的 key 可用全部账户，不在 `PROXY_API_KEY` 中的项不起作用；保存后立即生效，同时修改 `PROXY_API_KEY` 时，管理服务重启前仍被接受的 key 沿用原来的绑定 | 空 |
 | `AUTO_START` | 管理服务就绪后自动启动生成服务；失败记录 `ERROR` 日志，管理服务继续运行，账户与配置以外的原因失败时以 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 | `false` |
 | `HIDE_DOCK_ICON` | macOS 桌面版以 Accessory 激活策略启动，只显示菜单栏图标；设置页保存后管理页面向桌面壳发送 `dock:hide` 或 `dock:show`，桌面壳在主线程切换激活策略 |
 | `REQUEST_BODY_LOG` | 保存公开 API 的 POST 请求与响应正文，各截断到 64 KiB，只保留最近 1000 条；保存后立即生效 | `false` |
@@ -208,9 +208,9 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `ADMIN_AUTH_ENABLED` | 管理员账号密码登录开关 | `false` |
 | `ADMIN_USERNAME` | 管理员账号 | `admin` |
 | `ADMIN_PASSWORD` | 管理员密码，开启登录时必填 | 空 |
-| `ENCRYPT_CREDENTIALS` | 用 Windows DPAPI 加密保存账户认证状态与管理会话文件；仅 Windows 支持，开启后文件不能跨机器或用户复制 | `false` |
+| `ENCRYPT_CREDENTIALS` | 加密账户认证状态与管理会话。Windows 用 DPAPI。其他系统用 AES-256-GCM，并要求进程环境变量 `CREDENTIALS_KEY`（32 字节十六进制或标准 Base64，不写回 `.env`）或数据目录之外、权限 0600 的 `CREDENTIALS_KEY_FILE`。密钥缺失时拒绝启动且不自动生成。开启后不在启动时改写已有 auth 文件，只在该文件下次保存时加密；密钥丢失时解密失败且不改写密文 | `false` |
 | `TRUSTED_PROXY_CIDRS` | 可信反向代理的逗号分隔 CIDR；仅这些来源的 `X-Forwarded-Proto` 可影响管理会话 Cookie 的 Secure 属性 | 空 |
-| `PROXY` | setup 与未设置账户代理时使用的出口，多个代理用逗号分隔组成代理池；留空时生成服务使用系统代理 | 空 |
+| `PROXY` | setup 与未设置账户代理时使用的出口，多个代理用逗号分隔组成代理池；留空时生成服务使用系统代理。外部媒体下载和 Interactions webhook 不走这里，见下方出站说明 | 空 |
 | `INIT_TIMEOUT` | 单账户初始化超时 | `2m` |
 | `REQUEST_TIMEOUT` | 单次请求最大执行时间，自动续写的每一轮开始时重新计时 | `30m` |
 | `WARM_WORKER_LIMIT` | 常驻预热账户数 | `10`，Camoufox 后端 `5` |
@@ -222,7 +222,7 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `MODEL_MAPPING` | 逗号分隔，每项以最后一个 `:` 分成别名与模型 ID | 空 |
 | `MODEL_CHANNELS` | 逗号分隔，每项以最后一个 `:` 分成模型 ID 与通道 `playground` 或 `build`；保存后立即生效 | 空 |
 | `BUILD_NATIVE_NONSTREAM` | 启用 Build 通道时非流式请求优先选择 Build 原生单次调用 | `true` |
-| `NONSTREAM_KEEPALIVE` | 非流式请求等待结果期间每 10 秒写出一个换行 | `true` |
+| `NONSTREAM_KEEPALIVE` | 默认关闭，非流式响应保持真实 HTTP 状态。显式设为 true 时，等待超过 10 秒先提交 200 并每 10 秒写一个换行；此后的 429 或认证失败只出现在正文和访问日志里 | `false` |
 | `FAKE_STREAM` | 流式请求按非流式取得完整结果后再以流式输出 | `false` |
 | `YOUTUBE_LINKS` | 用户消息文本中的 YouTube 链接作为视频外部媒体发送 | `false` |
 | `STRIP_THOUGHT_SIGNATURES` | 发往上游前去掉对话历史中的思考签名，函数调用带 `skip_thought_signature_validator`；保存后停止再启动生成服务生效 | `false` |

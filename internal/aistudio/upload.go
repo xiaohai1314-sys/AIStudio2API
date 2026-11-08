@@ -557,26 +557,55 @@ func (p *AccountPool) bindFileResource(ctx context.Context, file FileRef, accoun
 	return err
 }
 
-// FileMetadata 返回 runtime-state 中的公开文件元数据
+// FileMetadata 返回 runtime-state 中的公开文件元数据。
+// 当前 API key 绑定了账户时，只返回这些账户名下的文件；其他文件与不存在的文件都是 ErrResourceNotFound。
+// 判断在刷新之前完成：越权探测不触发属主账户刷新，也不把刷新错误当成区分存在性的信号返回；
+// 刷新后再次核对归属，资源中途改绑到范围外账户时同样返回不存在。
+// 未绑定的 key 保持可见全部账户，维持先刷新再查询的旧行为。
 func (p *AccountPool) FileMetadata(ctx context.Context, fileID string) (FileMetadata, error) {
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {
 		return FileMetadata{}, fmt.Errorf("%w: 文件 ID 为空", ErrResourceNotFound)
 	}
-	if err := p.refreshResource(ctx, fileID); err != nil {
-		return FileMetadata{}, err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	accountID, exists := p.resources[fileID]
-	if !exists {
+	bound, allowed := p.apiKeyScope(ctx)
+	if bound && !p.resourceInScope(fileID, allowed) {
 		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
 	}
-	binding, exists := p.byID[accountID].runtime.Resources[fileID]
+	refreshErr := p.refreshResource(ctx, fileID)
+	p.mu.Lock()
+	accountID, exists := p.resources[fileID]
+	if bound && (!exists || !accountAllowed(allowed, accountID)) {
+		p.mu.Unlock()
+		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
+	}
+	var binding ResourceBinding
+	if exists {
+		if account := p.byID[accountID]; account != nil {
+			binding = account.runtime.Resources[fileID]
+		}
+	}
+	p.mu.Unlock()
+	if refreshErr != nil {
+		return FileMetadata{}, refreshErr
+	}
 	if !exists || binding.Kind != "drive-file" || binding.Name == "" || binding.MIME == "" || binding.Size <= 0 || binding.Purpose == "" {
 		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
 	}
 	return binding.fileMetadata(fileID), nil
+}
+
+// resourceInScope 返回资源当前是否绑定在 allowed 名下的账户上
+func (p *AccountPool) resourceInScope(fileID string, allowed map[string]struct{}) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	accountID, exists := p.resources[fileID]
+	return exists && accountAllowed(allowed, accountID)
+}
+
+// accountAllowed 返回账户是否在允许集合中
+func accountAllowed(allowed map[string]struct{}, accountID string) bool {
+	_, ok := allowed[accountID]
+	return ok
 }
 
 // fileMetadata 返回绑定记录的公开文件元数据
@@ -587,7 +616,7 @@ func (binding ResourceBinding) fileMetadata(fileID string) FileMetadata {
 	}
 }
 
-// ListFiles 返回全部公开上传文件的持久元数据
+// ListFiles 返回当前 API key 可见的公开上传文件。未绑定账户的 key 仍返回全部文件。
 func (s *PooledService) ListFiles(ctx context.Context) ([]FileMetadata, error) {
 	return s.pool.ListFiles(ctx)
 }
@@ -608,15 +637,22 @@ func (p *AccountPool) refreshAllRuntimes(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-// ListFiles 刷新全部账户 runtime-state 后返回公开上传文件，按创建时间从新到旧排列
+// ListFiles 刷新全部账户 runtime-state 后返回公开上传文件，按创建时间从新到旧排列。
+// 已绑定账户的 API key 只能看到这些账户的文件；未绑定的 key 仍看到全部账户。已删除账户的文件会在刷新时移除。
 func (p *AccountPool) ListFiles(ctx context.Context) ([]FileMetadata, error) {
 	if err := p.refreshAllRuntimes(ctx); err != nil {
 		return nil, err
 	}
+	bound, allowed := p.apiKeyScope(ctx)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	files := []FileMetadata{}
 	for fileID, accountID := range p.resources {
+		if bound {
+			if _, visible := allowed[accountID]; !visible {
+				continue
+			}
+		}
 		binding := p.byID[accountID].runtime.Resources[fileID]
 		if binding.Kind != "drive-file" || binding.Name == "" || binding.MIME == "" || binding.Size <= 0 || binding.Purpose == "" {
 			continue

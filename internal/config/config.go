@@ -3,6 +3,8 @@ package config
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -80,6 +82,8 @@ var configKeys = [...]string{
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
 	"ENCRYPT_CREDENTIALS",
+	"CREDENTIALS_KEY_FILE",
+	"CREDENTIALS_KEY",
 	"TRUSTED_PROXY_CIDRS",
 	"PPROF_ADDR",
 	"GEOIP_DB_PATH",
@@ -132,16 +136,21 @@ const DefaultContinuationPrompt = "Continue the assistant response after the fol
 
 // Config 保存服务的全局配置
 type Config struct {
-	AutoStart              bool
-	HideDockIcon           bool
-	RequestBodyLog         bool
-	AuthFailurePause       bool
-	LogFile                bool
-	LogMaxTotalMB          int
-	AdminAuthEnabled       bool
-	AdminUsername          string
-	AdminPassword          string
-	EncryptCredentials     bool
+	AutoStart          bool
+	HideDockIcon       bool
+	RequestBodyLog     bool
+	AuthFailurePause   bool
+	LogFile            bool
+	LogMaxTotalMB      int
+	AdminAuthEnabled   bool
+	AdminUsername      string
+	AdminPassword      string
+	EncryptCredentials bool
+	// CredentialsKeyFile 是非 Windows 凭证加密的密钥文件路径，必须位于程序目录和账户目录之外
+	CredentialsKeyFile string
+	// CredentialsKey 是来自进程环境变量 CREDENTIALS_KEY 的 32 字节密钥，不会写回 .env
+	CredentialsKey         []byte
+	credentialsKeyError    error
 	TrustedProxyCIDRs      string
 	BuildNativeNonstream   bool
 	NonstreamKeepalive     bool
@@ -217,7 +226,7 @@ func Default() Config {
 		LogFile:                true,
 		LogMaxTotalMB:          500,
 		BuildNativeNonstream:   true,
-		NonstreamKeepalive:     true,
+		NonstreamKeepalive:     false,
 		SearchModelAliases:     true,
 		FirstEventHedge:        FirstEventHedgeAuto,
 		FirstEventHedgeModels:  DefaultFirstEventHedgeModels,
@@ -257,7 +266,7 @@ type InvalidValue struct {
 }
 
 // secretKeys 是取值可能含凭据的配置键，无效时不记录原值
-var secretKeys = []string{"PROXY", "PROXY_API_KEY", "API_KEY_ACCOUNTS", "API_KEY_RATE_LIMITS", "ADMIN_PASSWORD"}
+var secretKeys = []string{"PROXY", "PROXY_API_KEY", "API_KEY_ACCOUNTS", "API_KEY_RATE_LIMITS", "ADMIN_PASSWORD", "CREDENTIALS_KEY"}
 
 // invalidValue 返回无效配置项的记录，凭据键不带原值
 func invalidValue(key, value string, err error) InvalidValue {
@@ -300,14 +309,21 @@ var configSetters = map[string]func(*Config, string) error{
 	"ADMIN_USERNAME":            textSetter(func(c *Config) *string { return &c.AdminUsername }, strings.TrimSpace),
 	"ADMIN_PASSWORD":            textSetter(func(c *Config) *string { return &c.AdminPassword }, func(value string) string { return value }),
 	"ENCRYPT_CREDENTIALS":       boolSetter("ENCRYPT_CREDENTIALS", func(c *Config) *bool { return &c.EncryptCredentials }),
-	"TRUSTED_PROXY_CIDRS":       textSetter(func(c *Config) *string { return &c.TrustedProxyCIDRs }, strings.TrimSpace),
-	"FIRST_EVENT_HEDGE":         textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
-	"FIRST_EVENT_HEDGE_MODELS":  textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
-	"CONTINUATION_PROMPT":       textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
-	"AISTUDIO_AUTH_STATES":      textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
-	"LISTEN_ADDR":               textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
-	"PREVIEW_LISTEN_ADDR":       textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
-	"PPROF_ADDR":                textSetter(func(c *Config) *string { return &c.PProfAddr }, strings.TrimSpace),
+	"CREDENTIALS_KEY_FILE":      textSetter(func(c *Config) *string { return &c.CredentialsKeyFile }, strings.TrimSpace),
+	"CREDENTIALS_KEY": func(c *Config, value string) error {
+		key, err := decodeCredentialsKey(value)
+		c.CredentialsKey = key
+		c.credentialsKeyError = err
+		return err
+	},
+	"TRUSTED_PROXY_CIDRS":      textSetter(func(c *Config) *string { return &c.TrustedProxyCIDRs }, strings.TrimSpace),
+	"FIRST_EVENT_HEDGE":        textSetter(func(c *Config) *string { return &c.FirstEventHedge }, lowerTrim),
+	"FIRST_EVENT_HEDGE_MODELS": textSetter(func(c *Config) *string { return &c.FirstEventHedgeModels }, strings.TrimSpace),
+	"CONTINUATION_PROMPT":      textSetter(func(c *Config) *string { return &c.ContinuationPrompt }, strings.TrimSpace),
+	"AISTUDIO_AUTH_STATES":     textSetter(func(c *Config) *string { return &c.AuthStates }, strings.TrimSpace),
+	"LISTEN_ADDR":              textSetter(func(c *Config) *string { return &c.ListenAddr }, strings.TrimSpace),
+	"PREVIEW_LISTEN_ADDR":      textSetter(func(c *Config) *string { return &c.PreviewListenAddr }, strings.TrimSpace),
+	"PPROF_ADDR":               textSetter(func(c *Config) *string { return &c.PProfAddr }, strings.TrimSpace),
 	"GEOIP_DB_PATH": func(c *Config, value string) error {
 		if path := strings.TrimSpace(value); path != "" {
 			c.GeoIPDBPath = path
@@ -429,12 +445,6 @@ var configChecks = []configCheck{
 	{[]string{"TRUSTED_PROXY_CIDRS"}, func(c Config) error {
 		_, err := ParseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
 		return err
-	}},
-	{[]string{"ENCRYPT_CREDENTIALS"}, func(c Config) error {
-		if c.EncryptCredentials && runtime.GOOS != "windows" {
-			return fmt.Errorf("ENCRYPT_CREDENTIALS 仅支持 Windows")
-		}
-		return nil
 	}},
 	{[]string{"PROXY"}, func(c Config) error {
 		for _, proxy := range ProxyList(c.Proxy) {
@@ -696,6 +706,8 @@ func (c Config) envValues() map[string]string {
 		"ADMIN_USERNAME":            c.AdminUsername,
 		"ADMIN_PASSWORD":            c.AdminPassword,
 		"ENCRYPT_CREDENTIALS":       strconv.FormatBool(c.EncryptCredentials),
+		"CREDENTIALS_KEY_FILE":      c.CredentialsKeyFile,
+		"CREDENTIALS_KEY":           encodeCredentialsKey(c.CredentialsKey),
 		"TRUSTED_PROXY_CIDRS":       c.TrustedProxyCIDRs,
 		"PPROF_ADDR":                c.PProfAddr,
 		"GEOIP_DB_PATH":             c.GeoIPDBPath,
@@ -762,6 +774,8 @@ func (c Config) Save(path string) error {
 	for _, key := range configKeys {
 		_, inFile := saved[key]
 		switch {
+		case key == "CREDENTIALS_KEY":
+			// 不把密钥写进 .env。进程环境变量仍是运行时来源，已有的文件行在保存设置时去掉。
 		case slices.Contains(c.Environment, key):
 			if inFile {
 				file[key] = saved[key]
@@ -802,8 +816,139 @@ func appendEnv(path, key, value string) error {
 	return atomicWrite(path, append(content, key+"="+formatEnvValue(value)+"\n"...), 0o600)
 }
 
+// credentialsKeySize 是 AES-256 凭证密钥的字节数
+const credentialsKeySize = 32
+
+// encodeCredentialsKey 把密钥编成标准 Base64，供环境覆盖回填。空密钥返回空字符串。
+func encodeCredentialsKey(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(key)
+}
+
+// decodeCredentialsKey 解析 32 字节密钥。接受 64 位十六进制或标准 Base64，错误信息不回显密钥内容。
+func decodeCredentialsKey(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if decoded, err := hex.DecodeString(value); err == nil && len(decoded) == credentialsKeySize {
+		return decoded, nil
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil && len(decoded) == credentialsKeySize {
+		return decoded, nil
+	}
+	if decoded, err := base64.RawStdEncoding.DecodeString(value); err == nil && len(decoded) == credentialsKeySize {
+		return decoded, nil
+	}
+	return nil, fmt.Errorf("CREDENTIALS_KEY 必须是 32 字节的十六进制或标准 Base64")
+}
+
+// validateCredentialEncryption 在非 Windows 上要求显式密钥，并且密钥文件不能和账户数据放在一起。
+// Windows 继续使用 DPAPI，不读取这些键。检查失败时拒绝启动，不把 ENCRYPT_CREDENTIALS 改回 false，也不改写已有 auth 文件。
+func (c Config) validateCredentialEncryption() error {
+	if !c.EncryptCredentials || runtime.GOOS == "windows" {
+		return nil
+	}
+	if c.credentialsKeyError != nil {
+		return c.credentialsKeyError
+	}
+	fileSet := strings.TrimSpace(c.CredentialsKeyFile) != ""
+	keySet := len(c.CredentialsKey) > 0
+	switch {
+	case fileSet && keySet:
+		return fmt.Errorf("CREDENTIALS_KEY 与 CREDENTIALS_KEY_FILE 只能设置一个")
+	case keySet && len(c.CredentialsKey) != credentialsKeySize:
+		return fmt.Errorf("CREDENTIALS_KEY 必须是 32 字节")
+	case keySet && !slices.Contains(c.Environment, "CREDENTIALS_KEY"):
+		return fmt.Errorf("CREDENTIALS_KEY 只能来自进程环境变量，不能写在 .env 里；那样密钥会和 auth 放在同一数据目录")
+	case keySet:
+		return nil
+	case fileSet:
+		return validateCredentialsKeyFile(c.CredentialsKeyFile, c.AuthStates)
+	default:
+		return fmt.Errorf("非 Windows 开启 ENCRYPT_CREDENTIALS 时，必须设置进程环境变量 CREDENTIALS_KEY，或设置位于数据目录之外的 CREDENTIALS_KEY_FILE。不会自动在 runtime/ 生成密钥。若要继续使用明文，请把 ENCRYPT_CREDENTIALS 设为 false；已有 auth 文件不会被改写")
+	}
+}
+
+// validateCredentialsKeyFile 检查密钥文件在数据目录之外、权限为 0600 且长度正好是 32 字节。文件不存在时不创建。
+func validateCredentialsKeyFile(keyPath, authStates string) error {
+	absolute, err := filepath.Abs(keyPath)
+	if err != nil {
+		return fmt.Errorf("解析 CREDENTIALS_KEY_FILE: %w", err)
+	}
+	if err := credentialKeyOutsideData(absolute, authStates); err != nil {
+		return err
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("凭证密钥文件不存在，不会自动生成: %s", absolute)
+		}
+		return fmt.Errorf("读取凭证密钥文件: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("凭证密钥文件必须是普通文件，不能是符号链接或目录: %s", absolute)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("凭证密钥文件权限过宽 (%04o)，应为 0600: %s", info.Mode().Perm(), absolute)
+	}
+	if info.Size() != credentialsKeySize {
+		return fmt.Errorf("凭证密钥文件长度应为 %d 字节: %s", credentialsKeySize, absolute)
+	}
+	return nil
+}
+
+// credentialKeyOutsideData 拒绝把密钥放进工作目录或任一账户目录。工作目录里同时有 .env、auth 与 runtime。
+// 工作目录是文件系统根（如 systemd 默认的 /）时，任何绝对路径都位于它之下，该检查会拒绝全部
+// CREDENTIALS_KEY_FILE；此时跳过工作目录检查，只保留账户目录检查。
+func credentialKeyOutsideData(keyPath, authStates string) error {
+	keyPath = filepath.Clean(keyPath)
+	workdir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("读取工作目录: %w", err)
+	}
+	if !isFilesystemRoot(workdir) && pathWithin(keyPath, workdir) {
+		return fmt.Errorf("CREDENTIALS_KEY_FILE 不能位于程序工作目录 %s 内，否则密钥和 auth/runtime 在同一数据目录，不能当作加密保护", workdir)
+	}
+	for _, directory := range strings.Split(authStates, ",") {
+		directory = strings.TrimSpace(directory)
+		if directory == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(directory)
+		if err != nil {
+			return fmt.Errorf("解析账户目录: %w", err)
+		}
+		if pathWithin(keyPath, absolute) {
+			return fmt.Errorf("CREDENTIALS_KEY_FILE 不能位于账户目录 %s 内", absolute)
+		}
+	}
+	return nil
+}
+
+// isFilesystemRoot 判断目录是否为文件系统根，例如 POSIX 的 / 或 Windows 的 C:\
+func isFilesystemRoot(dir string) bool {
+	return filepath.Dir(dir) == dir
+}
+
+// pathWithin 判断 path 是否等于 dir 或位于 dir 之中
+func pathWithin(path, dir string) bool {
+	path = filepath.Clean(path)
+	dir = filepath.Clean(dir)
+	relative, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative))
+}
+
 // Validate 校验配置值是否能用于服务启动
 func (c Config) Validate() error {
+	if err := c.validateCredentialEncryption(); err != nil {
+		return err
+	}
 	if c.AdminAuthEnabled && (strings.TrimSpace(c.AdminUsername) == "" || strings.TrimSpace(c.AdminPassword) == "") {
 		return fmt.Errorf("开启管理登录需要 ADMIN_USERNAME 与 ADMIN_PASSWORD")
 	}
@@ -914,6 +1059,23 @@ func ParseAPIKeyRateLimits(value string, apiKeys string) (map[string]APIKeyRateL
 		limits[key] = APIKeyRateLimit{PerMinute: perMinute}
 	}
 	return limits, nil
+}
+
+// UnboundAPIKeys 返回已配置、但未出现在 API_KEY_ACCOUNTS 中的 API key。
+// bindings 为空表示没有启用按 key 的账户范围，此时返回空。
+// 返回的 key 不受任何账户范围约束，可以访问全部账户与文件；调用方应提醒操作员确认是否漏配。
+func UnboundAPIKeys(keys, bindings string) []string {
+	if strings.TrimSpace(bindings) == "" {
+		return nil
+	}
+	bound, _ := ParseAPIKeyAccounts(bindings, keys)
+	var unbound []string
+	for _, key := range APIKeys(keys) {
+		if _, exists := bound[key]; !exists {
+			unbound = append(unbound, key)
+		}
+	}
+	return unbound
 }
 
 // APIKeys 返回 PROXY_API_KEY 中逗号分隔、去掉空白的各个 key
