@@ -100,6 +100,36 @@ func TestCredentialEncryptionRequiresExternalKey(t *testing.T) {
 	}
 }
 
+func TestUnboundAPIKeys(t *testing.T) {
+	if got := UnboundAPIKeys("key-a,key-b", ""); got != nil {
+		t.Fatalf("未启用账户范围时不应有提示: %v", got)
+	}
+	if got := UnboundAPIKeys("key-a,key-b", "key-a:a@example.com|b@example.com,key-b:b@example.com"); got != nil {
+		t.Fatalf("全部 key 已列入时不应有提示: %v", got)
+	}
+	got := UnboundAPIKeys("key-a,key-b,key-c", "key-a:a@example.com")
+	if len(got) != 2 || got[0] != "key-b" || got[1] != "key-c" {
+		t.Fatalf("未列入的 key 应按配置顺序返回: %v", got)
+	}
+	if got := UnboundAPIKeys("", "key-a:a@example.com"); got != nil {
+		t.Fatalf("没有配置 key 时不应有提示: %v", got)
+	}
+}
+
+func TestIsFilesystemRoot(t *testing.T) {
+	if !isFilesystemRoot("/") {
+		t.Fatal("POSIX 根目录应被识别为文件系统根")
+	}
+	if isFilesystemRoot("/opt") || isFilesystemRoot("relative") {
+		t.Fatal("非根目录不应被识别为文件系统根")
+	}
+	if runtime.GOOS == "windows" {
+		if root := filepath.Clean(filepath.VolumeName(`C:\any\path`) + `\`); !isFilesystemRoot(root) {
+			t.Fatalf("Windows 卷根应被识别为文件系统根: %s", root)
+		}
+	}
+}
+
 func TestCredentialsKeyFromEnvironmentOnly(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 使用 DPAPI，不读取外部密钥")

@@ -558,27 +558,33 @@ func (p *AccountPool) bindFileResource(ctx context.Context, file FileRef, accoun
 }
 
 // FileMetadata 返回 runtime-state 中的公开文件元数据。
-// 当前 API key 绑定了账户时，只返回这些账户名下的文件；其他文件与不存在的文件都是 ErrResourceNotFound，响应里看不出资源是否存在。
-// 未绑定的 key 保持可见全部账户。
+// 当前 API key 绑定了账户时，只返回这些账户名下的文件；其他文件与不存在的文件都是 ErrResourceNotFound。
+// 判断在刷新之前完成：越权探测不触发属主账户刷新，也不把刷新错误当成区分存在性的信号返回；
+// 刷新后再次核对归属，资源中途改绑到范围外账户时同样返回不存在。
+// 未绑定的 key 保持可见全部账户，维持先刷新再查询的旧行为。
 func (p *AccountPool) FileMetadata(ctx context.Context, fileID string) (FileMetadata, error) {
 	fileID = strings.TrimSpace(fileID)
 	if fileID == "" {
 		return FileMetadata{}, fmt.Errorf("%w: 文件 ID 为空", ErrResourceNotFound)
 	}
-	refreshErr := p.refreshResource(ctx, fileID)
 	bound, allowed := p.apiKeyScope(ctx)
+	if bound && !p.resourceInScope(fileID, allowed) {
+		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
+	}
+	refreshErr := p.refreshResource(ctx, fileID)
 	p.mu.Lock()
 	accountID, exists := p.resources[fileID]
+	if bound && (!exists || !accountAllowed(allowed, accountID)) {
+		p.mu.Unlock()
+		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
+	}
 	var binding ResourceBinding
 	if exists {
-		binding = p.byID[accountID].runtime.Resources[fileID]
-	}
-	p.mu.Unlock()
-	if exists && bound {
-		if _, visible := allowed[accountID]; !visible {
-			return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
+		if account := p.byID[accountID]; account != nil {
+			binding = account.runtime.Resources[fileID]
 		}
 	}
+	p.mu.Unlock()
 	if refreshErr != nil {
 		return FileMetadata{}, refreshErr
 	}
@@ -586,6 +592,20 @@ func (p *AccountPool) FileMetadata(ctx context.Context, fileID string) (FileMeta
 		return FileMetadata{}, fmt.Errorf("%w: %s", ErrResourceNotFound, fileID)
 	}
 	return binding.fileMetadata(fileID), nil
+}
+
+// resourceInScope 返回资源当前是否绑定在 allowed 名下的账户上
+func (p *AccountPool) resourceInScope(fileID string, allowed map[string]struct{}) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	accountID, exists := p.resources[fileID]
+	return exists && accountAllowed(allowed, accountID)
+}
+
+// accountAllowed 返回账户是否在允许集合中
+func accountAllowed(allowed map[string]struct{}, accountID string) bool {
+	_, ok := allowed[accountID]
+	return ok
 }
 
 // fileMetadata 返回绑定记录的公开文件元数据

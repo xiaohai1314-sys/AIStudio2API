@@ -135,6 +135,77 @@ func TestDeletedAccountFilesDisappear(t *testing.T) {
 	}
 }
 
+// corruptRuntimeAccount 返回一个 runtime-state 文件内容损坏、名下绑定有 fileID 资源的账户，
+// 任何对它的刷新都会失败，用于验证越权探测不会触发或泄漏刷新错误
+func corruptRuntimeAccount(t *testing.T, id, fileID string) *Account {
+	t.Helper()
+	directory := t.TempDir()
+	for _, name := range []string{"account.json", "storage-state.json"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(directory, runtimeStateName), []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return &Account{
+		ID: id, Directory: directory, State: AccountReady,
+		ConfigPath: filepath.Join(directory, accountConfigName), StoragePath: filepath.Join(directory, storageStateName),
+		RuntimePath: filepath.Join(directory, runtimeStateName), Config: AccountConfig{Enabled: true, Label: id},
+		runtime: accountRuntimeState{Resources: map[string]ResourceBinding{
+			fileID: {Kind: "drive-file", Name: fileID + ".txt", MIME: "text/plain", Size: 8, Purpose: "user",
+				CreatedAt: time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)},
+		}},
+	}
+}
+
+// TestFileMetadataScopeSkipsRefresh 验证受限 key 对范围外与不存在的文件都在刷新之前返回 ErrResourceNotFound：
+// 即使某个账户的 runtime 刷新必然失败，错误也不会作为区分存在性的信号返回。
+func TestFileMetadataScopeSkipsRefresh(t *testing.T) {
+	accountA := scopedFileAccount("a@example.com", "file-a", time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC))
+	corrupt := corruptRuntimeAccount(t, "broken@example.com", "file-broken")
+	pool := NewAccountPool([]*Account{accountA, corrupt}, 2)
+	pool.SetAPIKeyAccounts(map[string][]string{"key-a": {"a@example.com"}})
+	ctx := ContextWithAPIKey(context.Background(), "key-a")
+
+	// 不存在的文件：刷新全部账户必然失败，但受限 key 拿到的仍是 ErrResourceNotFound，而不是刷新错误。
+	if _, err := pool.FileMetadata(ctx, "file-missing"); !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("不存在的文件应返回 ErrResourceNotFound，得到 %v", err)
+	}
+	// 范围外且属主刷新必然失败：同样在刷新之前返回不存在。
+	if _, err := pool.FileMetadata(ctx, "file-broken"); !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("范围外的文件应返回 ErrResourceNotFound，得到 %v", err)
+	}
+	// 未绑定的 key 保持旧行为：刷新错误按原样返回。
+	if _, err := pool.FileMetadata(context.Background(), "file-missing"); err == nil || errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("未绑定 key 的刷新错误应按原样返回，得到 %v", err)
+	}
+}
+
+// TestSelectionResourceScopeHidesOwner 验证受限 key 带上账户与资源 ID 选号时，
+// 资源属于范围外账户的话返回 ErrResourceNotFound，错误消息不出现属主账户。
+func TestSelectionResourceScopeHidesOwner(t *testing.T) {
+	accountA := scopedFileAccount("a@example.com", "file-a", time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC))
+	accountB := scopedFileAccount("b@example.com", "file-b", time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC))
+	pool := NewAccountPool([]*Account{accountA, accountB}, 2)
+	pool.SetAPIKeyAccounts(map[string][]string{"key-a": {"a@example.com"}})
+
+	ctx := ContextWithAPIKey(context.Background(), "key-a")
+	selection := AccountSelection{AccountID: "a@example.com", ResourceID: "file-b"}
+	lease, err := pool.AcquireFor(ctx, selection)
+	if lease != nil {
+		if releaseErr := lease.Release(); releaseErr != nil {
+			t.Fatal(releaseErr)
+		}
+	}
+	if !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("范围外资源应返回 ErrResourceNotFound，得到 %v", err)
+	}
+	if err != nil && (strings.Contains(err.Error(), "b@example.com") || strings.Contains(err.Error(), "绑定账户")) {
+		t.Fatalf("错误消息不应泄漏属主账户: %v", err)
+	}
+}
+
 func directoryBase(directory string) string { return filepath.Base(directory) }
 
 func containsFile(files []FileMetadata, id string) bool {
