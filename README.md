@@ -605,7 +605,7 @@ cp .env.example .env
 | `PROXY_API_KEY` | 空 | 公开 API key；`LISTEN_ADDR` 不是本机回环地址时必填 |
 | `PUBLIC_RATE_LIMIT` | `30` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数；超限返回 429 |
 | `PUBLIC_RATE_BURST` | `4` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` |
-| `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户；生成、上传、文件列表、文件详情、下载和删除都受这个范围约束，范围外的文件与不存在的文件一样返回 404；也可在设置页按 key 勾选账户，保存后立即生效 |
+| `API_KEY_ACCOUNTS` | 空 | 各 key 可用的账户，每项写成 `key:账户\|账户`，未列出的 key 可用全部账户，漏配时启动与保存设置会在日志提示数量；生成、上传、文件列表、文件详情、下载和删除都受这个范围约束，范围外的文件与不存在的文件一样返回 404；也可在设置页按 key 勾选账户，保存后立即生效 |
 | `API_KEY_RATE_LIMITS` | 空 | 为个别 API key 指定每分钟请求上限，每项写成 `key:每分钟`，未列出的 key 使用 `PUBLIC_RATE_LIMIT`；也可在设置页填写 |
 | `AUTO_START` | `false` | 管理程序启动后自动启动生成服务；网络等原因启动失败时按 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 |
 | `HIDE_DOCK_ICON` | `false` | macOS 桌面版只在菜单栏显示图标、不显示 Dock 图标，关闭窗口后服务继续运行；在设置页修改立即生效 |

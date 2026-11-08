@@ -901,13 +901,15 @@ func validateCredentialsKeyFile(keyPath, authStates string) error {
 }
 
 // credentialKeyOutsideData 拒绝把密钥放进工作目录或任一账户目录。工作目录里同时有 .env、auth 与 runtime。
+// 工作目录是文件系统根（如 systemd 默认的 /）时，任何绝对路径都位于它之下，该检查会拒绝全部
+// CREDENTIALS_KEY_FILE；此时跳过工作目录检查，只保留账户目录检查。
 func credentialKeyOutsideData(keyPath, authStates string) error {
 	keyPath = filepath.Clean(keyPath)
 	workdir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("读取工作目录: %w", err)
 	}
-	if pathWithin(keyPath, workdir) {
+	if !isFilesystemRoot(workdir) && pathWithin(keyPath, workdir) {
 		return fmt.Errorf("CREDENTIALS_KEY_FILE 不能位于程序工作目录 %s 内，否则密钥和 auth/runtime 在同一数据目录，不能当作加密保护", workdir)
 	}
 	for _, directory := range strings.Split(authStates, ",") {
@@ -924,6 +926,11 @@ func credentialKeyOutsideData(keyPath, authStates string) error {
 		}
 	}
 	return nil
+}
+
+// isFilesystemRoot 判断目录是否为文件系统根，例如 POSIX 的 / 或 Windows 的 C:\
+func isFilesystemRoot(dir string) bool {
+	return filepath.Dir(dir) == dir
 }
 
 // pathWithin 判断 path 是否等于 dir 或位于 dir 之中
@@ -1052,6 +1059,23 @@ func ParseAPIKeyRateLimits(value string, apiKeys string) (map[string]APIKeyRateL
 		limits[key] = APIKeyRateLimit{PerMinute: perMinute}
 	}
 	return limits, nil
+}
+
+// UnboundAPIKeys 返回已配置、但未出现在 API_KEY_ACCOUNTS 中的 API key。
+// bindings 为空表示没有启用按 key 的账户范围，此时返回空。
+// 返回的 key 不受任何账户范围约束，可以访问全部账户与文件；调用方应提醒操作员确认是否漏配。
+func UnboundAPIKeys(keys, bindings string) []string {
+	if strings.TrimSpace(bindings) == "" {
+		return nil
+	}
+	bound, _ := ParseAPIKeyAccounts(bindings, keys)
+	var unbound []string
+	for _, key := range APIKeys(keys) {
+		if _, exists := bound[key]; !exists {
+			unbound = append(unbound, key)
+		}
+	}
+	return unbound
 }
 
 // APIKeys 返回 PROXY_API_KEY 中逗号分隔、去掉空白的各个 key
