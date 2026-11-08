@@ -33,14 +33,15 @@ func TestSaveWritesOnlyChangedKeys(t *testing.T) {
 	path := writeTestEnv(t, "")
 	cfg := Default()
 	cfg.RoutingStrategy = "fill-first"
+	cfg.TemporaryChat = true
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=spidermonkey\n" {
+	if got := readTestEnv(t, path); got != "ROUTING_STRATEGY=fill-first\nWAA_BACKEND=spidermonkey\nTEMPORARY_CHAT=true\n" {
 		t.Fatalf(".env = %q", got)
 	}
 	loaded, err := Load(path)
-	if err != nil || loaded.RoutingStrategy != "fill-first" || loaded.WAABackend != WAABackendSpiderMonkey {
+	if err != nil || loaded.RoutingStrategy != "fill-first" || loaded.WAABackend != WAABackendSpiderMonkey || !loaded.TemporaryChat {
 		t.Fatalf("loaded = %+v, err = %v", loaded, err)
 	}
 }

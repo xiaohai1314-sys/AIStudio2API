@@ -195,8 +195,9 @@ Camoufox 由 Go 通过 WebDriver BiDi 直接管理。启动数据面时，服务
 | `LISTEN_ADDR` | HTTP 服务监听地址；端口被 Windows 保留（Hyper-V、WSL2 或 Docker 的 WinNAT 保留端口段）时改用其后第一个可监听的端口，管理页面顶部显示改用的地址；不是本机回环地址时必须同时设置 `PROXY_API_KEY`，否则服务拒绝启动 | `127.0.0.1:2048` |
 | `PREVIEW_LISTEN_ADDR` | API 试用页 HTML 预览来源的监听地址，只提供 `/shim.html`；端口与 `LISTEN_ADDR` 不同，无法监听时改用同一主机上的空闲端口，实际地址为管理端配置中的 `active_preview_listen_addr`；管理进程重启后生效 | `127.0.0.1:2050` |
 | `PROXY_API_KEY` | 公开 API 访问密钥，多个用逗号分隔；`LISTEN_ADDR` 不是本机回环地址时必填 | 空 |
-| `PUBLIC_RATE_LIMIT` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数 | `120` |
-| `PUBLIC_RATE_BURST` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` | `30` |
+| `PUBLIC_RATE_LIMIT` | 每个 API key（未配置 key 时每个对端 IP）每分钟最多发起的公开 API 请求数 | `30` |
+| `PUBLIC_RATE_BURST` | 单个 API key/IP 可立即发起的请求数，必须不大于 `PUBLIC_RATE_LIMIT` | `4` |
+| `API_KEY_RATE_LIMITS` | 为个别 API key 指定每分钟请求上限，每项写成 `key:每分钟`，多个用逗号分隔；未列出的 key 使用 `PUBLIC_RATE_LIMIT` | 空 |
 | `API_KEY_ACCOUNTS` | 逗号分隔，每项以最后一个 `:` 分成 `PROXY_API_KEY` 中的 key 与以 `\|` 分隔的账户 ID，该 key 的请求与文件上传只在这些账户中选号，未列出的 key 可用全部账户，不在 `PROXY_API_KEY` 中的项不起作用；保存后立即生效，同时修改 `PROXY_API_KEY` 时，管理服务重启前仍被接受的 key 沿用原来的绑定 | 空 |
 | `AUTO_START` | 管理服务就绪后自动启动生成服务；失败记录 `ERROR` 日志，管理服务继续运行，账户与配置以外的原因失败时以 5 秒起、翻倍至 5 分钟的间隔重试，手动启动或停止后不再重试 | `false` |
 | `HIDE_DOCK_ICON` | macOS 桌面版以 Accessory 激活策略启动，只显示菜单栏图标；设置页保存后管理页面向桌面壳发送 `dock:hide` 或 `dock:show`，桌面壳在主线程切换激活策略 |

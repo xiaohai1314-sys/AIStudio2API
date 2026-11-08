@@ -94,6 +94,7 @@ var configKeys = [...]string{
 	"FIRST_EVENT_HEDGE_MODELS",
 	"CONTINUATION_REWRITE",
 	"CONTINUATION_PROMPT",
+	"TEMPORARY_CHAT",
 }
 
 // LogFileMB 是单个日志文件的轮转大小
