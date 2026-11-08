@@ -71,6 +71,7 @@ var configKeys = [...]string{
 	"MEDIA_OUTPUT",
 	"MEDIA_BASE_URL",
 	"AUTO_START",
+	"HIDE_DOCK_ICON",
 	"REQUEST_BODY_LOG",
 	"AUTH_FAILURE_PAUSE",
 	"LOG_FILE",
@@ -131,6 +132,7 @@ const DefaultContinuationPrompt = "Continue the assistant response after the fol
 // Config 保存服务的全局配置
 type Config struct {
 	AutoStart              bool
+	HideDockIcon           bool
 	RequestBodyLog         bool
 	AuthFailurePause       bool
 	LogFile                bool
@@ -311,6 +313,7 @@ var configSetters = map[string]func(*Config, string) error{
 		}
 		return nil
 	},
+	"HIDE_DOCK_ICON":           boolSetter("HIDE_DOCK_ICON", func(c *Config) *bool { return &c.HideDockIcon }),
 	"PROXY_API_KEY":            textSetter(func(c *Config) *string { return &c.ProxyAPIKey }, strings.TrimSpace),
 	"PROXY":                    textSetter(func(c *Config) *string { return &c.Proxy }, strings.TrimSpace),
 	"ROUTING_STRATEGY":         textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
@@ -734,6 +737,7 @@ func (c Config) envValues() map[string]string {
 		"WAA_BACKEND":               c.WAABackend,
 		"MEDIA_OUTPUT":              c.MediaOutput,
 		"MEDIA_BASE_URL":            c.MediaBaseURL,
+		"HIDE_DOCK_ICON":            strconv.FormatBool(c.HideDockIcon),
 		"STRIP_THOUGHT_SIGNATURES":  strconv.FormatBool(c.StripThoughtSignatures),
 	}
 }

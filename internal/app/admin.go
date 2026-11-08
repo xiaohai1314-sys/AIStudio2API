@@ -1040,6 +1040,7 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	}
 	cfg := config.Config{
 		AutoStart:        value.AutoStart,
+		HideDockIcon:     value.HideDockIcon,
 		RequestBodyLog:   value.RequestBodyLog,
 		AuthFailurePause: saved.AuthFailurePause,
 		LogFile:          value.LogFile, LogMaxTotalMB: value.LogMaxTotalMB,
@@ -1350,6 +1351,7 @@ func buildVersion() string {
 func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 	return api.RuntimeConfig{
 		AutoStart:      cfg.AutoStart,
+		HideDockIcon:   cfg.HideDockIcon,
 		RequestBodyLog: cfg.RequestBodyLog,
 		LogFile:        cfg.LogFile, LogMaxTotalMB: cfg.LogMaxTotalMB,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername,

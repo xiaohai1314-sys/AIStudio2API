@@ -88,11 +88,15 @@ type pageRPC struct {
 	body   string
 }
 
-// pageStartupRPCs 是官网页面启动时与 GetLoggingContext、Waa/Create 并发发出的请求
-var pageStartupRPCs = []pageRPC{
-	{"GetUserPreferences", "[]"},
+// pageCatalogStartupRPCs 是官网页面启动请求中的权益与模型目录请求，Worker 就绪前需要它们的正文
+var pageCatalogStartupRPCs = []pageRPC{
 	{"GetAiStudioBenefitTier", "[]"},
 	{"ListModels", "[]"},
+}
+
+// pageStartupRPCs 是官网页面启动时与权益和模型目录请求、GetLoggingContext、Waa/Create 并发发出的其余请求
+var pageStartupRPCs = []pageRPC{
+	{"GetUserPreferences", "[]"},
 	{"GenerateAccessToken", `["users/me"]`},
 	incidentsRPC,
 	{"ListPromos", "[]"},
@@ -277,31 +281,57 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 		extension, body, err := runtime.loggingContextHeader(ctx, apiKey, visitID)
 		loggingDone <- loggingContext{extension, body, err}
 	})
-	pageDone := make(chan [][]byte, 1)
+	catalogDone := make(chan [][]byte, 1)
 	pageStarted := time.Now()
 	paniclog.Go("runtime_go.go:272", func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				pageDone <- nil
+				catalogDone <- nil
 				panic(recovered)
 			}
 		}()
-		pageDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, "", pageStartupRPCs)
+		catalogDone <- runtime.sendPageRPCs(ctx, apiKey, visitID, "", pageCatalogStartupRPCs)
 	})
+	startupDone := make(chan struct{})
+	paniclog.Go("runtime_go.go:283", func() {
+		// close 放进 defer：sendPageRPCs panic 时等待方也能被唤醒，不至于永久挂起
+		defer close(startupDone)
+		runtime.sendPageRPCs(context.WithoutCancel(ctx), apiKey, visitID, "", pageStartupRPCs)
+	})
+	type startedVM struct {
+		vm  *waa.Runtime
+		err error
+	}
+	vmDone := make(chan startedVM, 1)
 	challenge, err := runtime.createChallenge(ctx, nil)
+	if err == nil {
+		paniclog.Go("runtime_go.go:301", func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					vmDone <- startedVM{err: fmt.Errorf("startVM panic: %v", recovered)}
+					panic(recovered)
+				}
+			}()
+			vm, err := runtime.startVM(ctx, challenge)
+			vmDone <- startedVM{vm, err}
+		})
+	}
 	logging := <-loggingDone
-	startup := <-pageDone
+	catalog := <-catalogDone
 	if err != nil {
 		return err
 	}
 	if logging.err != nil {
+		if started := <-vmDone; started.vm != nil {
+			started.vm.Close()
+		}
 		return logging.err
 	}
 	extension := logging.extension
 	runtime.pageCatalog = camoufoxnative.PageCatalog{
 		Logging: logging.body,
-		Tier:    pageStartupBody(startup, "GetAiStudioBenefitTier"),
-		Models:  pageStartupBody(startup, "ListModels"),
+		Tier:    catalog[0],
+		Models:  catalog[1],
 	}
 	runtime.headers = http.Header{}
 	runtime.headers.Set("user-agent", runtime.userAgent)
@@ -313,17 +343,15 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 		runtime.headers.Set("x-goog-ext-519733851-bin", extension)
 	}
 	reportGoStartup(options, camoufoxnative.StartupBootstrappingWAA)
-	followupDone := make(chan struct{})
-	paniclog.Go("runtime_go.go:301", func() {
-		// close 放进 defer：sendFollowupRPCs panic 时 open() 也能继续走错误路径
-		defer close(followupDone)
-		runtime.sendFollowupRPCs(ctx, apiKey, visitID, extension, startup)
+	paniclog.Go("runtime_go.go:318", func() {
+		<-startupDone
+		runtime.sendFollowupRPCs(context.WithoutCancel(ctx), apiKey, visitID, extension, catalog[0])
 	})
-	vm, err := runtime.startVM(ctx, challenge)
-	<-followupDone
-	if err != nil {
-		return err
+	started := <-vmDone
+	if started.err != nil {
+		return started.err
 	}
+	vm := started.vm
 	if err := vm.Settle(ctx); err != nil {
 		vm.Close()
 		return err
@@ -643,11 +671,6 @@ func (runtime *goWAARuntime) loggingContextHeader(ctx context.Context, apiKey st
 	return base64.StdEncoding.EncodeToString(encoded), body, nil
 }
 
-// pageStartupBody 返回页面启动请求中 method 的 HTTP 200 响应正文，请求失败时为 nil
-func pageStartupBody(startup [][]byte, method string) []byte {
-	return startup[slices.IndexFunc(pageStartupRPCs, func(rpc pageRPC) bool { return rpc.method == method })]
-}
-
 // sendPageRPCs 以官网页面的请求头并发发出页面自身的 MakerSuite 请求，extension 非空时带 X-Goog-Ext-519733851-Bin，按 rpcs 顺序返回各 HTTP 200 响应的正文
 func (runtime *goWAARuntime) sendPageRPCs(ctx context.Context, apiKey string, visitID string, extension string, rpcs []pageRPC) [][]byte {
 	bodies := make([][]byte, len(rpcs))
@@ -669,10 +692,9 @@ func (runtime *goWAARuntime) sendPageRPCs(ctx context.Context, apiKey string, vi
 	return bodies
 }
 
-// sendFollowupRPCs 按启动请求的响应发出官网页面接着发出的请求，带已返回的日志上下文 extension，导航栏条件成立时同时读取 Google Developer Program 权益
-func (runtime *goWAARuntime) sendFollowupRPCs(ctx context.Context, apiKey string, visitID string, extension string, startup [][]byte) {
+// sendFollowupRPCs 发出官网页面在启动请求完成后接着发出的请求，带已返回的日志上下文 extension，权益响应 benefitTier 满足导航栏条件时同时读取 Google Developer Program 权益
+func (runtime *goWAARuntime) sendFollowupRPCs(ctx context.Context, apiKey string, visitID string, extension string, benefitTier []byte) {
 	rpcs := pageFollowupRPCs
-	benefitTier := pageStartupBody(startup, "GetAiStudioBenefitTier")
 	if runtime.pageFlags.requestsGDPProfile(benefitTier) {
 		rpcs = append(slices.Clone(rpcs), gdpProfileRPC)
 	}

@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const publicDiscoveryUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
@@ -61,6 +63,8 @@ type MakerSuiteHTTPTransport struct {
 	driveMu sync.Mutex
 	// driveDiscovered 记录已按官网页面读取 Drive discovery 文档的账户
 	driveDiscovered map[string]bool
+	// driveDiscovery 按账户合并同时进行的 Drive discovery 读取
+	driveDiscovery singleflight.Group
 }
 
 type accountLeaseContextKey struct{}

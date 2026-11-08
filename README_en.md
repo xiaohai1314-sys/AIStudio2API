@@ -159,6 +159,8 @@ On macOS, download `darwin-universal.dmg` from Releases, open it, and drag `AISt
 xattr -dr com.apple.quarantine /Applications/AIStudio2API.app
 ```
 
+On macOS, closing the window keeps the app running in the menu bar: click the menu bar icon to show the window, right-click it to open its menu, and click the Dock icon or open the app from Applications again to show the window.
+
 On Linux, make `linux-amd64.AppImage` executable and run it, or install `linux-amd64.deb` and start AIStudio2API from the application menu:
 
 ```bash
@@ -604,6 +606,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `API_KEY_ACCOUNTS` | empty | Accounts each key may use, written as `key:account\|account`; keys not listed can use every account. You can also tick accounts per key on the Settings page; takes effect when saved |
 | `API_KEY_RATE_LIMITS` | empty | Per-minute request limit for individual API keys, each item `key:requests-per-minute`; keys not listed use `PUBLIC_RATE_LIMIT`; also editable on the Settings page |
 | `AUTO_START` | `false` | Start the generation service when the manager starts; if startup fails for reasons such as the network, retry at intervals starting at 5 seconds and doubling up to 5 minutes, until the service is started or stopped manually |
+| `HIDE_DOCK_ICON` | `false` | On the macOS desktop app, show the icon only in the menu bar instead of the Dock; the service keeps running after the window closes. Changes in Settings take effect immediately |
 | `REQUEST_BODY_LOG` | `false` | Store public API request and response bodies, each truncated to 64 KiB, keeping the latest 1000 |
 | `AUTH_FAILURE_PAUSE` | `true` | Pause the account for manual review on 401, 403, or other authentication and restriction errors instead of renewing automatically; set to `false` to restore automatic renewal |
 | `LOG_FILE` | `true` | Also write service logs to `runtime/logs/`, rotating at 10 MB per file |
