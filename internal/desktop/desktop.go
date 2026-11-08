@@ -54,24 +54,6 @@ type App struct {
 	app      *application.App
 	webview  bool
 	trayed   bool
-	window   *application.WebviewWindow
-	open     bool
-	origin   string
-	url      string
-	target   string
-	loaded   bool
-	busy     bool
-	closing  bool
-	bounds   application.Rect
-	maxed    bool
-	mu       sync.Mutex
-	createMu sync.Mutex
-	menu     *application.WebviewWindow
-	locale   string
-	theme    string
-	app      *application.App
-	webview  bool
-	trayed   bool
 	tray     *application.SystemTray
 	window   *application.WebviewWindow
 	open     bool
@@ -84,6 +66,7 @@ type App struct {
 	bounds   application.Rect
 	maxed    bool
 	mu       sync.Mutex
+	createMu sync.Mutex
 	menu     *application.WebviewWindow
 	locale   string
 	theme    string
