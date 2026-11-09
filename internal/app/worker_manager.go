@@ -1553,12 +1553,20 @@ func (manager *accountWorkerManager) detachStartup(
 	done := make(chan startResult, 1)
 	paniclog.Go("worker_manager.go:1307", func() {
 		func() {
+			// 结果发送放进 defer 并在 panic 时补一条错误结果，
+			// 否则等待方只能等 ctx 取消才脱身
+			result := startResult{}
 			defer func() {
 				stop()
 				cancel()
+				if recovered := recover(); recovered != nil {
+					done <- startResult{err: fmt.Errorf("Worker 启动 panic: %v", recovered)}
+					panic(recovered)
+				}
+				done <- result
 			}()
 			preparer, err := start(startupCtx)
-			done <- startResult{preparer: preparer, err: err}
+			result = startResult{preparer: preparer, err: err}
 		}()
 	})
 	select {

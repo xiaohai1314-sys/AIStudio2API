@@ -1,6 +1,7 @@
 package chromeauth
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -114,5 +115,12 @@ func TestBoundRefreshStatusError(t *testing.T) {
 		if got := errors.Is(boundRefreshStatusError(status), ErrBoundSessionRejected); got != rejected {
 			t.Fatalf("HTTP %d 被拒绝=%t，期望 %t", status, got, rejected)
 		}
+	}
+}
+
+// TestRotateBoundCookiesWithoutBoundSession 验证没有绑定会话时直接报错，而不是解引用空指针
+func TestRotateBoundCookiesWithoutBoundSession(t *testing.T) {
+	if _, err := RotateBoundCookies(context.Background(), aistudio.StorageState{}, aistudio.AuthExtension{}, ""); err == nil {
+		t.Fatal("没有绑定会话时应返回错误")
 	}
 }

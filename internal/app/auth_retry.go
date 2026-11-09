@@ -500,7 +500,12 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("刷新账户 %s DBSC 会话: %w", account.ID, err)
 	}
-	if err := lease.MergeSetCookieHeaders(headers, extension.Bound.RefreshURL, time.Now()); err != nil {
+	if err := lease.MergeBoundSessionCookies(headers, *extension.Bound, time.Now()); err != nil {
+		if errors.Is(err, aistudio.ErrStorageGenerationChanged) {
+			// 旋转期间账户已续签换代，旧旋转结果作废：新状态自带绑定会话，
+			// 旧 Cookie 既不写存储也不推给 Worker 页面
+			return nil
+		}
 		return fmt.Errorf("保存账户 %s DBSC 会话 Cookie: %w", account.ID, err)
 	}
 	return refresher.mergeWorker(ctx, account.ID, headers, extension.Bound.RefreshURL)

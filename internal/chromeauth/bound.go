@@ -24,6 +24,9 @@ var boundChallengePattern = regexp.MustCompile(`"([^"]+)"(?:;id="([^"]*)")?`)
 
 // RotateBoundCookies 按 Chromium RegistrationFetcher 的刷新流程以设备绑定密钥刷新 google.com 的 DBSC 会话，返回各次响应的 Set-Cookie
 func RotateBoundCookies(ctx context.Context, state aistudio.StorageState, extension aistudio.AuthExtension, proxy string) ([]string, error) {
+	if extension.Bound == nil {
+		return nil, fmt.Errorf("账户没有可刷新的 DBSC 绑定会话")
+	}
 	identity, proxyURL, err := sourceIdentity(extension.Source, proxy)
 	if err != nil {
 		return nil, err
@@ -42,6 +45,11 @@ func RotateBoundCookies(ctx context.Context, state aistudio.StorageState, extens
 	challenge := boundChallenge(header.Get("Secure-Session-Challenge"), session.ID)
 	if status != http.StatusForbidden || challenge == "" {
 		return nil, boundRefreshStatusError(status)
+	}
+	if extension.OAuth == nil {
+		// 有绑定会话但没有 OAuth 材料时无法签名应答挑战，按会话被拒绝处理，
+		// 让上层走完整的认证续签/重新导入路径，而不是在这里解引用空指针
+		return nil, errors.Join(ErrBoundSessionRejected, fmt.Errorf("DBSC 会话挑战缺少 OAuth 设备绑定密钥"))
 	}
 	key, err := openDeviceBindingKey(extension.OAuth.WrappedBindingKey)
 	if err != nil {

@@ -342,6 +342,16 @@ func (c *Client) interactionEvents(ctx context.Context, request GenerateRequest,
 		})
 		defer stopClose()
 		committed := false
+		defer func() {
+			// panic 时兜底通知等待 ready 的调用方，否则它只能等 ctx 取消才脱身；
+			// 正常与错误路径已发送过 ready 时缓冲已满，非阻塞发送自动跳过
+			if !committed {
+				select {
+				case ready <- errors.New("交互流处理意外终止"):
+				default:
+				}
+			}
+		}()
 		send := func(event Event) error {
 			if request.Config.HideThinking && event.Kind == EventReasoning {
 				if event.ThoughtSignature == "" {

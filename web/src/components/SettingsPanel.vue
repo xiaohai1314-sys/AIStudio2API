@@ -243,7 +243,7 @@ const orderedAccounts = computed(() => {
   const listed = [
     ...new Set(
       (form.account_order ?? '')
-        .split(',')
+        .split(/[,\s]+/)
         .map((id) => id.trim())
         .filter((id) => ids.includes(id)),
     ),

@@ -1847,6 +1847,17 @@ func (l *AccountLease) ReplaceResource(previousResourceID string, resourceID str
 
 // MergeSetCookieHeaders 将响应 Cookie 合并到账户最新持久状态
 func (l *AccountLease) MergeSetCookieHeaders(headers []string, requestURL string, now time.Time) error {
+	return l.mergeSetCookieHeaders(headers, requestURL, now, nil)
+}
+
+// MergeBoundSessionCookies 合并 DBSC 旋转得到的 Cookie，但仅当磁盘上的绑定会话仍是旋转时那一个：
+// 旋转期间发生过认证续签、绑定会话已被换掉时，旧旋转结果按代际变化作废，
+// 避免旧会话的 Cookie 覆盖刚续签好的新会话状态
+func (l *AccountLease) MergeBoundSessionCookies(headers []string, bound BoundSession, now time.Time) error {
+	return l.mergeSetCookieHeaders(headers, bound.RefreshURL, now, &bound)
+}
+
+func (l *AccountLease) mergeSetCookieHeaders(headers []string, requestURL string, now time.Time, bound *BoundSession) error {
 	l.operation.Lock()
 	defer l.operation.Unlock()
 	if l.released {
@@ -1857,6 +1868,15 @@ func (l *AccountLease) MergeSetCookieHeaders(headers []string, requestURL string
 	state, err := LoadStorageState(l.account.StoragePath)
 	if err != nil {
 		return err
+	}
+	if bound != nil {
+		extension, _, err := state.AuthExtension()
+		if err != nil {
+			return err
+		}
+		if extension.Bound == nil || extension.Bound.ID != bound.ID || extension.Bound.RefreshURL != bound.RefreshURL {
+			return fmt.Errorf("%w: DBSC 绑定会话已变化", ErrStorageGenerationChanged)
+		}
 	}
 	if err := state.MergeSetCookieHeaders(headers, requestURL, now); err != nil {
 		return err
