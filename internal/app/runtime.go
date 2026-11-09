@@ -70,8 +70,10 @@ func newRuntime(
 	pool := aistudio.NewAccountPool(accounts, cfg.PerAccountConcurrency)
 	pool.SetProxyLimits(cfg.MaxConcurrencyPerProxy, globalProxy)
 	pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	pool.SetAccountOrder(accountOrder(cfg.AccountOrder))
 	pool.SetUpstreamChannels(upstreamChannels(cfg.UpstreamChannels))
 	pool.SetModelChannels(modelChannels(cfg.ModelChannels))
+	pool.SetModelAccounts(modelAccounts(cfg.ModelAccounts))
 	proxies := aistudio.NewProxyPool(pool, proxyList)
 	proxies.SetAccountLimit(cfg.MaxAccountsPerProxy)
 	if err := proxies.LoadScores(filepath.Join("runtime", "proxy-scores.json")); err != nil {
@@ -205,6 +207,7 @@ type modelCatalogService interface {
 	RefreshAccountState(context.Context, string, bool) (aistudio.AccountRefresh, error)
 	ReclaimExpiredResources(context.Context) error
 	ReclaimIdleAssistantApplets(context.Context) error
+	DeleteAccountAssistantApplets(context.Context, string) error
 	CachedModels() []aistudio.Model
 }
 

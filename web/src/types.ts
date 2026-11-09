@@ -412,9 +412,11 @@ export interface ServiceConfig {
   max_accounts_per_proxy: number
   max_concurrency_per_proxy: number
   routing_strategy: 'round-robin' | 'fill-first'
+  account_order: string
   upstream_channels: UpstreamChannel[]
   model_mapping: string
   model_channels: string
+  model_accounts: string
   api_key_accounts: string
   api_key_rate_limits: string
   waa_backend: 'camoufox' | 'spidermonkey'

@@ -19,6 +19,8 @@ import (
 const (
 	// MakerSuiteRPCBase 是 AI Studio RPC 根地址
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
+	// appletServiceRPCBase 是 AI Studio 应用服务 RPC 根地址
+	appletServiceRPCBase = "https://alkalimakersuiteapplets.pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.applets.AppletService/"
 	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
 	JSONProtobufContentType           = "application/json+protobuf"
 	maxHTMLResponseBytes        int64 = 16 << 20
@@ -259,21 +261,26 @@ type limitedCountWriter struct{ n int64 }
 func (w *limitedCountWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); return len(p), nil }
 
 func (c *Client) do(ctx context.Context, method string, accountID string, requestID string, body []byte, streaming bool) (*RPCResponse, error) {
-	if err := c.pacer.Wait(ctx, accountID); err != nil {
+	return c.send(ctx, newRPCRequest(method, accountID, requestID, body, streaming))
+}
+
+// send 发送 RPC 请求并校验响应状态与媒体类型。fork 的三项行为保留在这个统一入口：
+// 先过 pacer、非流式加超时 ctx、非流式响应同步有界读完再返回
+func (c *Client) send(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
+	if err := c.pacer.Wait(ctx, rpc.AccountID); err != nil {
 		return nil, err
 	}
-	if !streaming {
+	if !rpc.Streaming {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, unaryRPCTimeoutValue())
 		defer cancel()
 	}
-	rpc := newRPCRequest(method, accountID, requestID, body, streaming)
-	c.applyBenefitTier(method, accountID, rpc.Header)
+	c.applyBenefitTier(rpc.Method, rpc.AccountID, rpc.Header)
 	response, err := c.transport.Do(ctx, rpc)
 	if err != nil {
-		return nil, fmt.Errorf("发送 AI Studio %s: %w", method, err)
+		return nil, fmt.Errorf("发送 AI Studio %s: %w", rpc.Method, err)
 	}
-	if !streaming {
+	if !rpc.Streaming {
 		// 非流式响应在此同步读完再返回：超时 ctx 取消后 Body 读取也会失败，
 		// leaseResponseBody 的租约释放与调用方返回不会因上游 hang 而无限推迟
 		defer response.Body.Close()
@@ -283,14 +290,14 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 		}
 		raw, err := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 		if err != nil {
-			return nil, fmt.Errorf("读取 AI Studio %s 响应: %w", method, err)
+			return nil, fmt.Errorf("读取 AI Studio %s 响应: %w", rpc.Method, err)
 		}
 		if int64(len(raw)) > maxBytes {
-			return nil, fmt.Errorf("AI Studio %s 响应超过 %d MiB", method, maxBytes>>20)
+			return nil, fmt.Errorf("AI Studio %s 响应超过 %d MiB", rpc.Method, maxBytes>>20)
 		}
 		response.Body = io.NopCloser(bytes.NewReader(raw))
 	}
-	return validateRPCResponse(method, response)
+	return validateRPCResponse(rpc.Method, response)
 }
 
 func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {

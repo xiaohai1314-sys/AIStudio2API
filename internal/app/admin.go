@@ -628,10 +628,16 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	return admin.account(account.ID)
 }
 
-func (admin *runtimeAdmin) DeleteAccount(_ context.Context, accountID string) error {
+func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) error {
 	account, err := admin.account(accountID)
 	if err != nil {
 		return err
+	}
+	if err := admin.service.catalog.DeleteAccountAssistantApplets(ctx, accountID); err != nil {
+		if appletCleanupRetryable(err) {
+			return fmt.Errorf("账户写代码助手应用删除失败 | 账户=%s | 原因: %w", account.Label, err)
+		}
+		admin.requests.log("auth", "WARN", fmt.Sprintf("账户写代码助手应用删除失败 | 账户=%s | 原因: %v", account.Label, err))
 	}
 	defer admin.syncModelCache()
 	err = admin.service.changeModels(func() error {
@@ -751,7 +757,7 @@ func resetCookieAuthUser(lease *aistudio.AccountLease, prepare func(*aistudio.Ac
 	return nil
 }
 
-// keepAuthExtension 在新登录状态缺少续签材料时沿用账户已有的 Chrome 来源与 OAuth 材料
+// keepAuthExtension 在新登录状态缺少续签材料时沿用账户已有的 Chrome 来源与 OAuth 材料，DBSC 会话登记属于旧会话不沿用
 func keepAuthExtension(next *aistudio.StorageState, current aistudio.StorageState) error {
 	if _, exists, err := next.AuthExtension(); err != nil || exists {
 		return err
@@ -760,6 +766,7 @@ func keepAuthExtension(next *aistudio.StorageState, current aistudio.StorageStat
 	if err != nil || !exists {
 		return err
 	}
+	extension.Bound = nil
 	next.SetAuthExtension(extension)
 	return nil
 }
@@ -991,6 +998,15 @@ func invalidAccount(err error) error {
 	}
 }
 
+// appletCleanupRetryable 判断应用删除失败后能否重试，上游明确拒绝（429 以外的 4xx）与登录态失效时该账户已无法删除这些应用
+func appletCleanupRetryable(err error) bool {
+	if aistudio.DefinitiveAuthenticationFailure(err) {
+		return false
+	}
+	var rpcErr *aistudio.RPCError
+	return !errors.As(err, &rpcErr) || rpcErr.StatusCode >= http.StatusInternalServerError || rpcErr.StatusCode == http.StatusTooManyRequests
+}
+
 func accountOperationError(err error) error {
 	switch {
 	case errors.Is(err, aistudio.ErrAccountNotFound):
@@ -1062,9 +1078,11 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 		AccountRateJitter:      saved.AccountRateJitter,
 		EnvironmentBinding:     saved.EnvironmentBinding,
 		RoutingStrategy:        value.RoutingStrategy,
+		AccountOrder:           strings.TrimSpace(value.AccountOrder),
 		UpstreamChannels:       value.UpstreamChannels,
 		ModelMapping:           strings.TrimSpace(value.ModelMapping),
 		ModelChannels:          strings.TrimSpace(value.ModelChannels),
+		ModelAccounts:          strings.TrimSpace(value.ModelAccounts),
 		APIKeyAccounts:         strings.TrimSpace(value.APIKeyAccounts),
 		APIKeyRateLimits:       strings.TrimSpace(value.APIKeyRateLimits),
 		TemporaryChat:          value.TemporaryChat,
@@ -1080,7 +1098,9 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	}
 	aistudio.SetUnaryRPCTimeout(cfg.UnaryRPCTimeout)
 	admin.pool.SetRoutingStrategy(cfg.RoutingStrategy)
+	admin.pool.SetAccountOrder(accountOrder(cfg.AccountOrder))
 	admin.pool.SetModelChannels(modelChannels(cfg.ModelChannels))
+	admin.pool.SetModelAccounts(modelAccounts(cfg.ModelAccounts))
 	admin.requests.log("service", "INFO", "服务配置已保存")
 	models, _ := admin.CatalogModels(context.Background())
 	admin.requests.publish(api.AdminEvent{Type: "models", Data: map[string]any{"models": models}})
@@ -1371,9 +1391,11 @@ func runtimeConfigDTO(cfg config.Config) api.RuntimeConfig {
 		MaxAccountsPerProxy:    cfg.MaxAccountsPerProxy,
 		MaxConcurrencyPerProxy: cfg.MaxConcurrencyPerProxy,
 		RoutingStrategy:        cfg.RoutingStrategy,
+		AccountOrder:           cfg.AccountOrder,
 		UpstreamChannels:       cfg.UpstreamChannels,
 		ModelMapping:           cfg.ModelMapping,
 		ModelChannels:          cfg.ModelChannels,
+		ModelAccounts:          cfg.ModelAccounts,
 		APIKeyAccounts:         cfg.APIKeyAccounts,
 		APIKeyRateLimits:       cfg.APIKeyRateLimits,
 		TemporaryChat:          cfg.TemporaryChat,

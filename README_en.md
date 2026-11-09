@@ -634,9 +634,11 @@ Process environment variables override the same keys in `.env`, and those settin
 | `ACCOUNT_RATE_JITTER` | `25` | Random jitter percentage for request spacing, `0` to `90`. Takes effect after restarting the generation service |
 | `ENVIRONMENT_BINDING` | `true` | Bind account auth to its egress proxy and browser fingerprint; changing either requires signing in again. Takes effect after restarting the generation service |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` rotates accounts; `fill-first` reuses the first available account |
+| `ACCOUNT_ORDER` | empty | Accounts `fill-first` uses in order, comma-separated; unlisted accounts follow in ID order. Also adjustable on the Settings page, applied on save |
 | `UPSTREAM_CHANNELS` | `playground` | Upstream channels for generation requests, `playground` and `build` comma separated; `build` is the legacy channel whose generation upstream has disabled |
 | `MODEL_MAPPING` | empty | Client model names mapped to catalog models, each item `alias:model ID`, comma separated |
 | `MODEL_CHANNELS` | empty | Limit a model to one channel, each item `model ID:playground` or `model ID:build`; also selectable in model details on the Model catalog page, applied on save |
+| `MODEL_ACCOUNTS` | empty | Accounts a model may use, each item `model ID:account\|account`; models not listed can use every account. Also selectable in model details on the Model catalog page, applied on save |
 | `BUILD_NATIVE_NONSTREAM` | `true` | With the Build channel enabled, prefer native Build unary calls for non-streaming requests; log any fallback to stream collection |
 | `NONSTREAM_KEEPALIVE` | `false` | Off by default, so a slow response keeps its real HTTP status. Set `true` to return 200 after 10 seconds and write a newline every 10 seconds, which keeps proxies such as Cloudflare from closing an idle connection. Once those headers are sent, a later 429 or authentication failure can only be reported in the JSON body; the access log still records the real status |
 | `FAKE_STREAM` | `false` | Streaming requests get the full result as a non-streaming generation, retry on another account if it fails midway, then stream it in the protocol format; heartbeats continue while waiting |

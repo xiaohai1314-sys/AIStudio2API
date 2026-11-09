@@ -345,9 +345,11 @@ type RuntimeConfig struct {
 	MaxAccountsPerProxy       int                  `json:"max_accounts_per_proxy"`
 	MaxConcurrencyPerProxy    int                  `json:"max_concurrency_per_proxy"`
 	RoutingStrategy           string               `json:"routing_strategy"`
+	AccountOrder              string               `json:"account_order"`
 	UpstreamChannels          []string             `json:"upstream_channels"`
 	ModelMapping              string               `json:"model_mapping"`
 	ModelChannels             string               `json:"model_channels"`
+	ModelAccounts             string               `json:"model_accounts"`
 	APIKeyAccounts            string               `json:"api_key_accounts"`
 	APIKeyRateLimits          string               `json:"api_key_rate_limits"`
 	TemporaryChat             bool                 `json:"temporary_chat"`

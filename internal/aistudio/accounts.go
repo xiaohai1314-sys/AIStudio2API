@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/mail"
 	"os"
@@ -410,6 +411,8 @@ type AccountPool struct {
 	channels          []Channel
 	modelChannels     map[string]Channel
 	apiKeyAccounts    map[string][]string
+	modelAccounts     map[string][]string
+	accountOrder      map[string]int
 	// risk 保存各账户在当前窗口内的风控响应计数
 	risk map[string]*accountRiskWindow
 	// endpointRisk 保存各模型与通道在当前窗口内的请求与风控计数
@@ -1122,7 +1125,7 @@ func (p *AccountPool) AcquireAccount(ctx context.Context, accountID string) (*Ac
 
 // AcquireFor 按模型方法账户或资源粘性获取账户槽位
 func (p *AccountPool) AcquireFor(ctx context.Context, selection AccountSelection) (*AccountLease, error) {
-	selection = p.keyScopedSelection(ctx, selection)
+	selection = p.scopedSelection(ctx, selection)
 	if selection.ResourceID != "" {
 		if err := p.refreshResource(ctx, selection.ResourceID); err != nil {
 			return nil, err
@@ -1232,7 +1235,7 @@ func (p *AccountPool) resourceOwners() []string {
 
 // TryAcquireFor 尝试获取账户槽位并立即返回当前结果
 func (p *AccountPool) TryAcquireFor(ctx context.Context, selection AccountSelection) (*AccountLease, bool, error) {
-	selection = p.keyScopedSelection(ctx, selection)
+	selection = p.scopedSelection(ctx, selection)
 	if selection.ResourceID != "" {
 		if err := p.refreshResource(ctx, selection.ResourceID); err != nil {
 			return nil, false, err
@@ -1329,15 +1332,19 @@ func (p *AccountPool) noEligibleErrorLocked(selection AccountSelection) error {
 		return errNoAccounts
 	}
 	selection.ModelID = strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
+	scope, bound := p.modelAccounts[selection.ModelID]
 	var reasons []string
 	for _, account := range p.accounts {
-		if account.Config.Enabled && account.State == AccountReady {
+		if account.Config.Enabled && account.State == AccountReady || bound && !slices.Contains(scope, account.ID) {
 			continue
 		}
 		if selection.ModelID != "" && !p.accountSupportsAnyChannelLocked(account, selection) {
 			continue
 		}
 		reasons = append(reasons, accountStateReason(account))
+	}
+	if len(reasons) == 0 && bound {
+		return fmt.Errorf("%w：模型 %s 绑定的账户都无法调用", ErrNoEligibleAccount, selection.ModelID)
 	}
 	if len(reasons) == 0 {
 		return ErrNoEligibleAccount
@@ -2084,7 +2091,7 @@ func (p *AccountPool) CandidateStatesForScope(
 	return result
 }
 
-// PreferWarmPool 按权益分层轮选初始热账户
+// PreferWarmPool 按权益分层轮选初始热账户，fill-first 时 ACCOUNT_ORDER 列出的账户在前
 func (p *AccountPool) PreferWarmPool(accountIDs []string) []string {
 	type warmCandidate struct {
 		id       string
@@ -2131,6 +2138,13 @@ func (p *AccountPool) PreferWarmPool(accountIDs []string) []string {
 		if !added {
 			break
 		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.routingStrategy != "round-robin" {
+		sort.SliceStable(result, func(left int, right int) bool {
+			return p.accountRankLocked(result[left]) < p.accountRankLocked(result[right])
+		})
 	}
 	return result
 }
@@ -2588,7 +2602,7 @@ func (p *AccountPool) ClassifyCandidates(
 	selection AccountSelection,
 	warmAccountIDs []string,
 ) (AccountCandidateGroups, error) {
-	selection = p.keyScopedSelection(ctx, selection)
+	selection = p.scopedSelection(ctx, selection)
 	selection.ModelID = strings.TrimPrefix(strings.TrimSpace(selection.ModelID), "models/")
 	if selection.ResourceID != "" {
 		if err := p.refreshResource(ctx, selection.ResourceID); err != nil {
@@ -2910,9 +2924,20 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 	if p.routingStrategy == "round-robin" {
 		last := p.lastPicked[selectionAccessScope(selection)]
 		start := sort.Search(len(indices), func(index int) bool { return p.accounts[indices[index]].ID > last })
-		indices = append(indices[start:], indices[:start]...)
+		return append(indices[start:], indices[:start]...), nil
 	}
+	sort.SliceStable(indices, func(left, right int) bool {
+		return p.accountRankLocked(p.accounts[indices[left]].ID) < p.accountRankLocked(p.accounts[indices[right]].ID)
+	})
 	return indices, nil
+}
+
+// accountRankLocked 返回账户在 ACCOUNT_ORDER 中的位置，未列出的账户排在最后
+func (p *AccountPool) accountRankLocked(accountID string) int {
+	if rank, listed := p.accountOrder[accountID]; listed {
+		return rank
+	}
+	return math.MaxInt
 }
 
 // SetRoutingStrategy 设置账户轮询或优先填满策略

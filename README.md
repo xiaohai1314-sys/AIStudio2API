@@ -634,9 +634,11 @@ cp .env.example .env
 | `ACCOUNT_RATE_JITTER` | `25` | 请求间隔的随机抖动百分比，取值 `0` 到 `90`；修改 `.env` 后重启生成服务生效 |
 | `ENVIRONMENT_BINDING` | `true` | 账户认证绑定出口代理与浏览器指纹，二者变化后需要重新登录；修改 `.env` 后重启生成服务生效 |
 | `ROUTING_STRATEGY` | `round-robin` | `round-robin` 轮询；`fill-first` 账号粘性优先 |
+| `ACCOUNT_ORDER` | 空 | `fill-first` 依次使用的账户，逗号分隔，未列出的账户排在后面并按 ID 排序；也可在设置页调整，保存后立即生效 |
 | `UPSTREAM_CHANNELS` | `playground` | 生成请求使用的上游通道，`playground`、`build` 逗号分隔；`build` 为旧通道，上游已停用其生成 |
 | `MODEL_MAPPING` | 空 | 客户端模型名到目录模型的映射，每项写成 `别名:模型 ID`，逗号分隔多项 |
 | `MODEL_CHANNELS` | 空 | 限定模型只走一个通道，每项写成 `模型 ID:playground` 或 `模型 ID:build`；也可在“模型目录”的模型详情中选择，保存后立即生效 |
+| `MODEL_ACCOUNTS` | 空 | 模型可用的账户，每项写成 `模型 ID:账户\|账户`，未列出的模型可用全部账户；也可在“模型目录”的模型详情中勾选，保存后立即生效 |
 | `BUILD_NATIVE_NONSTREAM` | `true` | 启用 Build 通道时非流式请求优先使用 Build 原生单次调用；不可用时回退流式并记录原因 |
 | `NONSTREAM_KEEPALIVE` | `false` | 默认关闭，慢响应保持真实 HTTP 状态。设为 `true` 时，非流式请求超过 10 秒先返回 200，之后每 10 秒写一个换行，避免 Cloudflare 等反代掐断空闲连接；响应头提交后，429 和认证失败只能出现在 JSON 正文里，访问日志仍记录真实状态 |
 | `FAKE_STREAM` | `false` | 流式请求先按非流式取得完整结果再按流式格式输出，中途失败时换号重发，等待期间照常发送心跳 |

@@ -66,9 +66,11 @@ var configKeys = [...]string{
 	"ACCOUNT_RATE_JITTER",
 	"ENVIRONMENT_BINDING",
 	"ROUTING_STRATEGY",
+	"ACCOUNT_ORDER",
 	"UPSTREAM_CHANNELS",
 	"MODEL_MAPPING",
 	"MODEL_CHANNELS",
+	"MODEL_ACCOUNTS",
 	"WAA_BACKEND",
 	"MEDIA_OUTPUT",
 	"MEDIA_BASE_URL",
@@ -194,9 +196,11 @@ type Config struct {
 	// MaxConcurrencyPerProxy 是同一出口最多同时发出的请求数，0 表示不限制
 	MaxConcurrencyPerProxy int
 	RoutingStrategy        string
+	AccountOrder           string
 	UpstreamChannels       []string
 	ModelMapping           string
 	ModelChannels          string
+	ModelAccounts          string
 	TemporaryChat          bool
 	WAABackend             string
 	MediaOutput            string
@@ -336,6 +340,8 @@ var configSetters = map[string]func(*Config, string) error{
 	"ROUTING_STRATEGY":         textSetter(func(c *Config) *string { return &c.RoutingStrategy }, strings.TrimSpace),
 	"MODEL_MAPPING":            textSetter(func(c *Config) *string { return &c.ModelMapping }, strings.TrimSpace),
 	"MODEL_CHANNELS":           textSetter(func(c *Config) *string { return &c.ModelChannels }, strings.TrimSpace),
+	"ACCOUNT_ORDER":            textSetter(func(c *Config) *string { return &c.AccountOrder }, strings.TrimSpace),
+	"MODEL_ACCOUNTS":           textSetter(func(c *Config) *string { return &c.ModelAccounts }, strings.TrimSpace),
 	"API_KEY_ACCOUNTS":         textSetter(func(c *Config) *string { return &c.APIKeyAccounts }, strings.TrimSpace),
 	"API_KEY_RATE_LIMITS":      textSetter(func(c *Config) *string { return &c.APIKeyRateLimits }, strings.TrimSpace),
 	"WAA_BACKEND":              setWAABackend,
@@ -524,6 +530,10 @@ var configChecks = []configCheck{
 	}},
 	{[]string{"MODEL_CHANNELS"}, func(c Config) error {
 		_, err := ParseModelChannels(c.ModelChannels)
+		return err
+	}},
+	{[]string{"MODEL_ACCOUNTS"}, func(c Config) error {
+		_, err := ParseModelAccounts(c.ModelAccounts)
 		return err
 	}},
 	{[]string{"API_KEY_ACCOUNTS"}, func(c Config) error {
@@ -741,9 +751,11 @@ func (c Config) envValues() map[string]string {
 		"ACCOUNT_RATE_JITTER":       strconv.Itoa(c.AccountRateJitter),
 		"ENVIRONMENT_BINDING":       strconv.FormatBool(c.EnvironmentBinding),
 		"ROUTING_STRATEGY":          c.RoutingStrategy,
+		"ACCOUNT_ORDER":             c.AccountOrder,
 		"UPSTREAM_CHANNELS":         strings.Join(c.UpstreamChannels, ","),
 		"MODEL_MAPPING":             c.ModelMapping,
 		"MODEL_CHANNELS":            c.ModelChannels,
+		"MODEL_ACCOUNTS":            c.ModelAccounts,
 		"API_KEY_ACCOUNTS":          c.APIKeyAccounts,
 		"API_KEY_RATE_LIMITS":       c.APIKeyRateLimits,
 		"TEMPORARY_CHAT":            strconv.FormatBool(c.TemporaryChat),
@@ -1106,6 +1118,39 @@ func ParseTrustedProxyCIDRs(value string) ([]netip.Prefix, error) {
 		}
 	}
 	return prefixes, nil
+}
+
+// ParseModelAccounts 解析逗号分隔的 模型 ID:账户|账户，以最后一个冒号分隔，返回每个模型可用的账户 ID
+func ParseModelAccounts(value string) (map[string][]string, error) {
+	accounts := make(map[string][]string)
+	for item := range strings.SplitSeq(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		index := strings.LastIndexByte(item, ':')
+		model := strings.TrimPrefix(strings.TrimSpace(item[:max(index, 0)]), "models/")
+		ids := accountIDs(item[index+1:])
+		if index < 0 || model == "" || len(ids) == 0 {
+			return nil, fmt.Errorf("MODEL_ACCOUNTS 的每一项写成 模型 ID:账户|账户，%q 不符合", item)
+		}
+		if _, exists := accounts[model]; exists {
+			return nil, fmt.Errorf("MODEL_ACCOUNTS 中模型 %s 重复", model)
+		}
+		accounts[model] = ids
+	}
+	return accounts, nil
+}
+
+// accountIDs 返回以 | 分隔、去掉空白的各个账户 ID
+func accountIDs(value string) []string {
+	var ids []string
+	for id := range strings.SplitSeq(value, "|") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // ParseModelMapping 解析逗号分隔的 别名:模型 ID，别名可含冒号，以最后一个冒号分隔
