@@ -493,6 +493,9 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if err != nil || !refresh {
 		return err
 	}
+	// 记下旋转开始时的认证代际：合并时若代际已推进，说明期间有续签提交，
+	// 旧旋转结果作废，哪怕续签保留了同一个绑定会话 ID
+	generation := lease.AuthGeneration()
 	headers, err := refresher.rotate(ctx, state, extension, account.EffectiveProxy(refresher.globalProxy))
 	if errors.Is(err, chromeauth.ErrBoundSessionRejected) {
 		return errors.Join(camoufoxnative.ErrAuthenticationRequired, err)
@@ -500,7 +503,7 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("刷新账户 %s DBSC 会话: %w", account.ID, err)
 	}
-	if err := lease.MergeBoundSessionCookies(headers, *extension.Bound, time.Now()); err != nil {
+	if err := lease.MergeBoundSessionCookies(headers, *extension.Bound, generation, time.Now()); err != nil {
 		if errors.Is(err, aistudio.ErrStorageGenerationChanged) {
 			// 旋转期间账户已续签换代，旧旋转结果作废：新状态自带绑定会话，
 			// 旧 Cookie 既不写存储也不推给 Worker 页面

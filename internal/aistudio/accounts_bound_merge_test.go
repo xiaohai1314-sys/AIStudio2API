@@ -35,13 +35,18 @@ func TestMergeBoundSessionCookiesGenerationGuard(t *testing.T) {
 	defer lease.Release()
 
 	headers := []string{"__Host-GAPS=fresh; Path=/; Secure; HttpOnly"}
+	generation := lease.AuthGeneration()
 	stale := BoundSession{ID: "session-old", RefreshURL: refreshURL}
-	if err := lease.MergeBoundSessionCookies(headers, stale, time.Now()); !errors.Is(err, ErrStorageGenerationChanged) {
+	if err := lease.MergeBoundSessionCookies(headers, stale, generation, time.Now()); !errors.Is(err, ErrStorageGenerationChanged) {
 		t.Fatalf("绑定会话已变化时应按代际变化作废，得到 %v", err)
 	}
 	current := BoundSession{ID: "session-new", RefreshURL: refreshURL}
-	if err := lease.MergeBoundSessionCookies(headers, current, time.Now()); err != nil {
-		t.Fatalf("绑定会话一致时应合并成功: %v", err)
+	// 续签保留同一个绑定会话 ID 时，仅靠会话比对放行；代际推进后仍必须作废
+	if err := lease.MergeBoundSessionCookies(headers, current, generation+1, time.Now()); !errors.Is(err, ErrStorageGenerationChanged) {
+		t.Fatalf("认证代际已推进时应按代际变化作废，得到 %v", err)
+	}
+	if err := lease.MergeBoundSessionCookies(headers, current, generation, time.Now()); err != nil {
+		t.Fatalf("绑定会话与代际都一致时应合并成功: %v", err)
 	}
 	reloaded, err := LoadStorageState(account.StoragePath)
 	if err != nil {

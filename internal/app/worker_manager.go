@@ -1782,6 +1782,14 @@ func (manager *accountWorkerManager) fillWarm(ctx context.Context, first chan<- 
 				launched++
 				paniclog.Go("worker_manager.go:1501", func() {
 					func() {
+						// panic 时也要回一条失败结果，否则该账户的 starting 条目永不清除；
+						// 若 panic 的是 head Worker，预热会整体卡到 ctx 结束
+						defer func() {
+							if recovered := recover(); recovered != nil {
+								results <- warmResult{accountID: accountID, err: fmt.Errorf("WAA Worker 预热 panic: %v", recovered)}
+								panic(recovered)
+							}
+						}()
 						_, err := manager.Worker(workerCtx, accountID, "")
 						results <- warmResult{accountID: accountID, err: err}
 					}()

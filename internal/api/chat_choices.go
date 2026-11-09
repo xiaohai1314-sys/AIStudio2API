@@ -43,23 +43,43 @@ func (s *server) startChatChoices(ctx context.Context, request aistudio.Generate
 		choices.running.Add(1)
 		paniclog.Go("chat_choices.go:42", func() {
 			defer choices.running.Done()
-			upstream, err := s.service.Generate(choices.ctx, choice)
-			source := upstream
-			if err == nil && stream {
-				source, _, err = awaitStreamStart(choices.ctx, upstream)
-			}
-			started <- err
-			if err != nil {
-				failed := make(chan aistudio.Event, 1)
-				failed <- aistudio.Event{Kind: aistudio.EventError, Err: err}
-				close(failed)
-				source = failed
-			}
-			relayEvents(choices.ctx, source, events)
-			if upstream != nil {
-				for range upstream {
+			func() {
+				startedSent := false
+				relayed := false
+				defer func() {
+					// panic 兜底：启动结果必须送达发起方（它在无兜底地逐个等待），
+					// relay 未完成时事件通道也必须关闭，否则消费方一直等下去；
+					// relay 已正常关闭通道时不能重复关闭
+					if recovered := recover(); recovered != nil {
+						if !startedSent {
+							started <- fmt.Errorf("并行生成 panic: %v", recovered)
+						}
+						if !relayed {
+							close(events)
+						}
+						panic(recovered)
+					}
+				}()
+				upstream, err := s.service.Generate(choices.ctx, choice)
+				source := upstream
+				if err == nil && stream {
+					source, _, err = awaitStreamStart(choices.ctx, upstream)
 				}
-			}
+				started <- err
+				startedSent = true
+				if err != nil {
+					failed := make(chan aistudio.Event, 1)
+					failed <- aistudio.Event{Kind: aistudio.EventError, Err: err}
+					close(failed)
+					source = failed
+				}
+				relayEvents(choices.ctx, source, events)
+				relayed = true
+				if upstream != nil {
+					for range upstream {
+					}
+				}
+			}()
 		})
 	}
 	waits := count

@@ -178,6 +178,13 @@ func uploadOpenAIFile(
 	done := make(chan openAIFileUploadResult, 1)
 	paniclog.Go("files.go:182", func() {
 		func() {
+			// panic 时也要回送结果：等待方后面还有对 done 的无兜底读取，会一直等下去
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					done <- openAIFileUploadResult{err: fmt.Errorf("文件上传 panic: %v", recovered)}
+					panic(recovered)
+				}
+			}()
 			ref, err := service.UploadFile(uploadCtx, request)
 			done <- openAIFileUploadResult{ref: ref, err: err}
 		}()

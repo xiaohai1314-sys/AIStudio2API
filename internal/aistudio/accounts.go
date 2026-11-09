@@ -1847,17 +1847,17 @@ func (l *AccountLease) ReplaceResource(previousResourceID string, resourceID str
 
 // MergeSetCookieHeaders 将响应 Cookie 合并到账户最新持久状态
 func (l *AccountLease) MergeSetCookieHeaders(headers []string, requestURL string, now time.Time) error {
-	return l.mergeSetCookieHeaders(headers, requestURL, now, nil)
+	return l.mergeSetCookieHeaders(headers, requestURL, now, nil, nil)
 }
 
-// MergeBoundSessionCookies 合并 DBSC 旋转得到的 Cookie，但仅当磁盘上的绑定会话仍是旋转时那一个：
-// 旋转期间发生过认证续签、绑定会话已被换掉时，旧旋转结果按代际变化作废，
-// 避免旧会话的 Cookie 覆盖刚续签好的新会话状态
-func (l *AccountLease) MergeBoundSessionCookies(headers []string, bound BoundSession, now time.Time) error {
-	return l.mergeSetCookieHeaders(headers, bound.RefreshURL, now, &bound)
+// MergeBoundSessionCookies 合并 DBSC 旋转得到的 Cookie，但仅当账户认证代际仍是旋转开始时那一代、
+// 且磁盘上的绑定会话仍是旋转时那一个：续签提交必然推进代际（哪怕续签保留了同一个绑定会话 ID），
+// 旋转期间发生过任一续签提交时，旧旋转结果按代际变化作废，避免旧会话 Cookie 覆盖新会话状态
+func (l *AccountLease) MergeBoundSessionCookies(headers []string, bound BoundSession, generation uint64, now time.Time) error {
+	return l.mergeSetCookieHeaders(headers, bound.RefreshURL, now, &bound, &generation)
 }
 
-func (l *AccountLease) mergeSetCookieHeaders(headers []string, requestURL string, now time.Time, bound *BoundSession) error {
+func (l *AccountLease) mergeSetCookieHeaders(headers []string, requestURL string, now time.Time, bound *BoundSession, generation *uint64) error {
 	l.operation.Lock()
 	defer l.operation.Unlock()
 	if l.released {
@@ -1876,6 +1876,14 @@ func (l *AccountLease) mergeSetCookieHeaders(headers []string, requestURL string
 		}
 		if extension.Bound == nil || extension.Bound.ID != bound.ID || extension.Bound.RefreshURL != bound.RefreshURL {
 			return fmt.Errorf("%w: DBSC 绑定会话已变化", ErrStorageGenerationChanged)
+		}
+	}
+	if generation != nil {
+		l.pool.mu.Lock()
+		current := l.account.authGeneration
+		l.pool.mu.Unlock()
+		if current != *generation {
+			return fmt.Errorf("%w: 账户认证代际已变化", ErrStorageGenerationChanged)
 		}
 	}
 	if err := state.MergeSetCookieHeaders(headers, requestURL, now); err != nil {

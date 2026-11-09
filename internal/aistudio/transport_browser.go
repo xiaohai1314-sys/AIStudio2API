@@ -601,6 +601,13 @@ func (transport *browserRoundTripper) roundTripHTTP2(request *fhttp.Request) (*f
 	done := make(chan result, 1)
 	paniclog.Go("transport_browser.go:499", func() {
 		func() {
+			// panic 时也要回送结果，否则等待方只能等请求 ctx 取消才脱身
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					done <- result{err: fmt.Errorf("浏览器传输 panic: %v", recovered)}
+					panic(recovered)
+				}
+			}()
 			response, err := transport.transport.RoundTrip(request)
 			done <- result{response, err}
 		}()

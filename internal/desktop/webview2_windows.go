@@ -41,6 +41,13 @@ func installWebView2() bool {
 	downloaded := make(chan bootstrapper, 1)
 	paniclog.Go("webview2_windows.go:41", func() {
 		func() {
+			// panic 时也要回送结果：调用方对 downloaded 的读取没有其他兜底
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					downloaded <- bootstrapper{err: fmt.Errorf("WebView2 引导程序下载 panic: %v", recovered)}
+					panic(recovered)
+				}
+			}()
 			path, err := downloadWebView2Bootstrapper(ctx)
 			downloaded <- bootstrapper{path, err}
 		}()

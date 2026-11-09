@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"sync"
@@ -174,6 +175,13 @@ func (view *LiveView) Serve(ctx context.Context, connection *websocket.Conn) err
 	received := make(chan error, 1)
 	paniclog.Go("liveview.go:174", func() {
 		func() {
+			// panic 时也要回送结果：调用方对 received 的读取没有其他兜底
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					received <- fmt.Errorf("登录窗口接收 panic: %v", recovered)
+					panic(recovered)
+				}
+			}()
 			received <- view.receive(connection)
 			cancel()
 		}()

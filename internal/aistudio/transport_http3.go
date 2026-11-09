@@ -3,6 +3,7 @@ package aistudio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -401,6 +402,13 @@ func (h3 *firefoxHTTP3) http2Ready(ctx context.Context, address string, class re
 	ready := make(chan error, 1)
 	paniclog.Go("transport_http3.go:395", func() {
 		func() {
+			// panic 时也要回送结果，否则等待方只能等请求 ctx 取消才脱身
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					ready <- fmt.Errorf("HTTP/2 预拨号 panic: %v", recovered)
+					panic(recovered)
+				}
+			}()
 			_, err := h3.pool.get(withRequestClass(context.WithoutCancel(ctx), class), address, false)
 			ready <- err
 		}()

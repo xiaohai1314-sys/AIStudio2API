@@ -690,6 +690,16 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 	accountIDs := service.modelCatalogAccountIDs()
 	paniclog.Go("runtime.go:677", func() {
 		defer close(done)
+		readySent := false
+		defer func() {
+			// ready/synced 的完成信号统一在 defer 里发：循环中 panic 时等待方也能立刻收到结果，
+			// 而不是只能等 ctx 取消、拿到误导性的 ctx 错误
+			if !readySent {
+				ready <- errors.New("模型目录同步意外终止")
+			}
+			close(ready)
+			close(synced)
+		}()
 		startedAt := time.Now()
 		firstReady := false
 		synchronized := 0
@@ -713,6 +723,7 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 			if !firstReady && ctx.Err() == nil {
 				ready <- nil
 				firstReady = true
+				readySent = true
 			}
 		}
 		if !firstReady {
@@ -724,9 +735,8 @@ func (service *trackedService) startModelCatalogRefresh(ctx context.Context) (<-
 				launchErr = aistudio.ErrNoEligibleAccount
 			}
 			ready <- launchErr
+			readySent = true
 		}
-		close(ready)
-		close(synced)
 		if ctx.Err() != nil {
 			return
 		}
