@@ -427,11 +427,8 @@ func (s *PooledService) refreshModelCatalogs(ctx context.Context, statuses []Acc
 	var refreshes sync.WaitGroup
 	for _, status := range statuses {
 		refreshes.Add(1)
-		paniclog.Go("service.go:421", func() {
-			func(status AccountStatus) {
-				defer refreshes.Done()
-				results <- s.modelsForStatus(ctx, status)
-			}(status)
+		paniclog.GoWithDone("service.go:421", refreshes.Done, func() {
+			results <- s.modelsForStatus(ctx, status)
 		})
 	}
 	paniclog.Go("service.go:426", func() {

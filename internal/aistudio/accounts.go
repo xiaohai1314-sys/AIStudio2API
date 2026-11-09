@@ -1572,6 +1572,32 @@ func (l *AccountLease) AuthGeneration() uint64 {
 	return l.account.authGeneration
 }
 
+// ReloadStorageStateWithGeneration 在共享存储锁下读取磁盘认证状态与代际，避免两者来自不同提交
+func (l *AccountLease) ReloadStorageStateWithGeneration() (StorageState, uint64, error) {
+	return l.reloadStorageStateWithGeneration(nil)
+}
+
+func (l *AccountLease) reloadStorageStateWithGeneration(afterLoad func()) (StorageState, uint64, error) {
+	l.operation.Lock()
+	defer l.operation.Unlock()
+	if l.released {
+		return StorageState{}, 0, fmt.Errorf("账户租约已释放")
+	}
+	l.account.storageMu.Lock()
+	defer l.account.storageMu.Unlock()
+	state, err := LoadStorageState(l.account.StoragePath)
+	if err != nil {
+		return state, 0, err
+	}
+	if afterLoad != nil {
+		afterLoad()
+	}
+	l.pool.mu.Lock()
+	generation := l.account.authGeneration
+	l.pool.mu.Unlock()
+	return state, generation, nil
+}
+
 // WaitForAuthRefresh 等待其他正常请求释放，或等到 generation 之后已经提交的新认证；等待 Worker 启动占位的租约不算正常请求
 func (l *AccountLease) WaitForAuthRefresh(ctx context.Context, generation uint64) error {
 	for {
@@ -3634,11 +3660,8 @@ func (p *AccountPool) refreshAccountRuntimes(ctx context.Context, accounts []*Ac
 	var refreshes sync.WaitGroup
 	for index, account := range accounts {
 		refreshes.Add(1)
-		paniclog.Go("accounts.go:3389", func() {
-			func(index int, account *Account) {
-				defer refreshes.Done()
-				results[index] = accountRuntimeRefreshResult{account: account, err: p.refreshAccountRuntime(ctx, account)}
-			}(index, account)
+		paniclog.GoWithDone("accounts.go:3389", refreshes.Done, func() {
+			results[index] = accountRuntimeRefreshResult{account: account, err: p.refreshAccountRuntime(ctx, account)}
 		})
 	}
 	refreshes.Wait()

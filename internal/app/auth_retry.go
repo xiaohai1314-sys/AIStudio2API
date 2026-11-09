@@ -470,18 +470,18 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	due := func() (aistudio.StorageState, aistudio.AuthExtension, bool, error) {
-		state, err := lease.ReloadStorageState()
+	due := func() (aistudio.StorageState, aistudio.AuthExtension, uint64, bool, error) {
+		state, generation, err := lease.ReloadStorageStateWithGeneration()
 		if err != nil {
-			return state, aistudio.AuthExtension{}, false, err
+			return state, aistudio.AuthExtension{}, 0, false, err
 		}
 		extension, _, err := state.AuthExtension()
 		if err != nil || extension.Bound == nil {
-			return state, extension, false, err
+			return state, extension, generation, false, err
 		}
-		return state, extension, state.BoundCookieLifetime(*extension.Bound, time.Now()) <= boundRefreshThreshold, nil
+		return state, extension, generation, state.BoundCookieLifetime(*extension.Bound, time.Now()) <= boundRefreshThreshold, nil
 	}
-	if _, _, refresh, err := due(); err != nil || !refresh {
+	if _, _, _, refresh, err := due(); err != nil || !refresh {
 		return err
 	}
 	account := lease.Account()
@@ -489,13 +489,12 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	mu := value.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
-	state, extension, refresh, err := due()
+	state, extension, generation, refresh, err := due()
 	if err != nil || !refresh {
 		return err
 	}
-	// 记下旋转开始时的认证代际：合并时若代际已推进，说明期间有续签提交，
-	// 旧旋转结果作废，哪怕续签保留了同一个绑定会话 ID
-	generation := lease.AuthGeneration()
+	// 状态与代际从同一账户操作快照读取；若旋转期间有续签提交，合并时会拒绝旧结果，
+	// 即使新状态保留了同一个绑定会话 ID
 	headers, err := refresher.rotate(ctx, state, extension, account.EffectiveProxy(refresher.globalProxy))
 	if errors.Is(err, chromeauth.ErrBoundSessionRejected) {
 		return errors.Join(camoufoxnative.ErrAuthenticationRequired, err)

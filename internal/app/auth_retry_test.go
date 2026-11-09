@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
@@ -70,5 +71,69 @@ func TestAuthRefreshWithoutExtension(t *testing.T) {
 	}
 	if kept, exists, _ := login.AuthExtension(); !exists || kept.OAuth == nil || kept.OAuth.RefreshToken != "token" {
 		t.Fatalf("重新登录丢失续签扩展: %+v", kept)
+	}
+}
+
+// TestEnsureBoundRejectsRotationAfterAuthGenerationAdvances 验证认证代际推进时，旧 DBSC 旋转 Cookie 不会被合并或推给 Worker
+func TestEnsureBoundRejectsRotationAfterAuthGenerationAdvances(t *testing.T) {
+	const accountID = "user@example.com"
+	const refreshURL = "https://accounts.google.com/RotateBoundSession"
+	directory := t.TempDir()
+	storage := filepath.Join(directory, "storage-state.json")
+	newState := func(value string, expires time.Time) aistudio.StorageState {
+		state := aistudio.StorageState{Cookies: []aistudio.StateCookie{{
+			Name: "SIDCC", Value: value, Domain: ".google.com", Path: "/", Expires: float64(expires.Unix()), Secure: true,
+		}}}
+		state.SetAuthExtension(aistudio.AuthExtension{
+			Source: aistudio.AuthSource{Browser: "chrome", Email: accountID},
+			Bound:  &aistudio.BoundSession{ID: "same-session", RefreshURL: refreshURL, Credentials: []string{"SIDCC"}},
+		})
+		return state
+	}
+	initial := newState("old", time.Now().Add(time.Minute))
+	if err := aistudio.WriteStorageState(storage, initial); err != nil {
+		t.Fatal(err)
+	}
+	account := &aistudio.Account{
+		ID: accountID, Directory: directory, StoragePath: storage, StorageState: initial,
+		Config: aistudio.DefaultAccountConfig(accountID),
+	}
+	pool := aistudio.NewAccountPool([]*aistudio.Account{account}, 1)
+	lease, err := pool.AcquireAccount(t.Context(), accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+
+	workerMerged := false
+	refresher := &authRuntimeRefresher{
+		pool: pool,
+		rotate: func(_ context.Context, state aistudio.StorageState, _ aistudio.AuthExtension, _ string) ([]string, error) {
+			if len(state.Cookies) != 1 || state.Cookies[0].Value != "old" {
+				t.Fatalf("旋转应使用快照中的旧状态，得到 %+v", state.Cookies)
+			}
+			if err := lease.SaveStorageState(newState("new", time.Now().Add(time.Hour))); err != nil {
+				t.Errorf("并发保存新认证状态: %v", err)
+			}
+			return []string{"SIDCC=stale-rotated; Domain=.google.com; Path=/; Secure"}, nil
+		},
+		mergeWorker: func(context.Context, string, []string, string) error {
+			workerMerged = true
+			return nil
+		},
+	}
+	ctx := aistudio.ContextWithAccountLease(t.Context(), lease)
+	if err := refresher.ensureBound(ctx); err != nil {
+		t.Fatalf("并发续签后应丢弃旧旋转结果而不报错: %v", err)
+	}
+	stored, err := aistudio.LoadStorageState(storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Cookies) != 1 || stored.Cookies[0].Value != "new" {
+		t.Fatalf("旧 DBSC Cookie 覆盖了并发续签状态: %+v", stored.Cookies)
+	}
+	if workerMerged {
+		t.Fatal("旧 DBSC Cookie 不应推送到 Worker 页面")
 	}
 }

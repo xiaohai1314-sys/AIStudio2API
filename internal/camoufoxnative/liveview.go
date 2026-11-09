@@ -173,22 +173,25 @@ func (view *LiveView) Serve(ctx context.Context, connection *websocket.Conn) err
 	signal(viewer.wake)
 	signal(view.capture)
 	received := make(chan error, 1)
-	paniclog.Go("liveview.go:174", func() {
-		func() {
-			// panic 时也要回送结果：调用方对 received 的读取没有其他兜底
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					received <- fmt.Errorf("登录窗口接收 panic: %v", recovered)
-					panic(recovered)
-				}
-			}()
-			received <- view.receive(connection)
-			cancel()
-		}()
-	})
+	startLiveViewReceiver(cancel, received, func() error { return view.receive(connection) })
 	err := view.push(ctx, connection, viewer)
 	_ = connection.Close()
 	return errors.Join(err, <-received)
+}
+
+func startLiveViewReceiver(cancel context.CancelFunc, received chan<- error, receive func() error) {
+	paniclog.Go("liveview.go:174", func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				cancel()
+				// panic 时也要回送结果：调用方对 received 的读取没有其他兜底
+				received <- fmt.Errorf("登录窗口接收 panic: %v", recovered)
+				panic(recovered)
+			}
+		}()
+		received <- receive()
+		cancel()
+	})
 }
 
 // receive 读取登录窗口的输入与对话框选择，直到连接出错
