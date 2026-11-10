@@ -1461,12 +1461,13 @@ func legacyFunctionCall(call aistudio.FunctionCall) map[string]any {
 
 // contentFilterFinishReason 判断上游结束原因是否为未知编号，未知编号按官网默认的 Content blocked 处理
 func contentFilterFinishReason(reason string) bool {
-	switch reason {
-	case "safety", "recitation", "blocklist", "prohibited_content", "spii",
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch normalized {
+	case "safety", "content_filter", "blocked", "recitation", "blocklist", "prohibited_content", "spii",
 		"image_safety", "image_prohibited_content", "image_recitation":
 		return true
 	}
-	return strings.HasPrefix(reason, "provider_")
+	return strings.HasPrefix(normalized, "provider_")
 }
 
 // openAIToolCallItem 把函数调用投影为 Chat tool_calls 项，custom 工具使用 custom 形状

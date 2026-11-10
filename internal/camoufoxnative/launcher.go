@@ -563,6 +563,8 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 		"extensions.webextensions.remote": false,
 		// network.process.enabled 为 false 时网络在主进程运行，不单独启动 socket 进程
 		"network.process.enabled": false,
+		// network.http.http2.ping-threshold 为 HTTP/2 连接没有收到数据多少秒后发送 PING 探测连接是否失效
+		"network.http.http2.ping-threshold": 10,
 		// media.rdd-process.enabled 与 media.utility-process.enabled 为 false 时不单独启动 rdd 与媒体 utility 进程
 		"media.rdd-process.enabled":     false,
 		"media.utility-process.enabled": false,
@@ -575,6 +577,10 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 		"media.peerconnection.ice.no_host":              true,
 		"media.peerconnection.ice.default_address_only": true,
 		"network.dns.disableIPv6":                       true,
+		// media.sanity-test.disabled 为 true 时全新 profile 启动跳过图形自检窗口
+		"media.sanity-test.disabled": true,
+		// browser.opaqueResponseBlocking.javascriptValidator 为 false 时不单独启动校验不透明响应的 JS 校验 utility 进程
+		"browser.opaqueResponseBlocking.javascriptValidator": false,
 	}
 	proxyValue = strings.TrimSpace(proxyValue)
 	if proxyValue == "" {

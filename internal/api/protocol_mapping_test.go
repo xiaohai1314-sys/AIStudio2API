@@ -54,9 +54,12 @@ func TestAnthropicStop(t *testing.T) {
 		wantSeq  *string
 	}{
 		{reason: "max_tokens", want: "max_tokens"},
+		{reason: "max_output_tokens", want: "max_tokens"},
+		{reason: " length ", want: "max_tokens"},
 		{reason: "continuation", want: "max_tokens"},
 		{reason: "compaction", want: "compaction"},
 		{reason: "safety", want: "refusal"},
+		{reason: "BLOCKLIST", want: "refusal"},
 		{reason: "", hasTools: true, want: "tool_use"},
 		{reason: "", want: "end_turn"},
 		{reason: "stop_sequence", sequence: "\n\n", want: "stop_sequence", wantSeq: pointerTo("\n\n")},

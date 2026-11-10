@@ -37,6 +37,16 @@ type runtimeAdmin struct {
 	config      config.Config
 	proxies     *aistudio.ProxyPool
 	globalProxy string
+
+	transitionMu sync.Mutex
+	// transitions 是各账户进行中的启停后台收尾
+	transitions map[string]*accountTransition
+}
+
+// accountTransition 是一次进行中的账户启停后台收尾
+type accountTransition struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 type adminOperationError struct {
@@ -396,10 +406,13 @@ func cookieAccountEntries(template api.CookieBrowser, accounts []chromeauth.Cook
 	return entries
 }
 
-// accountIDs 返回已导入账户的小写 ID
+// accountIDs 返回已导入且不需要重新登录的账户小写 ID
 func (admin *runtimeAdmin) accountIDs() map[string]struct{} {
 	existing := make(map[string]struct{})
 	for _, status := range admin.pool.Status() {
+		if status.State == aistudio.AccountAuthRequired {
+			continue
+		}
 		existing[strings.ToLower(strings.TrimSpace(status.ID))] = struct{}{}
 	}
 	return existing
@@ -452,7 +465,7 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 	}
 	accounts := make([]api.AdminAccount, 0, len(results))
 	for index, result := range results {
-		account, err := admin.addAccount(ctx, configs[index], result.State, "")
+		account, err := admin.upsertAccount(ctx, configs[index], result.State, "")
 		if err != nil {
 			return nil, err
 		}
@@ -503,11 +516,16 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	} else if exists && strings.TrimSpace(extension.Source.Email) != "" {
 		email = extension.Source.Email
 	}
+	existingID := ""
 	for _, status := range admin.pool.Status() {
 		if strings.EqualFold(status.ID, strings.TrimSpace(email)) {
-			return api.AdminAccount{}, &adminOperationError{
-				status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + status.ID,
+			if input.RenewalToken != "" {
+				return api.AdminAccount{}, &adminOperationError{
+					status: http.StatusConflict, code: "account_exists", message: "账户已存在: " + status.ID,
+				}
 			}
+			existingID = status.ID
+			break
 		}
 	}
 	fingerprintDirectory := ""
@@ -522,7 +540,12 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 		}
 		fingerprintDirectory = directory
 	}
-	account, err := admin.addAccount(ctx, accountConfig, input.StorageState, fingerprintDirectory)
+	var account api.AdminAccount
+	if existingID != "" {
+		account, err = admin.updateImportedAccount(ctx, existingID, accountConfig.AuthUser, input.StorageState, fingerprintDirectory)
+	} else {
+		account, err = admin.addAccount(ctx, accountConfig, input.StorageState, fingerprintDirectory)
+	}
 	if err != nil {
 		return api.AdminAccount{}, err
 	}
@@ -533,6 +556,56 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	}
 	admin.requests.log("auth", "INFO", "认证状态账户已导入 | 账户="+account.Label)
 	return account, nil
+}
+
+// upsertAccount 新增账户，若同名账户已存在则就地更新其认证状态并保留运行态资源绑定
+func (admin *runtimeAdmin) upsertAccount(
+	ctx context.Context,
+	accountConfig aistudio.AccountConfig,
+	state aistudio.StorageState,
+	fingerprintDirectory string,
+) (api.AdminAccount, error) {
+	for _, status := range admin.pool.Status() {
+		if strings.EqualFold(status.ID, strings.TrimSpace(accountConfig.Label)) {
+			return admin.updateImportedAccount(ctx, status.ID, accountConfig.AuthUser, state, fingerprintDirectory)
+		}
+	}
+	return admin.addAccount(ctx, accountConfig, state, fingerprintDirectory)
+}
+
+// updateImportedAccount 就地替换已有账户的 Cookie、认证材料与会话序号，保留 runtime-state.json 中的文件资源绑定与模型资格
+func (admin *runtimeAdmin) updateImportedAccount(
+	ctx context.Context,
+	accountID string,
+	authUser int,
+	state aistudio.StorageState,
+	fingerprintDirectory string,
+) (api.AdminAccount, error) {
+	admin.cancelTransition(accountID)
+	lease, err := admin.pool.AcquireAccount(ctx, accountID)
+	if err != nil {
+		return api.AdminAccount{}, accountOperationError(err)
+	}
+	account := lease.Account()
+	if err := admin.workers.Reset(account.ID); err != nil {
+		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	}
+	if err := replaceAccountState(lease, state, fingerprintDirectory); err != nil {
+		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	}
+	if err := setCookieAuthUser(lease, authUser, admin.workers.prepareUpdate); err != nil {
+		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	}
+	if err := admin.service.changeModels(func() error {
+		return admin.pool.MarkReady(account.ID)
+	}); err != nil {
+		return api.AdminAccount{}, errors.Join(err, lease.Release())
+	}
+	if err := lease.Release(); err != nil {
+		return api.AdminAccount{}, err
+	}
+	admin.syncAccountModelCatalog(ctx, account)
+	return admin.account(account.ID)
 }
 
 func (admin *runtimeAdmin) addAccount(
@@ -593,6 +666,15 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	if err := accountConfig.Validate(); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
+	current, err := admin.account(accountID)
+	if err != nil {
+		return api.AdminAccount{}, err
+	}
+	if current.Enabled != accountConfig.Enabled && current.Proxy == accountConfig.Proxy &&
+		current.Locale == accountConfig.Locale && current.Timezone == accountConfig.Timezone {
+		return admin.setAccountEnabled(accountID, accountConfig.Enabled)
+	}
+	admin.cancelTransition(accountID)
 	lease, err := admin.pool.AcquireAccount(ctx, accountID)
 	if err != nil {
 		return api.AdminAccount{}, accountOperationError(err)
@@ -628,7 +710,92 @@ func (admin *runtimeAdmin) UpdateAccount(ctx context.Context, accountID string, 
 	return admin.account(account.ID)
 }
 
+// setAccountEnabled 立即保存账户启用状态并返回，等待在途请求、关闭 Worker 与同步模型目录转入后台，阶段显示在账户状态上
+func (admin *runtimeAdmin) setAccountEnabled(accountID string, enabled bool) (api.AdminAccount, error) {
+	admin.cancelTransition(accountID)
+	var account *aistudio.Account
+	if err := admin.service.changeModels(func() (err error) {
+		account, err = admin.pool.SetEnabled(accountID, enabled)
+		return err
+	}); err != nil {
+		return api.AdminAccount{}, accountOperationError(err)
+	}
+	stage := aistudio.AccountDraining
+	if enabled {
+		stage = aistudio.AccountSyncing
+	}
+	admin.pool.SetTransition(accountID, stage)
+	ctx, cancel := context.WithCancel(admin.lifecycle)
+	transition := &accountTransition{cancel: cancel, done: make(chan struct{})}
+	admin.transitionMu.Lock()
+	if admin.transitions == nil {
+		admin.transitions = make(map[string]*accountTransition)
+	}
+	admin.transitions[accountID] = transition
+	admin.transitionMu.Unlock()
+	go func() {
+		defer close(transition.done)
+		defer cancel()
+		if enabled {
+			admin.finishEnable(ctx, account)
+		} else {
+			admin.finishDisable(ctx, account)
+		}
+		admin.pool.SetTransition(accountID, "")
+		admin.transitionMu.Lock()
+		if admin.transitions[accountID] == transition {
+			delete(admin.transitions, accountID)
+		}
+		admin.transitionMu.Unlock()
+		status, _ := admin.Status(admin.lifecycle)
+		admin.publishRuntimeSnapshot(admin.lifecycle, status)
+	}()
+	admin.requests.log("auth", "INFO", "账户配置已更新 | 账户="+account.Config.Label)
+	status, _ := admin.Status(admin.lifecycle)
+	admin.publishRuntimeSnapshot(admin.lifecycle, status)
+	return admin.account(accountID)
+}
+
+// finishDisable 等账户在途请求结束后关闭 Worker 并刷新目录
+func (admin *runtimeAdmin) finishDisable(ctx context.Context, account *aistudio.Account) {
+	lease, err := admin.pool.AcquireAccount(ctx, account.ID)
+	if err != nil {
+		if ctx.Err() == nil {
+			admin.requests.log("auth", "ERROR", fmt.Sprintf("账户停用收尾失败 | 账户=%s | 错误=%v", account.ID, err))
+		}
+		return
+	}
+	if err := errors.Join(admin.workers.Reset(account.ID), lease.Release()); err != nil {
+		admin.requests.log("auth", "ERROR", fmt.Sprintf("账户停用收尾失败 | 账户=%s | 错误=%v", account.ID, err))
+	}
+	admin.syncModelCache()
+}
+
+// finishEnable 为启用的账户分配代理池出口、刷新目录并同步账户模型目录
+func (admin *runtimeAdmin) finishEnable(ctx context.Context, account *aistudio.Account) {
+	if strings.TrimSpace(account.Config.Proxy) == "" && !admin.proxies.Available(account.PoolProxy("")) {
+		account.SetPoolProxy(admin.proxies.Next())
+	}
+	if _, err := admin.proxies.Assign(); err != nil {
+		admin.requests.log("auth", "ERROR", fmt.Sprintf("账户启用收尾失败 | 账户=%s | 错误=%v", account.ID, err))
+	}
+	admin.syncModelCache()
+	admin.syncAccountModelCatalog(ctx, account)
+}
+
+// cancelTransition 取消账户进行中的启停后台收尾并等待它结束
+func (admin *runtimeAdmin) cancelTransition(accountID string) {
+	admin.transitionMu.Lock()
+	transition := admin.transitions[accountID]
+	admin.transitionMu.Unlock()
+	if transition != nil {
+		transition.cancel()
+		<-transition.done
+	}
+}
+
 func (admin *runtimeAdmin) DeleteAccount(ctx context.Context, accountID string) error {
+	admin.cancelTransition(accountID)
 	account, err := admin.account(accountID)
 	if err != nil {
 		return err
@@ -704,17 +871,10 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	if _, err := aistudio.NewSigner().Authorization(result.StorageState); err != nil {
 		return api.AdminAccount{}, errors.Join(fmt.Errorf("认证状态无法用于 AI Studio: %w", err), lease.Release())
 	}
-	if err := camoufoxnative.PersistAccountFingerprint(directory, account.Directory); err != nil {
+	if err := replaceAccountState(lease, result.StorageState, directory); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
-	state := result.StorageState
-	if err := keepAuthExtension(&state, account.StorageState); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	if err := lease.SaveStorageState(state); err != nil {
-		return api.AdminAccount{}, errors.Join(err, lease.Release())
-	}
-	if err := resetCookieAuthUser(lease, admin.workers.prepareUpdate); err != nil {
+	if err := setCookieAuthUser(lease, 0, admin.workers.prepareUpdate); err != nil {
 		return api.AdminAccount{}, errors.Join(err, lease.Release())
 	}
 	if err := admin.service.changeModels(func() error {
@@ -737,14 +897,28 @@ func (admin *runtimeAdmin) LoginAccount(ctx context.Context, accountID string, v
 	return admin.account(account.ID)
 }
 
-// resetCookieAuthUser 在账户认证状态换成单账号 Cookie 后把会话序号归零并同步到 Worker
-func resetCookieAuthUser(lease *aistudio.AccountLease, prepare func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)) error {
+// replaceAccountState 以新登录状态替换账户的认证状态并沿用账户已有的续签材料，fingerprintDirectory 非空时一并替换 Camoufox 指纹
+func replaceAccountState(lease *aistudio.AccountLease, state aistudio.StorageState, fingerprintDirectory string) error {
 	account := lease.Account()
-	if account.Config.AuthUser == 0 {
+	if fingerprintDirectory != "" {
+		if err := camoufoxnative.PersistAccountFingerprint(fingerprintDirectory, account.Directory); err != nil {
+			return err
+		}
+	}
+	if err := keepAuthExtension(&state, account.StorageState); err != nil {
+		return err
+	}
+	return lease.SaveStorageState(state)
+}
+
+// setCookieAuthUser 把账户 Cookie 的会话序号改为 authUser 并同步到 Worker
+func setCookieAuthUser(lease *aistudio.AccountLease, authUser int, prepare func(*aistudio.Account, aistudio.AccountConfig) (*accountWorkerUpdate, error)) error {
+	account := lease.Account()
+	if account.Config.AuthUser == authUser {
 		return nil
 	}
 	accountConfig := account.Config
-	accountConfig.AuthUser = 0
+	accountConfig.AuthUser = authUser
 	workerUpdate, err := prepare(account, accountConfig)
 	if err != nil {
 		return err
@@ -964,6 +1138,7 @@ func adminAccountDTO(status aistudio.AccountStatus) api.AdminAccount {
 		Models: status.Models, BenefitTier: status.BenefitTier, Message: status.Message,
 		Warnings: adminWarnings(warnings), Risk: adminAccountRisk(status.Risk),
 		PairingRenewedAt: pairingRenewedAt(status.Directory),
+		Transition:       string(status.Transition), ActiveRequests: status.ActiveRequests,
 	}
 }
 
@@ -1054,42 +1229,53 @@ func (admin *runtimeAdmin) UpdateRuntimeConfig(_ context.Context, value api.Runt
 	if err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(fmt.Errorf("UNARY_RPC_TIMEOUT 无效: %w", err))
 	}
-	cfg := config.Config{
-		AutoStart:        value.AutoStart,
-		HideDockIcon:     value.HideDockIcon,
-		RequestBodyLog:   value.RequestBodyLog,
-		AuthFailurePause: saved.AuthFailurePause,
-		LogFile:          value.LogFile, LogMaxTotalMB: value.LogMaxTotalMB,
-		AdminAuthEnabled: value.AdminAuthEnabled, AdminUsername: strings.TrimSpace(value.AdminUsername), AdminPassword: password, EncryptCredentials: saved.EncryptCredentials, CredentialsKeyFile: saved.CredentialsKeyFile, CredentialsKey: append([]byte(nil), saved.CredentialsKey...), TrustedProxyCIDRs: saved.TrustedProxyCIDRs,
-		BuildNativeNonstream: value.BuildNativeNonstream,
-		NonstreamKeepalive:   value.NonstreamKeepalive, FakeStream: value.FakeStream, YouTubeLinks: value.YouTubeLinks,
-		SearchModelAliases: value.SearchModelAliases, GoogleSearch: value.GoogleSearch, StripThoughtSignatures: value.StripThoughtSignatures,
-		ContinuationRewrite: value.ContinuationRewrite, ContinuationPrompt: strings.TrimSpace(value.ContinuationPrompt),
-		FirstEventHedge: strings.ToLower(strings.TrimSpace(value.FirstEventHedge)), FirstEventHedgeModels: strings.TrimSpace(value.FirstEventHedgeModels), AuthStates: value.AuthStates, ListenAddr: value.ListenAddr, PreviewListenAddr: value.PreviewListenAddr,
-		PProfAddr: saved.PProfAddr, GeoIPDBPath: saved.GeoIPDBPath,
-		ProxyAPIKey: value.APIKey, PublicRateLimit: saved.PublicRateLimit, PublicRateBurst: saved.PublicRateBurst, Proxy: value.Proxy, InitTimeout: initTimeout, RequestTimeout: requestTimeout,
-		UnaryRPCTimeout: unaryRPCTimeout,
-		WarmWorkerLimit: value.WarmWorkerLimit, MaxActiveWorkers: value.MaxActiveWorkers,
-		WarmStartupConcurrency: value.WarmStartupConcurrency,
-		PerAccountConcurrency:  value.PerAccountConcurrency,
-		MaxAccountsPerProxy:    value.MaxAccountsPerProxy,
-		MaxConcurrencyPerProxy: value.MaxConcurrencyPerProxy,
-		AccountRateLimit:       saved.AccountRateLimit,
-		AccountRateJitter:      saved.AccountRateJitter,
-		EnvironmentBinding:     saved.EnvironmentBinding,
-		RoutingStrategy:        value.RoutingStrategy,
-		AccountOrder:           strings.TrimSpace(value.AccountOrder),
-		UpstreamChannels:       value.UpstreamChannels,
-		ModelMapping:           strings.TrimSpace(value.ModelMapping),
-		ModelChannels:          strings.TrimSpace(value.ModelChannels),
-		ModelAccounts:          strings.TrimSpace(value.ModelAccounts),
-		APIKeyAccounts:         strings.TrimSpace(value.APIKeyAccounts),
-		APIKeyRateLimits:       strings.TrimSpace(value.APIKeyRateLimits),
-		TemporaryChat:          value.TemporaryChat,
-		WAABackend:             value.WAABackend,
-		MediaOutput:            strings.ToLower(strings.TrimSpace(value.MediaOutput)),
-		MediaBaseURL:           strings.TrimSpace(value.MediaBaseURL),
-	}.KeepEnvironment(saved)
+	cfg := saved
+	cfg.AutoStart = value.AutoStart
+	cfg.HideDockIcon = value.HideDockIcon
+	cfg.RequestBodyLog = value.RequestBodyLog
+	cfg.AdminAuthEnabled = value.AdminAuthEnabled
+	cfg.AdminUsername = value.AdminUsername
+	cfg.AdminPassword = password
+	cfg.LogFile = value.LogFile
+	cfg.LogMaxTotalMB = value.LogMaxTotalMB
+	cfg.BuildNativeNonstream = value.BuildNativeNonstream
+	cfg.NonstreamKeepalive = value.NonstreamKeepalive
+	cfg.FakeStream = value.FakeStream
+	cfg.YouTubeLinks = value.YouTubeLinks
+	cfg.StripThoughtSignatures = value.StripThoughtSignatures
+	cfg.SearchModelAliases = value.SearchModelAliases
+	cfg.GoogleSearch = value.GoogleSearch
+	cfg.FirstEventHedge = strings.ToLower(strings.TrimSpace(value.FirstEventHedge))
+	cfg.FirstEventHedgeModels = strings.TrimSpace(value.FirstEventHedgeModels)
+	cfg.ContinuationRewrite = value.ContinuationRewrite
+	cfg.ContinuationPrompt = strings.TrimSpace(value.ContinuationPrompt)
+	cfg.AuthStates = value.AuthStates
+	cfg.ListenAddr = value.ListenAddr
+	cfg.ProxyAPIKey = value.APIKey
+	cfg.PreviewListenAddr = value.PreviewListenAddr
+	cfg.Proxy = value.Proxy
+	cfg.InitTimeout = initTimeout
+	cfg.RequestTimeout = requestTimeout
+	cfg.UnaryRPCTimeout = unaryRPCTimeout
+	cfg.WarmWorkerLimit = value.WarmWorkerLimit
+	cfg.MaxActiveWorkers = value.MaxActiveWorkers
+	cfg.WarmStartupConcurrency = value.WarmStartupConcurrency
+	cfg.PerAccountConcurrency = value.PerAccountConcurrency
+	cfg.MaxAccountsPerProxy = value.MaxAccountsPerProxy
+	cfg.MaxConcurrencyPerProxy = value.MaxConcurrencyPerProxy
+	cfg.RoutingStrategy = value.RoutingStrategy
+	cfg.AccountOrder = strings.TrimSpace(value.AccountOrder)
+	cfg.UpstreamChannels = value.UpstreamChannels
+	cfg.ModelMapping = strings.TrimSpace(value.ModelMapping)
+	cfg.ModelChannels = strings.TrimSpace(value.ModelChannels)
+	cfg.ModelAccounts = strings.TrimSpace(value.ModelAccounts)
+	cfg.APIKeyAccounts = strings.TrimSpace(value.APIKeyAccounts)
+	cfg.APIKeyRateLimits = strings.TrimSpace(value.APIKeyRateLimits)
+	cfg.TemporaryChat = value.TemporaryChat
+	cfg.WAABackend = value.WAABackend
+	cfg.MediaOutput = strings.ToLower(strings.TrimSpace(value.MediaOutput))
+	cfg.MediaBaseURL = strings.TrimSpace(value.MediaBaseURL)
+	cfg = cfg.KeepEnvironment(saved)
 	if err := cfg.Validate(); err != nil {
 		return api.RuntimeConfig{}, invalidConfigError(err)
 	}

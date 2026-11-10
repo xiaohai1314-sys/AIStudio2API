@@ -2192,7 +2192,7 @@ func (service *trackedService) runAttempt(
 			UploadInlineMediaToLease(context.Context, *aistudio.AccountLease, []aistudio.Content, *aistudio.TemporaryFileCopies, bool) ([]aistudio.Content, *aistudio.TemporaryFileCopies, error)
 		}).UploadInlineMediaToLease(ctx, lease, request.Contents, attempt.copies, inlineImages)
 		if err == nil {
-			service.requests.log(accountLabel, "INFO", fmt.Sprintf(
+			service.requests.logRequestProgress(request.ID, accountLabel, "INFO", fmt.Sprintf(
 				"内联附件处理完成 | 附件=%d | 原始=%dB | 耗时=%s",
 				mediaCount, mediaBytes, time.Since(uploadStartedAt).Round(time.Millisecond),
 			))
@@ -2281,6 +2281,25 @@ func (service *trackedService) bindEnvironment(attempt *generateAttempt) {
 		return
 	}
 	_ = service.pool.BindEnvironment(account.ID, attempt.egress, digest)
+}
+
+// quotaCooldownError 是带账户冷却恢复时刻的额度失败
+type quotaCooldownError struct {
+	err   error
+	until time.Time
+}
+
+func (err *quotaCooldownError) Error() string {
+	return err.err.Error()
+}
+
+func (err *quotaCooldownError) Unwrap() error {
+	return err.err
+}
+
+// RetryAt 返回账户冷却的恢复时刻
+func (err *quotaCooldownError) RetryAt(time.Time) time.Time {
+	return err.until
 }
 
 // settleAttempt 处理失败的尝试：记录访问日志与冷却，释放租约，mayRecover 为真时按需重建 Worker
@@ -2383,6 +2402,7 @@ func (service *trackedService) settleAttempt(
 			retryable = false
 		} else {
 			if !until.IsZero() {
+				err = &quotaCooldownError{err: err, until: until}
 				service.requests.logRequestProgress(requestID, accountLabel, "WARN", fmt.Sprintf(
 					"账号冷却 | 类型=%s | 范围=%s | 恢复=%s",
 					cooldown.Kind, scopeLabel, until.Local().Format(time.RFC3339),

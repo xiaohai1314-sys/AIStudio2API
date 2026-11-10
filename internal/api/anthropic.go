@@ -1109,15 +1109,21 @@ func (collector *anthropicBlockCollector) collect(eventType string, payload any)
 }
 
 func anthropicStop(reason string, hasTools bool, stopSequence string) (string, *string) {
-	switch reason {
-	case "max_tokens", "continuation":
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch normalized {
+	case "max_tokens", "max_output_tokens", "length", "continuation":
 		return "max_tokens", nil
 	case "stop_sequence":
-		return "stop_sequence", &stopSequence
+		if stopSequence != "" {
+			return "stop_sequence", &stopSequence
+		}
+		return "stop_sequence", nil
+	case "pause_turn":
+		return "pause_turn", nil
 	case "compaction":
 		return "compaction", nil
 	default:
-		if contentFilterFinishReason(reason) {
+		if contentFilterFinishReason(normalized) {
 			return "refusal", nil
 		}
 		if hasTools {
