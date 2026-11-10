@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // GenerateTurn 是在页面界面运行的一轮 GenerateContent：Body 第 ProofStart 到 ProofEnd 字节是 proof 字段，发送时换成页面应用为 Digest 取得的 proof；Digest 为 binding 的 SHA-256 十六进制
@@ -537,24 +539,28 @@ func (worker *Worker) releaseChat(tab *chatTab, completed bool) {
 		worker.finishRequest(tab.contextID)
 		return
 	}
-	go worker.resetChat(tab)
+	paniclog.Go("camoufoxnative/generate.go:resetChat", func() { worker.resetChat(tab) })
 }
 
 // resetChat 像官网用户开始新话题一样在标签页上点 New chat 并丢弃当前对话，结束后标签页变为空闲
 func (worker *Worker) resetChat(tab *chatTab) {
+	err := errors.New("新开对话 panic")
+	// 收尾放在 defer 中，clearChat panic 时标签页同样回到空闲并唤醒等待 resetting 的请求
+	defer func() {
+		worker.mu.Lock()
+		closed := worker.closed
+		tab.busy = false
+		close(tab.resetting)
+		tab.resetting = nil
+		worker.mu.Unlock()
+		worker.finishRequest(tab.contextID)
+		if err != nil && !closed {
+			slog.Warn("Camoufox 标签页新开对话失败", "context", tab.contextID, "error", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := worker.clearChat(ctx, tab)
-	cancel()
-	worker.mu.Lock()
-	closed := worker.closed
-	tab.busy = false
-	close(tab.resetting)
-	tab.resetting = nil
-	worker.mu.Unlock()
-	worker.finishRequest(tab.contextID)
-	if err != nil && !closed {
-		slog.Warn("Camoufox 标签页新开对话失败", "context", tab.contextID, "error", err)
-	}
+	defer cancel()
+	err = worker.clearChat(ctx, tab)
 }
 
 // clearChat 在标签页上等上一轮生成结束、关闭已知弹层后点 New chat，随后把指针移到 Run 按钮上

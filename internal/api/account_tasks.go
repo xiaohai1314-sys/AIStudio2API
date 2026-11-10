@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // AccountTask 是在服务端运行的添加或重新登录账户任务，管理页关闭或刷新后继续运行，结束后保留到用户关闭
@@ -99,8 +100,15 @@ func (tasks *accountTasks) start(r *http.Request, task AccountTask, run func(con
 			tasks.publishLocked()
 		}
 	}
-	go func() {
+	paniclog.Go("account_tasks.go:run", func() {
 		defer cancel()
+		finished := false
+		// run panic 时把任务标为失败，避免前端一直显示进行中
+		defer func() {
+			if !finished {
+				update(func(task *AccountTask) { task.State = "failed" })
+			}
+		}()
 		run(ctx, update)
 		update(func(task *AccountTask) {
 			task.State = "done"
@@ -108,7 +116,8 @@ func (tasks *accountTasks) start(r *http.Request, task AccountTask, run func(con
 				task.State = "failed"
 			}
 		})
-	}()
+		finished = true
+	})
 	return task
 }
 

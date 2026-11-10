@@ -146,14 +146,14 @@ func (s *server) handleInteraction(w http.ResponseWriter, r *http.Request) {
 	if request.Background {
 		if request.Stream {
 			following.Add(1)
-			go func() {
+			paniclog.Go("interactions.go:followBackground", func() {
 				defer following.Done()
 				out, err := openStream(w, sseHeartbeat)
 				defer out.stop()
 				if err == nil {
 					_ = request.stream.follow(client, out, -1)
 				}
-			}()
+			})
 		}
 		if err := s.streamInteraction(request.stream, r, request, generate, audioExpected, previous, current, created, events); err != nil {
 			writeGeminiRequestError(discardResponseWriter{header: http.Header{}, body: failure}, err)

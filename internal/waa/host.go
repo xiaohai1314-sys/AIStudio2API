@@ -497,11 +497,15 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 		natives["loadFrame"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
 			state.pending.Add(1)
-			go func() {
+			paniclog.Go("host.go:loadFrame", func() {
 				defer state.pending.Done()
-				loaded := state.loadFrame(address)
-				state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
-			}()
+				loaded := false
+				// panic 时仍按加载失败回调脚本，避免页面侧 Promise 永不结算
+				defer func() {
+					state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+				}()
+				loaded = state.loadFrame(address)
+			})
 			return nil
 		}}
 	}

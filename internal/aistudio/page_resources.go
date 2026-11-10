@@ -20,6 +20,8 @@ import (
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // pageResourceKind 是官网文档 HTML 引用、浏览器解析文档时请求的子资源类别
@@ -238,9 +240,9 @@ func (runtime *goWAARuntime) loadPageIcons(ctx context.Context, document pageDoc
 		if icon == "" {
 			continue
 		}
-		go func() {
+		paniclog.Go("page_resources.go:fetchIcon", func() {
 			_ = runtime.fetchCached(context.WithoutCancel(ctx), icon, subresourceHeaders(icon, "image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5", "image", "u=6"))
-		}()
+		})
 	}
 }
 

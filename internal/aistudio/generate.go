@@ -1034,11 +1034,19 @@ func (c *Client) countStopInput(ctx context.Context, request GenerateRequest) (<
 	countRequest := TokenCountRequest{
 		Model: request.Model, System: request.System, Contents: request.Contents, Tools: request.Tools,
 	}
-	go func() {
+	paniclog.Go("generate.go:countStopInput", func() {
+		sent := false
+		// panic 时也补发错误并关闭通道，避免等待方收到零值计数或一直阻塞
+		defer func() {
+			if !sent {
+				results <- tokenCountResult{err: errors.New("stop sequence 输入计数 panic")}
+			}
+			close(results)
+		}()
 		count, err := c.CountTokensForAccount(countContext, request.AccountID, countRequest)
 		results <- tokenCountResult{count: count, err: err}
-		close(results)
-	}()
+		sent = true
+	})
 	return results, cancel
 }
 
