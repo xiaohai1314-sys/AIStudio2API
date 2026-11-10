@@ -733,23 +733,25 @@ func (admin *runtimeAdmin) setAccountEnabled(accountID string, enabled bool) (ap
 	}
 	admin.transitions[accountID] = transition
 	admin.transitionMu.Unlock()
-	go func() {
+	paniclog.Go("admin.go:736", func() {
 		defer close(transition.done)
 		defer cancel()
+		defer func() {
+			admin.pool.SetTransition(accountID, "")
+			admin.transitionMu.Lock()
+			if admin.transitions[accountID] == transition {
+				delete(admin.transitions, accountID)
+			}
+			admin.transitionMu.Unlock()
+			status, _ := admin.Status(admin.lifecycle)
+			admin.publishRuntimeSnapshot(admin.lifecycle, status)
+		}()
 		if enabled {
 			admin.finishEnable(ctx, account)
 		} else {
 			admin.finishDisable(ctx, account)
 		}
-		admin.pool.SetTransition(accountID, "")
-		admin.transitionMu.Lock()
-		if admin.transitions[accountID] == transition {
-			delete(admin.transitions, accountID)
-		}
-		admin.transitionMu.Unlock()
-		status, _ := admin.Status(admin.lifecycle)
-		admin.publishRuntimeSnapshot(admin.lifecycle, status)
-	}()
+	})
 	admin.requests.log("auth", "INFO", "账户配置已更新 | 账户="+account.Config.Label)
 	status, _ := admin.Status(admin.lifecycle)
 	admin.publishRuntimeSnapshot(admin.lifecycle, status)
