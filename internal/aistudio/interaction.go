@@ -932,7 +932,7 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 	}
 	// cancel 在后台以该账户发送 CancelInteraction，调用方仍持有的账户租约释放后才取得请求槽位
 	cancel := func() {
-		go func() {
+		paniclog.Go("interaction.go:cancelInteraction", func() {
 			body, _ := json.Marshal([]any{"interactions/" + id})
 			cancelCtx, stop := context.WithTimeout(context.Background(), interactionCancelTimeout)
 			defer stop()
@@ -943,7 +943,7 @@ func (c *Client) generateInteractionTask(ctx context.Context, request GenerateRe
 			if err != nil {
 				slog.Warn("Deep Research 任务取消失败", "account", accountID, "interaction", id, "error", err)
 			}
-		}()
+		})
 	}
 	streamBody, err := EncodeGetInteractionStreamRequest(id, request.Model)
 	if err != nil {

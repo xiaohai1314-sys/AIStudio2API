@@ -1058,11 +1058,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         class="mb-3 divide-y divide-line/60 rounded-lg border border-line bg-panel"
         :aria-label="t('accounts.tasks')"
       >
-        <li
-          v-for="task in tasks"
-          :key="task.id"
-          class="px-4 py-2.5"
-        >
+        <li v-for="task in tasks" :key="task.id" class="px-4 py-2.5">
           <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div class="flex min-w-0 flex-1 basis-64 items-center gap-2.5">
               <UiIcon
@@ -1213,10 +1209,21 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         >
           <span class="font-medium text-gray-300">{{ t('accounts.riskStats') }}</span>
           <span class="text-orange-300">{{ t('accounts.risk') }} {{ riskTotals.hits }}</span>
-          <span class="text-gray-500">{{ t('accounts.riskChallenge') }} {{ riskTotals.challenge }}</span>
-          <span class="text-gray-500">{{ t('accounts.riskForbidden') }} {{ riskTotals.forbidden }}</span>
-          <span class="text-gray-500">{{ t('accounts.riskRateLimited') }} {{ riskTotals.rateLimited }}</span>
-          <UiIcon name="chevronDown" :size="14" class="ml-auto text-gray-500 transition" :class="{ 'rotate-180': showRiskStats }" />
+          <span class="text-gray-500"
+            >{{ t('accounts.riskChallenge') }} {{ riskTotals.challenge }}</span
+          >
+          <span class="text-gray-500"
+            >{{ t('accounts.riskForbidden') }} {{ riskTotals.forbidden }}</span
+          >
+          <span class="text-gray-500"
+            >{{ t('accounts.riskRateLimited') }} {{ riskTotals.rateLimited }}</span
+          >
+          <UiIcon
+            name="chevronDown"
+            :size="14"
+            class="ml-auto text-gray-500 transition"
+            :class="{ 'rotate-180': showRiskStats }"
+          />
         </button>
         <div v-if="showRiskStats" class="overflow-x-auto border-t border-line/60 px-3 py-2">
           <table class="w-full text-left text-xs whitespace-nowrap">
@@ -1232,20 +1239,42 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="risk in endpointRisks" :key="`${risk.channel}:${risk.model}`" class="border-t border-line/40">
+              <tr
+                v-for="risk in endpointRisks"
+                :key="`${risk.channel}:${risk.model}`"
+                class="border-t border-line/40"
+              >
                 <td class="py-1 pr-3 text-gray-200">{{ risk.model }}</td>
                 <td class="py-1 pr-3 text-gray-500">{{ risk.channel }}</td>
                 <td class="py-1 pr-3 text-gray-400">{{ risk.requests }}</td>
                 <td class="py-1 pr-3 text-green-400">{{ risk.succeeded }}</td>
-                <td class="py-1 pr-3" :class="risk.challenge > 0 ? 'text-orange-300' : 'text-gray-600'">{{ risk.challenge }}</td>
-                <td class="py-1 pr-3" :class="risk.forbidden > 0 ? 'text-orange-300' : 'text-gray-600'">{{ risk.forbidden }}</td>
-                <td class="py-1" :class="risk.rate_limited > 0 ? 'text-orange-300' : 'text-gray-600'">{{ risk.rate_limited }}</td>
+                <td
+                  class="py-1 pr-3"
+                  :class="risk.challenge > 0 ? 'text-orange-300' : 'text-gray-600'"
+                >
+                  {{ risk.challenge }}
+                </td>
+                <td
+                  class="py-1 pr-3"
+                  :class="risk.forbidden > 0 ? 'text-orange-300' : 'text-gray-600'"
+                >
+                  {{ risk.forbidden }}
+                </td>
+                <td
+                  class="py-1"
+                  :class="risk.rate_limited > 0 ? 'text-orange-300' : 'text-gray-600'"
+                >
+                  {{ risk.rate_limited }}
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
       </div>
-      <div v-if="error" class="flex items-center gap-2 rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300">
+      <div
+        v-if="error"
+        class="flex items-center gap-2 rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300"
+      >
         <UiIcon name="warning" :size="15" class="shrink-0" />{{ error }}
       </div>
       <div v-else-if="loading" class="py-12 text-center text-gray-500">

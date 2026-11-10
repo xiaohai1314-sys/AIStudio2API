@@ -516,13 +516,12 @@ func startVirtualDisplay() (*exec.Cmd, string, error) {
 	}
 	output := &browserOutput{}
 	drained := make(chan struct{})
-	go func() {
+	paniclog.GoWithDone("launcher.go:xvfbStderr", func() { close(drained) }, func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			output.add(scanner.Text())
 		}
-		close(drained)
-	}()
+	})
 	number, err := bufio.NewReader(reader).ReadString('\n')
 	if err != nil {
 		<-drained
