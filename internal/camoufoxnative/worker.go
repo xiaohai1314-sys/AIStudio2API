@@ -133,8 +133,8 @@ func Start(ctx context.Context, options Options) (*Worker, error) {
 		if _, err := worker.chromeEvaluate(ctx, idleRenderingExpression); err != nil {
 			return nil, fmt.Errorf("停止 Camoufox 标签页绘制: %w", err)
 		}
-		worker.idle = time.AfterFunc(idleMinimizeDelay, worker.minimizeMemory)
-		worker.settle = time.AfterFunc(readyMinimizeDelay, worker.minimizeMemory)
+		worker.idle = time.AfterFunc(idleMinimizeDelay, worker.minimizeMemoryRecovered)
+		worker.settle = time.AfterFunc(readyMinimizeDelay, worker.minimizeMemoryRecovered)
 	}
 	failed = false
 	return worker, nil
@@ -262,6 +262,12 @@ const idleMinimizeDelay = 5 * time.Minute
 
 // readyMinimizeDelay 为无头 Worker 就绪后发出一次 memory-pressure 的延迟，回收浏览器启动与首次载入留下的渲染目标与 GC 垃圾
 const readyMinimizeDelay = 2 * time.Second
+
+// minimizeMemoryRecovered 供 time.AfterFunc 调用，回调里的 panic 只记录不终止进程
+func (worker *Worker) minimizeMemoryRecovered() {
+	defer paniclog.Recover("worker.go:minimizeMemory")
+	worker.minimizeMemory()
+}
 
 // minimizeMemory 在没有进行中的界面操作时发出 memory-pressure heap-minimize，各进程回收 GC 堆与软件 WebRender 的渲染缓存
 func (worker *Worker) minimizeMemory() {

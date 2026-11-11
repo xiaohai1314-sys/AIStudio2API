@@ -2638,7 +2638,10 @@ type roundDeadlineContext struct {
 func newRoundDeadlineContext(parent context.Context, timeout time.Duration) (*roundDeadlineContext, context.CancelFunc) {
 	ctx := &roundDeadlineContext{parent: parent, timeout: timeout, done: make(chan struct{}), deadline: time.Now().Add(timeout)}
 	ctx.mu.Lock()
-	ctx.timer = time.AfterFunc(timeout, func() { ctx.finish(context.DeadlineExceeded) })
+	ctx.timer = time.AfterFunc(timeout, func() {
+		defer paniclog.Recover("runtime.go:roundDeadline")
+		ctx.finish(context.DeadlineExceeded)
+	})
 	ctx.stop = context.AfterFunc(parent, func() { ctx.finish(parent.Err()) })
 	ctx.mu.Unlock()
 	return ctx, func() { ctx.finish(context.Canceled) }

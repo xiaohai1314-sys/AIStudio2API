@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // proxyScoreSaveDelay 是评分变化后延迟落盘的时间，避免每个请求都写文件
@@ -93,7 +95,10 @@ func (p *ProxyPool) scheduleSaveLocked() {
 	if p.scorePath == "" || p.closed || p.saveTimer != nil {
 		return
 	}
-	p.saveTimer = time.AfterFunc(proxyScoreSaveDelay, p.flushScores)
+	p.saveTimer = time.AfterFunc(proxyScoreSaveDelay, func() {
+		defer paniclog.Recover("proxy_score_store.go:flushScores")
+		p.flushScores()
+	})
 }
 
 // flushScores 执行一次延迟保存；保存失败时等下一次评分变化再重试

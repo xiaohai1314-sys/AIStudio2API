@@ -16,7 +16,7 @@ export function gfmLinkify(md: Markdown) {
 }
 
 // markdown 渲染 Markdown 正文，原始 HTML 按文本转义，链接在新标签页打开
-export const markdown = new MarkdownIt({ linkify: true, breaks: true })
+export const markdown = new MarkdownIt({ linkify: true, breaks: true, html: false })
 gfmLinkify(markdown)
 markdown.renderer.rules.link_open = (tokens, index, options, _env, self) => {
   tokens[index]!.attrSet('target', '_blank')
