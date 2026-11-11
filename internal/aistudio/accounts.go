@@ -2007,14 +2007,19 @@ func (l *AccountLease) Retain() func() error {
 	l.operation.Lock()
 	l.holds++
 	l.operation.Unlock()
+	var once sync.Once
+	var err error
 	return func() error {
-		l.operation.Lock()
-		defer l.operation.Unlock()
-		l.holds--
-		if l.holds == 0 && l.releaseDeferred {
-			l.releaseLocked()
-		}
-		return l.err
+		once.Do(func() {
+			l.operation.Lock()
+			defer l.operation.Unlock()
+			l.holds--
+			if l.holds == 0 && l.releaseDeferred {
+				l.releaseLocked()
+			}
+			err = l.err
+		})
+		return err
 	}
 }
 
