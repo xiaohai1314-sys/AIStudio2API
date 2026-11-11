@@ -207,7 +207,8 @@ func pushRenewal(ctx context.Context, client *http.Client, state *renewalState) 
 		} `json:"error"`
 	}
 	failure := fmt.Errorf("远程实例续签失败: HTTP %d", response.StatusCode)
-	if json.NewDecoder(response.Body).Decode(&result) == nil && result.Error.Message != "" {
+	// 错误响应限 8 MiB，足够容纳带长消息的撤销码，又不会被异常响应撑爆内存
+	if json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&result) == nil && result.Error.Message != "" {
 		failure = fmt.Errorf("远程实例续签失败: HTTP %d: %s", response.StatusCode, result.Error.Message)
 	}
 	if result.Error.Code == "pairing_renewal_invalid" || result.Error.Code == "account_not_found" {
