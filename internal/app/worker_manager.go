@@ -280,7 +280,10 @@ func (manager *accountWorkerManager) markRuntimeBusy(account *accountWorker, cau
 			"WAA Worker 账户由其他进程占用 | 暂停调度=%s | 错误=%s", delay, strings.TrimSpace(cause.Error()),
 		))
 	}
-	time.AfterFunc(delay, manager.notifyScheduling)
+	time.AfterFunc(delay, func() {
+		defer paniclog.Recover("worker_manager.go:notifyScheduling")
+		manager.notifyScheduling()
+	})
 	return busyErr
 }
 

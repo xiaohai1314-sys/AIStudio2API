@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // nonstreamKeepaliveInterval 是非流式保活第一次写出和后续间隔。测试可以改短，避免真实等待 10 秒。
@@ -42,7 +44,10 @@ func (s *server) nonstreamKeepalive(w http.ResponseWriter, r *http.Request) (htt
 		interval = streamHeartbeatInterval
 	}
 	writer := &keepaliveWriter{ResponseWriter: w, ctx: r.Context(), interval: interval}
-	writer.timer = time.AfterFunc(interval, writer.beat)
+	writer.timer = time.AfterFunc(interval, func() {
+		defer paniclog.Recover("keepalive.go:nonstreamKeepalive.beat")
+		writer.beat()
+	})
 	return writer, writer.stop
 }
 
@@ -126,7 +131,10 @@ type streamKeepalive struct {
 func keepStreamAlive(w http.ResponseWriter, frame string) *streamKeepalive {
 	writer := &streamKeepalive{ResponseWriter: w, frame: func() string { return frame }}
 	writer.mu.Lock()
-	writer.timer = time.AfterFunc(streamHeartbeatInterval, writer.beat)
+	writer.timer = time.AfterFunc(streamHeartbeatInterval, func() {
+		defer paniclog.Recover("keepalive.go:streamKeepalive.beat")
+		writer.beat()
+	})
 	writer.mu.Unlock()
 	return writer
 }
