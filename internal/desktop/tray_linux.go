@@ -40,7 +40,7 @@ func (s *App) startTray() {
 	slog.Info("桌面环境没有系统托盘，关闭窗口即退出")
 	signals := make(chan *dbus.Signal, 10)
 	conn.Signal(signals)
-	go func() {
+	paniclog.Go("tray_linux.go:watchTray", func() {
 		defer conn.RemoveSignal(signals)
 		for signal := range signals {
 			if signal.Name == "org.freedesktop.DBus.NameOwnerChanged" && len(signal.Body) == 3 && signal.Body[0] == statusNotifierWatcher && signal.Body[2] != "" {
@@ -48,7 +48,7 @@ func (s *App) startTray() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // bindTray 在 Wails 注册的托盘项上接收 StatusNotifierItem 的点击与上下文菜单事件

@@ -378,6 +378,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 // scheduleIncidents 在 at 时刻以官网页面的请求头发出 ListIncidentsHistory，并按 incidentsPollInterval 安排下一次，直到 runtime 关闭
 func (runtime *goWAARuntime) scheduleIncidents(at time.Time, apiKey string, visitID string, extension string) {
 	runtime.incidentsTimer = time.AfterFunc(time.Until(at), func() {
+		defer paniclog.Recover("runtime_go.go:scheduleIncidents")
 		runtime.vmMu.Lock()
 		if runtime.closed {
 			runtime.vmMu.Unlock()
@@ -396,6 +397,7 @@ func (runtime *goWAARuntime) scheduleRefresh() {
 		runtime.refreshTimer.Stop()
 	}
 	runtime.refreshTimer = time.AfterFunc(waaLifetime, func() {
+		defer paniclog.Recover("runtime_go.go:scheduleRefresh")
 		runtime.vmMu.Lock()
 		defer runtime.vmMu.Unlock()
 		if !runtime.closed && !time.Now().Before(runtime.vmExpires) {
@@ -931,9 +933,29 @@ func (runtime *goWAARuntime) refreshVM() *vmRefresh {
 	refresh := &vmRefresh{done: make(chan struct{}), cancel: cancel}
 	runtime.refreshing = refresh
 	previous := runtime.vm
-	go func() {
+	paniclog.Go("runtime_go.go:refreshVM", func() {
+		var err error
+		// 收尾放进 defer：nextVM 或换装新 VM 时 panic 也要清掉 refreshing 并关闭 done，
+		// 否则等 proof 的调用方只能挂到 ctx 超时，之后的刷新也会一直复用这次失效的重建
+		defer func() {
+			recovered := recover()
+			if recovered != nil {
+				err = fmt.Errorf("WAA SpiderMonkey VM 刷新 panic: %v", recovered)
+			}
+			runtime.vmMu.Lock()
+			refresh.err = err
+			if runtime.refreshing == refresh {
+				runtime.refreshing = nil
+			}
+			runtime.vmMu.Unlock()
+			close(refresh.done)
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
 		defer cancel()
-		vm, err := runtime.nextVM(ctx, previous)
+		vm, nextErr := runtime.nextVM(ctx, previous)
+		err = nextErr
 		runtime.vmMu.Lock()
 		defer runtime.vmMu.Unlock()
 		switch {
@@ -949,10 +971,7 @@ func (runtime *goWAARuntime) refreshVM() *vmRefresh {
 			runtime.vm = vm
 			runtime.scheduleRefresh()
 		}
-		refresh.err = err
-		runtime.refreshing = nil
-		close(refresh.done)
-	}()
+	})
 	return refresh
 }
 
@@ -1055,6 +1074,7 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 		companion := request.Clone()
 		companion.Del("Priority")
 		time.AfterFunc(followUp.Delay, func() {
+			defer paniclog.Recover("runtime_go.go:followUp")
 			runtime.drain(runtime.do(context.WithoutCancel(ctx), http.MethodPost, followUp.URL, followUp.Body, companion))
 		})
 	}
