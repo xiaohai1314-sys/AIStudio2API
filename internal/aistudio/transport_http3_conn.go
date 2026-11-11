@@ -156,6 +156,7 @@ func (conn *http3Conn) flushDecoder() error {
 func (conn *http3Conn) scheduleDecoderFlush() {
 	if conn.ackPending.CompareAndSwap(false, true) {
 		time.AfterFunc(time.Millisecond, func() {
+			defer paniclog.Recover("transport_http3_conn.go:scheduleDecoderFlush")
 			conn.ackPending.Store(false)
 			_ = conn.flushDecoder()
 		})

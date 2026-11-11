@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // geminiFilesURIPrefix 为 Files API 文件 URI 的前缀
@@ -151,6 +152,7 @@ func (uploads *geminiUploads) start(session *geminiUploadSession) (string, error
 	}
 	session.expires = time.Now().Add(geminiUploadTTL)
 	session.timer = time.AfterFunc(geminiUploadTTL, func() {
+		defer paniclog.Recover("gemini_files.go:uploadTTL")
 		session.mu.Lock()
 		defer session.mu.Unlock()
 		if !session.done && !time.Now().Before(session.expires) {

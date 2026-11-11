@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/mozjs"
 )
@@ -147,7 +148,10 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 				return nil, errors.New("WAA 事件循环已退出")
 			}
 		}
-		runtime.idle = time.AfterFunc(idleShrinkDelay, func() { loop.post(runtime.agent.cx.ShrinkGC) })
+		runtime.idle = time.AfterFunc(idleShrinkDelay, func() {
+			defer paniclog.Recover("runtime.go:idleShrink")
+			loop.post(runtime.agent.cx.ShrinkGC)
+		})
 		return runtime, nil
 	case <-loop.done:
 		loop.close()

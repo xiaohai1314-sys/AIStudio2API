@@ -92,6 +92,7 @@ func (loop *eventLoop) schedule(delay time.Duration, job func()) {
 	}
 	var timer *time.Timer
 	timer = time.AfterFunc(delay, func() {
+		defer paniclog.Recover("loop.go:setTimeout")
 		loop.mu.Lock()
 		delete(loop.timers, timer)
 		loop.mu.Unlock()
