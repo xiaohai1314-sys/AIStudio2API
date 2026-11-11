@@ -931,9 +931,29 @@ func (runtime *goWAARuntime) refreshVM() *vmRefresh {
 	refresh := &vmRefresh{done: make(chan struct{}), cancel: cancel}
 	runtime.refreshing = refresh
 	previous := runtime.vm
-	go func() {
+	paniclog.Go("runtime_go.go:refreshVM", func() {
+		var err error
+		// 收尾放进 defer：nextVM 或换装新 VM 时 panic 也要清掉 refreshing 并关闭 done，
+		// 否则等 proof 的调用方只能挂到 ctx 超时，之后的刷新也会一直复用这次失效的重建
+		defer func() {
+			recovered := recover()
+			if recovered != nil {
+				err = fmt.Errorf("WAA SpiderMonkey VM 刷新 panic: %v", recovered)
+			}
+			runtime.vmMu.Lock()
+			refresh.err = err
+			if runtime.refreshing == refresh {
+				runtime.refreshing = nil
+			}
+			runtime.vmMu.Unlock()
+			close(refresh.done)
+			if recovered != nil {
+				panic(recovered)
+			}
+		}()
 		defer cancel()
-		vm, err := runtime.nextVM(ctx, previous)
+		vm, nextErr := runtime.nextVM(ctx, previous)
+		err = nextErr
 		runtime.vmMu.Lock()
 		defer runtime.vmMu.Unlock()
 		switch {
@@ -949,10 +969,7 @@ func (runtime *goWAARuntime) refreshVM() *vmRefresh {
 			runtime.vm = vm
 			runtime.scheduleRefresh()
 		}
-		refresh.err = err
-		runtime.refreshing = nil
-		close(refresh.done)
-	}()
+	})
 	return refresh
 }
 
