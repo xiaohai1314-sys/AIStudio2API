@@ -378,6 +378,7 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 // scheduleIncidents 在 at 时刻以官网页面的请求头发出 ListIncidentsHistory，并按 incidentsPollInterval 安排下一次，直到 runtime 关闭
 func (runtime *goWAARuntime) scheduleIncidents(at time.Time, apiKey string, visitID string, extension string) {
 	runtime.incidentsTimer = time.AfterFunc(time.Until(at), func() {
+		defer paniclog.Recover("runtime_go.go:scheduleIncidents")
 		runtime.vmMu.Lock()
 		if runtime.closed {
 			runtime.vmMu.Unlock()
@@ -396,6 +397,7 @@ func (runtime *goWAARuntime) scheduleRefresh() {
 		runtime.refreshTimer.Stop()
 	}
 	runtime.refreshTimer = time.AfterFunc(waaLifetime, func() {
+		defer paniclog.Recover("runtime_go.go:scheduleRefresh")
 		runtime.vmMu.Lock()
 		defer runtime.vmMu.Unlock()
 		if !runtime.closed && !time.Now().Before(runtime.vmExpires) {
@@ -1072,6 +1074,7 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 		companion := request.Clone()
 		companion.Del("Priority")
 		time.AfterFunc(followUp.Delay, func() {
+			defer paniclog.Recover("runtime_go.go:followUp")
 			runtime.drain(runtime.do(context.WithoutCancel(ctx), http.MethodPost, followUp.URL, followUp.Body, companion))
 		})
 	}
