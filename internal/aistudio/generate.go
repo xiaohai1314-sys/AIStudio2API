@@ -1194,6 +1194,8 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		total, _ = config[3].(int64)
 	}
 	var previous *Usage
+	closeRound := func() {}
+	defer func() { closeRound() }()
 	for {
 		decoder := NewFrameDecoder()
 		decoder.continuable = defaults.ContinuedOutputTokens > 0
@@ -1239,6 +1241,7 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		if err != nil {
 			return err
 		}
+		closeRound()
 		response, err := c.doProtected(ctx, request, body)
 		if err != nil {
 			return err
@@ -1246,8 +1249,10 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 		stopClose := context.AfterFunc(ctx, func() {
 			_ = response.Body.Close()
 		})
-		defer stopClose()
-		defer response.Body.Close()
+		closeRound = func() {
+			stopClose()
+			_ = response.Body.Close()
+		}
 		source = observeStreamActivity(ctx, response.Body)
 	}
 }

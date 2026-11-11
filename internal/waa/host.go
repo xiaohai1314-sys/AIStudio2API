@@ -173,7 +173,8 @@ type agent struct {
 	profile         Profile
 	loadImage       func(string) bool
 	loadFrame       func(string) bool
-	pending         *sync.WaitGroup
+	pending         int
+	settled         []chan struct{}
 	timezone        string
 	navigationStart time.Time
 	depth           int
@@ -236,6 +237,18 @@ func (state *agent) dispatch(realm *realmHost, id float64, argument mozjs.Value)
 		return
 	}
 	state.cx.ReleaseValue(value)
+}
+
+// loaded 结束一个页面资源请求，没有进行中的请求时唤醒等待静置的调用方
+func (state *agent) loaded() {
+	state.pending--
+	if state.pending > 0 {
+		return
+	}
+	for _, done := range state.settled {
+		close(done)
+	}
+	state.settled = nil
 }
 
 // afterTask 在每个任务结束后为 Promise 拒绝派发 unhandledrejection 与 rejectionhandled
@@ -482,13 +495,17 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 	if state.loadImage != nil {
 		natives["loadImage"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
-			state.pending.Add(1)
-			paniclog.Go("host.go:483", func() {
-				func() {
-					defer state.pending.Done()
-					loaded := state.loadImage(address)
-					state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+			state.pending++
+			paniclog.Go("host.go:loadImage", func() {
+				loaded := false
+				// panic 时仍按加载失败回调脚本并结束计数，避免页面侧 Promise 与 Settle 永不结算
+				defer func() {
+					state.loop.post(func() {
+						state.dispatch(realm, id, mozjs.Bool(loaded))
+						state.loaded()
+					})
 				}()
+				loaded = state.loadImage(address)
 			})
 			return nil
 		}}
@@ -496,13 +513,15 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 	if state.loadFrame != nil {
 		natives["loadFrame"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
-			state.pending.Add(1)
+			state.pending++
 			paniclog.Go("host.go:loadFrame", func() {
-				defer state.pending.Done()
 				loaded := false
-				// panic 时仍按加载失败回调脚本，避免页面侧 Promise 永不结算
+				// panic 时仍按加载失败回调脚本并结束计数，避免页面侧 Promise 与 Settle 永不结算
 				defer func() {
-					state.loop.schedule(0, func() { state.dispatch(realm, id, mozjs.Bool(loaded)) })
+					state.loop.post(func() {
+						state.dispatch(realm, id, mozjs.Bool(loaded))
+						state.loaded()
+					})
 				}()
 				loaded = state.loadFrame(address)
 			})

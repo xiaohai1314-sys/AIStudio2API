@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/tzcache"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa/mozjs"
 )
@@ -39,7 +38,6 @@ type Runtime struct {
 	nextResult  float64
 	operationMu sync.Mutex
 	closeOnce   sync.Once
-	pending     sync.WaitGroup
 	// idle 在最后一次操作 idleShrinkDelay 后执行收缩 GC
 	idle *time.Timer
 }
@@ -121,7 +119,7 @@ func newRuntime(ctx context.Context, options Options, prelude string) (*Runtime,
 			complete(err)
 			return
 		}
-		state := &agent{cx: cx, loop: loop, profile: options.Profile, loadImage: options.LoadImage, loadFrame: options.LoadFrame, pending: &runtime.pending, timezone: location.String(), navigationStart: options.Profile.NavigationStart}
+		state := &agent{cx: cx, loop: loop, profile: options.Profile, loadImage: options.LoadImage, loadFrame: options.LoadFrame, timezone: location.String(), navigationStart: options.Profile.NavigationStart}
 		runtime.agent = state
 		loop.cleanup = cx.Close
 		loop.afterTask = state.afterTask
@@ -343,15 +341,18 @@ func experimentSignals(cx *mozjs.Context, global mozjs.Handle, blob string) (moz
 	return signals, state, err
 }
 
-// Settle 等待 VM 发出的页面资源请求完成
+// Settle 等待 VM 发出的页面资源请求完成，请求完成回调中发出的新请求一并等待
 func (runtime *Runtime) Settle(ctx context.Context) error {
 	done := make(chan struct{})
-	paniclog.Go("runtime.go:333", func() {
-		func() {
-			runtime.pending.Wait()
+	if !runtime.loop.post(func() {
+		if runtime.agent.pending == 0 {
 			close(done)
-		}()
-	})
+			return
+		}
+		runtime.agent.settled = append(runtime.agent.settled, done)
+	}) {
+		return errors.New("WAA runtime 已关闭")
+	}
 	select {
 	case <-done:
 		return nil
