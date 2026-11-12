@@ -12,6 +12,11 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Merge upstream, resolve the 7 conflicts, verify
         run: |
           set -e
@@ -206,6 +211,8 @@ jobs:
           if grep -n -E '^(<<<<<<< |>>>>>>> |=======)$' README.md README_en.md internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go; then echo "ERROR: markers remain"; exit 1; fi
           echo "=== gofmt ==="
           test -z "$(gofmt -l internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go)"
+          echo "=== build frontend (go:embed needs internal/webui/dist) ==="
+          (cd web && npm ci && npx vp build)
           echo "=== go build ==="
           go build ./...
           echo "=== key lines after resolution ==="
