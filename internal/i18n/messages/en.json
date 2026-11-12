@@ -1496,6 +1496,8 @@
   "WAA Worker 启动 | 重新载入 | %v": "WAA Worker startup | Reload | {0}",
   "WAA Worker 启动失败 | 错误=%v": "WAA Worker startup failed | Error={0}",
   "%w：模型 %s 绑定的账户都无法调用": "{0}: none of the accounts bound to model {1} can serve it",
+  "%w：账户 %s 不在本次请求可用的账户中": "{0}: account {1} is not among the accounts available to this request",
+  "%w：账户 %s 不存在": "{0}: account {1} does not exist",
   "DBSC 刷新请求失败: %w": "DBSC refresh request failed: {0}",
   "Google DBSC 会话刷新被拒绝": "Google rejected the DBSC session refresh",
   "MODEL_ACCOUNTS 中模型 %s 重复": "Model {0} is duplicated in MODEL_ACCOUNTS",
