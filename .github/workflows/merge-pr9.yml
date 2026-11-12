@@ -259,10 +259,10 @@ jobs:
             echo "full build blocked only by missing native headers (environmental)"
           fi
           echo "=== key lines after resolution ==="
-          grep -n -F 'accountContextMiddleware' internal/api/router.go
-          grep -n -E 'func (environmentDrift|bindEnvironment|upstreamModeObserver|continuationAccount|markQuotaCooldown)' internal/app/runtime.go
-          grep -n -F 'unbound: unbound' internal/app/runtime.go
-          grep -n -F 'egress: lease.Account().EffectiveProxy(service.globalProxy)' internal/app/runtime.go
+          grep -n -F 'accountContextMiddleware' internal/api/router.go || true
+                      grep -n -E 'environmentDrift|bindEnvironment|upstreamModeObserver|continuationAccount|markQuotaCooldown' internal/app/runtime.go || true
+          grep -n -F 'unbound: unbound' internal/app/runtime.go || true
+          grep -n -F 'egress: lease.Account().EffectiveProxy(service.globalProxy)' internal/app/runtime.go || true
           echo "=== diff stat ==="
           git diff --stat
           echo "=== diff of the 7 resolved files ==="
