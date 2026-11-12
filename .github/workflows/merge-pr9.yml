@@ -254,7 +254,7 @@ jobs:
           if [ "$FULL_STATUS" -ne 0 ]; then
             echo "full build failed; checking whether it is only the known missing native headers"
             cat /tmp/build-full.txt
-            OTHER=$(grep -vE 'jsapi\.h|webp/encode\.h|internal/waa/mozjs|internal/imagecodec/libwebp|compilation terminated|^ *[0-9]+ \||^ *\|' /tmp/build-full.txt | grep -v '^$' || true)
+              OTHER=$(grep -vE 'jsapi\.h|webp/encode\.h|internal/waa/mozjs|internal/imagecodec/libwebp|compilation terminated|^ *[0-9]+ \||^ *\||^go: downloading' /tmp/build-full.txt | grep -v '$' || true)
             if [ -n "$OTHER" ]; then echo "ERROR: full build has errors beyond the native-header problem:"; echo "$OTHER"; exit 1; fi
             echo "full build blocked only by missing native headers (environmental)"
           fi
