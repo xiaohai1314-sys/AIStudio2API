@@ -43,6 +43,9 @@ const (
 	runtimeLockPoll   = 25 * time.Millisecond
 )
 
+// runtimeLockTimeout 是无 deadline 上下文锁定账户运行状态的兜底上限，避免锁被卡住的持有者占住时无限等待。
+var runtimeLockTimeout = 30 * time.Second
+
 // AccountState 表示账户当前是否可调度
 type AccountState string
 
@@ -3645,6 +3648,11 @@ func lockRuntimeState(ctx context.Context, account *Account) (*flock.Flock, erro
 		return nil, fmt.Errorf("创建账户状态锁目录: %w", err)
 	}
 	lock := flock.New(filepath.Join(leaseDirectory, filepath.Base(account.Directory)+".runtime.lock"))
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, runtimeLockTimeout)
+		defer cancel()
+	}
 	_, err := lock.TryLockContext(ctx, runtimeLockPoll)
 	if err != nil {
 		return nil, fmt.Errorf("锁定账户运行状态: %w", err)

@@ -1538,7 +1538,10 @@ func (c *Client) decodePlaygroundRounds(ctx context.Context, request GenerateReq
 				break
 			}
 			ctx = next
-			lease, _ := AccountLeaseFromContext(ctx)
+			lease, leased := AccountLeaseFromContext(ctx)
+			if !leased {
+				return fmt.Errorf("续写换账户后未获得账户租约")
+			}
 			request.AccountID, request.continuationProof = lease.Account().ID, ""
 			switched(ctx, request.AccountID)
 			if c.contextProvider != nil {
