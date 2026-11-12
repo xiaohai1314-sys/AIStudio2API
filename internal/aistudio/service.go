@@ -124,12 +124,12 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 		page = ""
 	}
 	modelID := strings.TrimPrefix(strings.TrimSpace(request.Model), "models/")
-	return t.doPrepared(ctx, prompt, page, proofField, AccountSelection{
+	return t.doPrepared(ctx, prompt, page, proofField, request.continuationProof, AccountSelection{
 		ModelID: modelID, Method: "generateContent", AccountID: strings.TrimSpace(request.AccountID),
 	}, rpc)
 }
 
-// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie。
+// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie；proof 非空时写入该 proof
 // 非流式 RPC 在发送阶段包 unaryRPCTimeout 兜底超时，避免上游或代理 hang 住时无限占用账户租约；
 // 流式 RPC（rpc.Streaming，如 GenerateContent 与 Build 流式代理）不加，避免截断长时间思考的健康 SSE。
 // 超时 ctx 必须覆盖正文读取与 Cookie 写回，成功时由响应体关闭触发取消，只有出错路径立即取消
@@ -138,6 +138,7 @@ func (t *WorkerProtectedTransport) doPrepared(
 	prompt string,
 	page string,
 	proofField int,
+	proof string,
 	selection AccountSelection,
 	rpc RPCRequest,
 ) (*RPCResponse, error) {
@@ -150,7 +151,7 @@ func (t *WorkerProtectedTransport) doPrepared(
 			cancel()
 		}
 	}()
-	lease, worker, rpc, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, selection, rpc)
+	lease, worker, rpc, proof, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, proof, selection, rpc)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +170,7 @@ func (t *WorkerProtectedTransport) doPrepared(
 	}
 	reportRequestPhase(ctx, RequestPhaseSendingUpstream)
 	response, err := worker.SendProtected(ctx, ProtectedRequest{
-		URL: rpc.URL, Headers: headers, Body: rpc.Body, Prompt: prompt, PagePrompt: page, ProofField: proofField,
+		URL: rpc.URL, Headers: headers, Body: rpc.Body, Prompt: prompt, PagePrompt: page, ProofField: proofField, Proof: proof,
 	})
 	if err != nil {
 		return nil, err
@@ -218,30 +219,31 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 	prompt string,
 	page string,
 	proofField int,
+	proof string,
 	selection AccountSelection,
 	rpc RPCRequest,
-) (*AccountLease, ProtectedPreparer, RPCRequest, error) {
+) (*AccountLease, ProtectedPreparer, RPCRequest, string, error) {
 	lease, ok := AccountLeaseFromContext(ctx)
 	if !ok {
-		return nil, nil, RPCRequest{}, fmt.Errorf("受保护请求缺少账户租约")
+		return nil, nil, RPCRequest{}, "", fmt.Errorf("受保护请求缺少账户租约")
 	}
 	if err := validateLeaseSelection(lease, selection); err != nil {
-		return nil, nil, RPCRequest{}, err
+		return nil, nil, RPCRequest{}, "", err
 	}
 	worker, err := t.workers.Worker(ctx, lease.Account().ID, selection.ModelID)
 	if err != nil {
-		return nil, nil, RPCRequest{}, fmt.Errorf("获取账户 WAA preparer: %w", err)
+		return nil, nil, RPCRequest{}, "", fmt.Errorf("获取账户 WAA preparer: %w", err)
 	}
 	reportRequestPhase(ctx, RequestPhasePreparingWAA)
 	prepared, err := worker.Prepare(ctx, ProtectedRequest{
 		URL: rpc.URL, Headers: rpc.Header.Clone(), Body: rpc.Body,
-		Prompt: prompt, PagePrompt: page, ProofField: proofField,
+		Prompt: prompt, PagePrompt: page, ProofField: proofField, Proof: proof,
 	})
 	if err != nil {
-		return nil, nil, RPCRequest{}, fmt.Errorf("准备 fresh WAA proof: %w", err)
+		return nil, nil, RPCRequest{}, "", fmt.Errorf("准备 fresh WAA proof: %w", err)
 	}
 	if prepared.Headers == nil || len(prepared.Body) == 0 {
-		return nil, nil, RPCRequest{}, fmt.Errorf("WAA preparer 返回空请求")
+		return nil, nil, RPCRequest{}, "", fmt.Errorf("WAA preparer 返回空请求")
 	}
 	requestHeaders := rpc.Header
 	rpc.AccountID = lease.Account().ID
@@ -254,12 +256,12 @@ func (t *WorkerProtectedTransport) prepareProtectedRequest(
 		}
 	}
 	rpc.Header.Set("Content-Type", JSONProtobufContentType)
-	return lease, worker, rpc, nil
+	return lease, worker, rpc, prepared.Proof, nil
 }
 
 // DoProtectedTitle 写入 GenerateTitle fresh proof 后经 Worker 页面发送请求，binding 为提示词与回答以空格连接，页面输入框为空
 func (t *WorkerProtectedTransport) DoProtectedTitle(ctx context.Context, request TitleRequest, rpc RPCRequest) (*RPCResponse, error) {
-	return t.doPrepared(ctx, request.Prompt+" "+request.Answer, "", 3, AccountSelection{ModelID: request.Model}, rpc)
+	return t.doPrepared(ctx, request.Prompt+" "+request.Answer, "", 3, "", AccountSelection{ModelID: request.Model}, rpc)
 }
 
 func bindingPrompt(request GenerateRequest) (string, error) {
