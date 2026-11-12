@@ -1,0 +1,236 @@
+name: Merge PR9 (resolve conflicts)
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  merge-pr9:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge upstream, resolve the 8 conflicts, verify
+        run: |
+          set -e
+          set -o pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Mag1cFall/AIStudio2API.git
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin ops/merge-pr9 || true
+          LIVE=0
+          if git show "origin/ops/merge-pr9:.github/workflows/merge-pr9.live" >/dev/null 2>&1; then LIVE=1; fi
+          echo "LIVE=$LIVE"
+          echo "=== upstream tip ==="
+          git rev-parse upstream/main
+          git log --oneline -1 upstream/main
+          echo "=== fork main HEAD ==="
+          git rev-parse HEAD
+          git log --oneline -1 HEAD
+          echo "=== merge base ==="
+          git merge-base HEAD upstream/main
+          git log --oneline -1 "$(git merge-base HEAD upstream/main)"
+          if git merge-base --is-ancestor bd7f202 HEAD 2>/dev/null; then echo "bd7f202 IS ancestor of main"; else echo "bd7f202 is NOT ancestor of main"; fi
+          echo "=== upstream commits between merge-base and tip ==="
+          git log --oneline "$(git merge-base HEAD upstream/main)..upstream/main"
+          MERGE_STATUS=0
+          git merge --no-commit --no-ff upstream/main || MERGE_STATUS=$?
+          echo "merge exit code: $MERGE_STATUS"
+          if [ "$MERGE_STATUS" -eq 0 ]; then echo "ERROR: merge succeeded cleanly, conflicts were expected"; exit 1; fi
+          if [ "$MERGE_STATUS" -ne 1 ]; then echo "ERROR: unexpected merge exit $MERGE_STATUS"; exit 1; fi
+          echo "=== git status ==="
+          git status --porcelain=v1
+          echo "=== unmerged files ==="
+          git diff --name-only --diff-filter=U
+          EXPECTED="README.md
+          README_en.md
+          internal/aistudio/accounts.go
+          internal/aistudio/assistant.go
+          internal/aistudio/channel.go
+          internal/aistudio/service.go
+          internal/api/router.go
+          internal/app/runtime.go"
+          UNMERGED="$(git diff --name-only --diff-filter=U | sort)"
+          if [ "$UNMERGED" != "$EXPECTED" ]; then echo "ERROR: conflict set differs from expectation"; exit 1; fi
+          echo "conflict set OK (8 files)"
+          echo "=== conflict regions ==="
+          for f in $UNMERGED; do
+            echo "### FILE: $f"
+            awk '/^<<<<<<< /{show=1} show{print NR": "$0} /^>>>>>>> /{show=0}' "$f"
+            echo
+          done
+          python3 - <<'PY'
+          import sys
+
+          def die(msg):
+              print("ERROR: " + msg)
+              sys.exit(1)
+
+          ZH = "模型名称从 `GET /v1/models` 或 `GET /v1beta/models` 读取。`PROXY_API_KEY` 为空时，服务只能监听 `localhost` 或回环 IP，浏览器中只有本机页面可以直接调用接口；网页版客户端和部分桌面客户端需要设置 `PROXY_API_KEY`。多个 key 用逗号分隔，任一 key 都可调用；设置页可为每个 key 勾选处理其请求的账户。请求带 `X-AIStudio-Account: <账户>` 请求头时只由该账户处理，账户填账户页显示的邮箱；该账户出错时直接返回它的错误，不换到其他账户。"
+          EN = "Read model names from `GET /v1/models` or `GET /v1beta/models`. When `PROXY_API_KEY` is empty, the service can listen only on localhost or a loopback IP, and only pages on this machine can call the API from a browser. Web clients and some desktop clients need `PROXY_API_KEY` set. Separate several keys with commas; any of them is accepted. On the Settings page you can tick which accounts handle each key's requests. A request with the header `X-AIStudio-Account: <account>` is handled only by that account, written as the email shown on the Accounts page; if that account fails, its error is returned directly instead of switching to another account."
+          ROUTER_LINE = "publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, config.TrustedProxyCIDRs, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public)))))))))"
+          SCOPED_COMMENT = "// scopedSelection 把请求指定的账户、所用 API key 与模型绑定的账户并入选择，指定账户与绑定资源的选择不受模型绑定限制"
+          SERVICE_COMMENT = [
+              "\t// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie；proof 非空时写入该 proof",
+              "\t// 非流式 RPC 在发送阶段包 unaryRPCTimeout 兜底超时，避免上游或代理 hang 住时无限占用账户租约；",
+              "\t// 流式 RPC（rpc.Streaming，如 GenerateContent 与 Build 流式代理）不加，避免截断长时间思考的健康 SSE。",
+              "\t// 超时 ctx 必须覆盖正文读取与 Cookie 写回，成功时由响应体关闭触发取消，只有出错路径立即取消",
+          ]
+          UPSTREAM_CALL = "lease, worker, rpc, proof, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, proof, selection, rpc)"
+
+          def parse(path):
+              text = open(path, encoding="utf-8").read()
+              lines = text.split("\n")
+              segs = []
+              i = 0
+              while i < len(lines):
+                  line = lines[i]
+                  if line.startswith("<<<<<<< "):
+                      ours = []
+                      i += 1
+                      while i < len(lines) and not lines[i].startswith("======="):
+                          ours.append(lines[i])
+                          i += 1
+                      if i >= len(lines):
+                          die(path + ": missing ======= marker")
+                      i += 1
+                      theirs = []
+                      while i < len(lines) and not lines[i].startswith(">>>>>>> "):
+                          theirs.append(lines[i])
+                          i += 1
+                      if i >= len(lines):
+                          die(path + ": missing >>>>>>> marker")
+                      i += 1
+                      segs.append(("block", ours, theirs))
+                  else:
+                      segs.append(("line", line))
+                      i += 1
+              return segs
+
+          def render(segs, replace):
+              out = []
+              bi = 0
+              for seg in segs:
+                  if seg[0] == "line":
+                      out.append(seg[1])
+                  else:
+                      out.extend(replace(bi, seg[1], seg[2]))
+                      bi += 1
+              return "\n".join(out)
+
+          def resolve(path, replace, expect_count):
+              segs = parse(path)
+              n = len([s for s in segs if s[0] == "block"])
+              if expect_count is not None and n != expect_count:
+                  die("%s: expected %d conflict blocks, found %d" % (path, expect_count, n))
+              new_text = render(segs, replace)
+              open(path, "w", encoding="utf-8").write(new_text)
+              print("resolved %s (%d blocks)" % (path, n))
+              return new_text
+
+          resolve("README.md", lambda bi, o, t: [ZH], 1)
+          resolve("README_en.md", lambda bi, o, t: [EN], 1)
+
+          def accounts(bi, o, t):
+              otext = "\n".join(o)
+              ttext = "\n".join(t)
+              if "资源属于当前 key 不可用的账户时，与资源不存在使用同一错误，避免泄漏资源是否存在。" not in otext or "ErrResourceNotFound" not in otext:
+                  die("accounts.go: ours side does not match the fork version")
+              if "账户 %s 不在本次请求可用的账户中" not in ttext:
+                  die("accounts.go: theirs side does not match the upstream version")
+              return o
+          resolve("internal/aistudio/accounts.go", accounts, 1)
+
+          def assistant(bi, o, t):
+              otext = "\n".join(o)
+              ttext = "\n".join(t)
+              if "if err := cleanup.cancel(ctx, *generation); err != nil {" not in ttext:
+                  die("assistant.go: theirs side lacks cleanup.cancel")
+              if "DrainResponseBody" not in otext:
+                  die("assistant.go: ours side lacks DrainResponseBody")
+              return t
+          resolve("internal/aistudio/assistant.go", assistant, 1)
+
+          def router(bi, o, t):
+              if "accountContextMiddleware" not in "\n".join(t) and "accountContextMiddleware" not in "\n".join(o):
+                  die("router.go: neither side mentions accountContextMiddleware")
+              return ["\t" + ROUTER_LINE]
+          resolve("internal/api/router.go", router, 1)
+
+          def channel(bi, o, t):
+              kept = [l for l in o if not l.lstrip().startswith("// scopedSelection")]
+              return kept + t
+          text = resolve("internal/aistudio/channel.go", channel, None)
+          bad = [l for l in text.split("\n") if l.lstrip().startswith("// scopedSelection") and l != SCOPED_COMMENT]
+          if bad:
+              die("channel.go: unexpected scopedSelection comment lines: %s" % bad)
+          if SCOPED_COMMENT not in text:
+              die("channel.go: upstream scopedSelection comment missing")
+          if "apiKeyScope" not in text or "keyOnlySelection" not in text:
+              die("channel.go: fork helpers missing")
+
+          def service(bi, o, t):
+              otext = "\n".join(o)
+              ttext = "\n".join(t)
+              if bi == 0:
+                  if "doPrepared" not in otext and "doPrepared" not in ttext:
+                      die("service.go block 0: no doPrepared comment")
+                  return SERVICE_COMMENT
+              if "var cancel context.CancelFunc" not in otext or "if !rpc.Streaming" not in otext:
+                  die("service.go block 1: ours side lacks the fork timeout wrapper")
+              if "prepareProtectedRequest" not in otext:
+                  die("service.go block 1: ours side lacks prepareProtectedRequest call")
+              if UPSTREAM_CALL not in ttext:
+                  die("service.go block 1: theirs side lacks the upstream call")
+              kept = [l for l in o if "prepareProtectedRequest" not in l]
+              return kept + t
+          text = resolve("internal/aistudio/service.go", service, 2)
+          for line in SERVICE_COMMENT:
+              if line not in text:
+                  die("service.go: combined comment missing a line")
+          if UPSTREAM_CALL not in text:
+              die("service.go: upstream call missing after resolution")
+
+          def runtime(bi, o, t):
+              return list(o) + list(t)
+          text = resolve("internal/app/runtime.go", runtime, 2)
+          for f in ["unbound: unbound", "egress: lease.Account().EffectiveProxy(service.globalProxy)"]:
+              if f not in text:
+                  die("runtime.go: struct field missing: " + f)
+          order = ["environmentDrift", "bindEnvironment", "upstreamModeObserver", "continuationAccount", "markQuotaCooldown"]
+          idx = [text.find(name) for name in order]
+          if any(i < 0 for i in idx) or idx != sorted(idx):
+              die("runtime.go: methods missing or out of order: %s" % (idx,))
+          print("all resolutions applied and verified")
+          PY
+          echo "=== marker check ==="
+          if grep -n -E '^(<<<<<<< |>>>>>>> |=======)$' README.md README_en.md internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go; then echo "ERROR: markers remain"; exit 1; fi
+          echo "=== gofmt ==="
+          test -z "$(gofmt -l internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go)"
+          echo "=== go build ==="
+          go build ./...
+          echo "=== key lines after resolution ==="
+          grep -n -F 'cleanup.cancel' internal/aistudio/assistant.go
+          grep -n -F 'accountContextMiddleware' internal/api/router.go
+          grep -n -E 'func (environmentDrift|bindEnvironment|upstreamModeObserver|continuationAccount|markQuotaCooldown)' internal/app/runtime.go
+          grep -n -F 'unbound: unbound' internal/app/runtime.go
+          grep -n -F 'egress: lease.Account().EffectiveProxy(service.globalProxy)' internal/app/runtime.go
+          echo "=== diff stat ==="
+          git diff --stat
+          echo "=== diff of the 8 resolved files ==="
+          git diff -- README.md README_en.md internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go | head -n 500
+          if [ "$LIVE" = "1" ]; then
+            echo "=== LIVE: committing and pushing ==="
+            git add README.md README_en.md internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go
+            git commit --no-edit
+            git push origin main
+            echo "PUSHED main HEAD: $(git rev-parse HEAD)"
+            git log --oneline -1 HEAD
+          else
+            echo "=== DRY RUN: not committing ==="
+            git merge --abort
+            echo "dry run finished, tree restored"
+          fi
