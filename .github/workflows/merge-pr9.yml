@@ -12,7 +12,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Merge upstream, resolve the 8 conflicts, verify
+      - name: Merge upstream, resolve the 7 conflicts, verify
         run: |
           set -e
           set -o pipefail
@@ -48,14 +48,19 @@ jobs:
           EXPECTED="README.md
           README_en.md
           internal/aistudio/accounts.go
-          internal/aistudio/assistant.go
           internal/aistudio/channel.go
           internal/aistudio/service.go
           internal/api/router.go
           internal/app/runtime.go"
           UNMERGED="$(git diff --name-only --diff-filter=U | sort)"
           if [ "$UNMERGED" != "$EXPECTED" ]; then echo "ERROR: conflict set differs from expectation"; exit 1; fi
-          echo "conflict set OK (8 files)"
+          echo "conflict set OK (7 files)"
+          echo "=== assistant.go: verify the clean merge gives the required outcome ==="
+          if ! grep -q -F 'if err := cleanup.cancel(ctx, *generation); err != nil {' internal/aistudio/assistant.go; then echo "ERROR: assistant.go lacks the upstream cleanup.cancel code"; exit 1; fi
+          if grep -q -F 'DrainResponseBody' internal/aistudio/assistant.go; then echo "ERROR: assistant.go still contains the discarded DrainResponseBody code"; exit 1; fi
+          echo "assistant.go OK (upstream cleanup.cancel present, no DrainResponseBody)"
+          echo "=== assistant.go diff vs upstream (informational) ==="
+          git diff upstream/main -- internal/aistudio/assistant.go || true
           echo "=== conflict regions ==="
           for f in $UNMERGED; do
             echo "### FILE: $f"
@@ -144,16 +149,6 @@ jobs:
               return o
           resolve("internal/aistudio/accounts.go", accounts, 1)
 
-          def assistant(bi, o, t):
-              otext = "\n".join(o)
-              ttext = "\n".join(t)
-              if "if err := cleanup.cancel(ctx, *generation); err != nil {" not in ttext:
-                  die("assistant.go: theirs side lacks cleanup.cancel")
-              if "DrainResponseBody" not in otext:
-                  die("assistant.go: ours side lacks DrainResponseBody")
-              return t
-          resolve("internal/aistudio/assistant.go", assistant, 1)
-
           def router(bi, o, t):
               if "accountContextMiddleware" not in "\n".join(t) and "accountContextMiddleware" not in "\n".join(o):
                   die("router.go: neither side mentions accountContextMiddleware")
@@ -207,24 +202,23 @@ jobs:
           print("all resolutions applied and verified")
           PY
           echo "=== marker check ==="
-          if grep -n -E '^(<<<<<<< |>>>>>>> |=======)$' README.md README_en.md internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go; then echo "ERROR: markers remain"; exit 1; fi
+          if grep -n -E '^(<<<<<<< |>>>>>>> |=======)$' README.md README_en.md internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go; then echo "ERROR: markers remain"; exit 1; fi
           echo "=== gofmt ==="
-          test -z "$(gofmt -l internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go)"
+          test -z "$(gofmt -l internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go)"
           echo "=== go build ==="
           go build ./...
           echo "=== key lines after resolution ==="
-          grep -n -F 'cleanup.cancel' internal/aistudio/assistant.go
           grep -n -F 'accountContextMiddleware' internal/api/router.go
           grep -n -E 'func (environmentDrift|bindEnvironment|upstreamModeObserver|continuationAccount|markQuotaCooldown)' internal/app/runtime.go
           grep -n -F 'unbound: unbound' internal/app/runtime.go
           grep -n -F 'egress: lease.Account().EffectiveProxy(service.globalProxy)' internal/app/runtime.go
           echo "=== diff stat ==="
           git diff --stat
-          echo "=== diff of the 8 resolved files ==="
-          git diff -- README.md README_en.md internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go | head -n 500
+          echo "=== diff of the 7 resolved files ==="
+          git diff -- README.md README_en.md internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go | head -n 500
           if [ "$LIVE" = "1" ]; then
             echo "=== LIVE: committing and pushing ==="
-            git add README.md README_en.md internal/aistudio/accounts.go internal/aistudio/assistant.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go
+            git add README.md README_en.md internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go
             git commit --no-edit
             git push origin main
             echo "PUSHED main HEAD: $(git rev-parse HEAD)"
