@@ -238,11 +238,11 @@ jobs:
           cat /tmp/build-merged.txt
           if [ "$MERGED_STATUS" -eq 0 ]; then
             echo "affected packages build OK"
-          elif cmp -s /tmp/build-baseline.txt /tmp/build-merged.txt; then
+          elif cmp -s <(grep -v '^go: downloading' /tmp/build-baseline.txt | sort -u) <(grep -v '^go: downloading' /tmp/build-merged.txt | sort -u); then
             echo "affected packages build errors identical to baseline (environmental, e.g. missing native headers)"
           else
             echo "ERROR: build errors changed after merge"
-            diff /tmp/build-baseline.txt /tmp/build-merged.txt | head -n 100
+              diff <(grep -v '^go: downloading' /tmp/build-baseline.txt | sort -u) <(grep -v '^go: downloading' /tmp/build-merged.txt | sort -u) | head -n 100
             exit 1
           fi
           echo "=== full go build ./... ==="
