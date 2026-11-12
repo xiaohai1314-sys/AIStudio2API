@@ -230,9 +230,12 @@ func interactionMediaCode(mime string) (int, int64, bool) {
 	return 0, 0, false
 }
 
+// maxDecisionResponseBytes 是 CreateDecision 响应的读取上限，防止上游返回超大正文打爆内存。
+const maxDecisionResponseBytes int64 = 8 << 20
+
 // DecodeCreateDecisionResponse 解码 CreateDecision 响应：field 1 为问题键与回答，field 2 为用量（输入 token、各模态 token 与 field 10 的总 token），输入被拦截时 field 3 为拦截原因与说明，返回 PromptFeedbackError
 func DecodeCreateDecisionResponse(body io.Reader) (DecisionResult, error) {
-	raw, err := io.ReadAll(body)
+	raw, err := ReadResponseBody(body, maxDecisionResponseBytes)
 	if err != nil {
 		return DecisionResult{}, fmt.Errorf("读取 AI Studio CreateDecision 响应: %w", err)
 	}
