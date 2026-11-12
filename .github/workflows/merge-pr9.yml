@@ -79,10 +79,10 @@ jobs:
           ROUTER_LINE = "publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, config.TrustedProxyCIDRs, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, public)))))))))"
           SCOPED_COMMENT = "// scopedSelection 把请求指定的账户、所用 API key 与模型绑定的账户并入选择，指定账户与绑定资源的选择不受模型绑定限制"
           SERVICE_COMMENT = [
-              "\t// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie；proof 非空时写入该 proof",
-              "\t// 非流式 RPC 在发送阶段包 unaryRPCTimeout 兜底超时，避免上游或代理 hang 住时无限占用账户租约；",
-              "\t// 流式 RPC（rpc.Streaming，如 GenerateContent 与 Build 流式代理）不加，避免截断长时间思考的健康 SSE。",
-              "\t// 超时 ctx 必须覆盖正文读取与 Cookie 写回，成功时由响应体关闭触发取消，只有出错路径立即取消",
+              "// doPrepared 为请求写入 proof 后经账户的 WAA 运行时发送，并写回运行时导出的 Cookie；proof 非空时写入该 proof",
+              "// 非流式 RPC 在发送阶段包 unaryRPCTimeout 兜底超时，避免上游或代理 hang 住时无限占用账户租约；",
+              "// 流式 RPC（rpc.Streaming，如 GenerateContent 与 Build 流式代理）不加，避免截断长时间思考的健康 SSE。",
+              "// 超时 ctx 必须覆盖正文读取与 Cookie 写回，成功时由响应体关闭触发取消，只有出错路径立即取消",
           ]
           UPSTREAM_CALL = "lease, worker, rpc, proof, err := t.prepareProtectedRequest(ctx, prompt, page, proofField, proof, selection, rpc)"
 
@@ -171,25 +171,26 @@ jobs:
               otext = "\n".join(o)
               ttext = "\n".join(t)
               if bi == 0:
-                  if "doPrepared" not in otext and "doPrepared" not in ttext:
-                      die("service.go block 0: no doPrepared comment")
-                  return SERVICE_COMMENT
+                  if "unaryRPCTimeout" not in otext:
+                      die("service.go block 0: ours side is not the timeout comment")
+                  return o
               if "var cancel context.CancelFunc" not in otext or "if !rpc.Streaming" not in otext:
                   die("service.go block 1: ours side lacks the fork timeout wrapper")
-              if "prepareProtectedRequest" not in otext:
-                  die("service.go block 1: ours side lacks prepareProtectedRequest call")
-              if UPSTREAM_CALL not in ttext:
-                  die("service.go block 1: theirs side lacks the upstream call")
-              kept = [l for l in o if "prepareProtectedRequest" not in l]
-              return kept + t
+              return o
           text = resolve("internal/aistudio/service.go", service, 2)
           for line in SERVICE_COMMENT:
               if line not in text:
-                  die("service.go: combined comment missing a line")
+                  die("service.go: combined comment missing a line: %s" % (line,))
+          found_calls = [l.strip() for l in text.split("\n") if "prepareProtectedRequest(" in l]
+          print("prepareProtectedRequest lines after resolution: %s" % (found_calls,))
           if UPSTREAM_CALL not in text:
-              die("service.go: upstream call missing after resolution")
+              die("service.go: upstream call missing; found: %s" % (found_calls,))
 
           def runtime(bi, o, t):
+              if bi == 0:
+                  if "egress: lease.Account().EffectiveProxy(service.globalProxy)" not in "\n".join(o):
+                      die("runtime.go block 0: ours side lacks the egress field")
+                  return list(o)
               return list(o) + list(t)
           text = resolve("internal/app/runtime.go", runtime, 2)
           for f in ["unbound: unbound", "egress: lease.Account().EffectiveProxy(service.globalProxy)"]:
