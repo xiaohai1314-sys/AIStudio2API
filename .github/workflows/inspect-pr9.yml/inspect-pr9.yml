@@ -1,0 +1,48 @@
+name: Inspect PR9 merge conflicts
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge upstream and print conflict regions
+        run: |
+          set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Mag1cFall/AIStudio2API.git
+          git fetch --no-tags upstream main
+          echo "===== upstream main tip ====="
+          git rev-parse upstream/main
+          git log --oneline -1 upstream/main
+          echo "===== fork main HEAD ====="
+          git rev-parse HEAD
+          git log --oneline -1 HEAD
+          echo "===== merge base ====="
+          git merge-base HEAD upstream/main
+          git log --oneline -1 $(git merge-base HEAD upstream/main)
+          if git merge-base --is-ancestor bd7f202 HEAD 2>/dev/null; then echo "bd7f202 IS ancestor of main"; else echo "bd7f202 is NOT ancestor of main"; fi
+          echo "===== upstream commits between merge-base and tip ====="
+          git log --oneline $(git merge-base HEAD upstream/main)..upstream/main
+          echo "===== attempt merge ====="
+          git merge --no-commit --no-ff upstream/main
+          echo "merge exit code: $?"
+          echo "===== git status ====="
+          git status --porcelain=v1
+          echo "===== unmerged files ====="
+          git diff --name-only --diff-filter=U
+          echo "===== conflict regions ====="
+          for f in $(git diff --name-only --diff-filter=U); do
+            echo "### FILE: $f"
+            awk '/^<<<<<<< /{show=1} show{print NR": "$0} /^>>>>>>> /{show=0}' "$f"
+            echo
+          done
+          git merge --abort
+          echo "merge aborted, tree restored"
