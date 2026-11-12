@@ -12,6 +12,15 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      - uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-build-${{ runner.os }}-1.27.0-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-1.27.0-
+            go-build-${{ runner.os }}-
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18.0'
@@ -41,6 +50,15 @@ jobs:
           if git merge-base --is-ancestor bd7f202 HEAD 2>/dev/null; then echo "bd7f202 IS ancestor of main"; else echo "bd7f202 is NOT ancestor of main"; fi
           echo "=== upstream commits between merge-base and tip ==="
           git log --oneline "$(git merge-base HEAD upstream/main)..upstream/main"
+          echo "=== build frontend (go:embed needs internal/webui/dist) ==="
+          (cd web && npm ci && npx vp build)
+          echo "=== baseline: go build of affected packages on pristine main ==="
+          set +e
+          go build ./internal/aistudio/ ./internal/api/ ./internal/app/ 2>/tmp/build-baseline.txt
+          BASE_STATUS=$?
+          set -e
+          echo "baseline go build exit code: $BASE_STATUS"
+          cat /tmp/build-baseline.txt
           MERGE_STATUS=0
           git merge --no-commit --no-ff upstream/main || MERGE_STATUS=$?
           echo "merge exit code: $MERGE_STATUS"
@@ -211,10 +229,35 @@ jobs:
           if grep -n -E '^(<<<<<<< |>>>>>>> |=======)$' README.md README_en.md internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go; then echo "ERROR: markers remain"; exit 1; fi
           echo "=== gofmt ==="
           test -z "$(gofmt -l internal/aistudio/accounts.go internal/aistudio/channel.go internal/api/router.go internal/aistudio/service.go internal/app/runtime.go)"
-          echo "=== build frontend (go:embed needs internal/webui/dist) ==="
-          (cd web && npm ci && npx vp build)
-          echo "=== go build ==="
-          go build ./...
+          echo "=== go build of affected packages after resolution ==="
+          set +e
+          go build ./internal/aistudio/ ./internal/api/ ./internal/app/ 2>/tmp/build-merged.txt
+          MERGED_STATUS=$?
+          set -e
+          echo "merged go build exit code: $MERGED_STATUS"
+          cat /tmp/build-merged.txt
+          if [ "$MERGED_STATUS" -eq 0 ]; then
+            echo "affected packages build OK"
+          elif cmp -s /tmp/build-baseline.txt /tmp/build-merged.txt; then
+            echo "affected packages build errors identical to baseline (environmental, e.g. missing native headers)"
+          else
+            echo "ERROR: build errors changed after merge"
+            diff /tmp/build-baseline.txt /tmp/build-merged.txt | head -n 100
+            exit 1
+          fi
+          echo "=== full go build ./... ==="
+          set +e
+          go build ./... 2>/tmp/build-full.txt
+          FULL_STATUS=$?
+          set -e
+          echo "full go build exit code: $FULL_STATUS"
+          if [ "$FULL_STATUS" -ne 0 ]; then
+            echo "full build failed; checking whether it is only the known missing native headers"
+            cat /tmp/build-full.txt
+            OTHER=$(grep -vE 'jsapi\.h|webp/encode\.h|internal/waa/mozjs|internal/imagecodec/libwebp|compilation terminated|^ *[0-9]+ \||^ *\|' /tmp/build-full.txt | grep -v '^$' || true)
+            if [ -n "$OTHER" ]; then echo "ERROR: full build has errors beyond the native-header problem:"; echo "$OTHER"; exit 1; fi
+            echo "full build blocked only by missing native headers (environmental)"
+          fi
           echo "=== key lines after resolution ==="
           grep -n -F 'accountContextMiddleware' internal/api/router.go
           grep -n -E 'func (environmentDrift|bindEnvironment|upstreamModeObserver|continuationAccount|markQuotaCooldown)' internal/app/runtime.go
