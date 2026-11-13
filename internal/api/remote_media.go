@@ -327,11 +327,6 @@ func dialPublicRemote(ctx context.Context, network, address string) (net.Conn, e
 	return nil, lastErr
 }
 
-// downloadRemoteMedia 在请求 context 内下载外部媒体，MIME 依次取响应 Content-Type、声明值与内容判断
-func downloadRemoteMedia(ctx context.Context, url string, declared string) (*aistudio.Blob, error) {
-	return downloadRemoteMediaWithBudget(ctx, &remoteMediaRequestBudget{}, url, declared)
-}
-
 func downloadRemoteMediaWithBudget(ctx context.Context, budget *remoteMediaRequestBudget, url string, declared string) (*aistudio.Blob, error) {
 	parsed, err := validatePublicHTTPURL(ctx, url)
 	if err != nil {

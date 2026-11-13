@@ -7,19 +7,19 @@
 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  zig-x86_64-linux-0.16.0.tar.xz
 ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17  zig-aarch64-linux-0.16.0.tar.xz
 
-# SpiderMonkey v152.0.4-aistudio2api.1 与 libwebp v1.6.0-aistudio2api.1
+# SpiderMonkey v158.0.1-aistudio2api.1 与 libwebp v1.6.0-aistudio2api.1
 # 的摘要来自 GitHub Releases API 的 asset.digest（GitHub 在资产上传时计算）。
 # 对应发布说明没有维护者单独签名的校验文件。
 # 这能发现下载内容被替换，不能代替维护者自己的签名。
 # 本环境额外下载并核对过 linux-amd64 的两个包，与 API digest 一致。
 # darwin、windows、linux-arm64 与 linux-amd64-gnu 只记录同一 API 的 digest，
 # 构建下载时仍会在解压前校验；这里没有逐个重新下载。
-d3ecebf1890355426ad261ab8723038849a524b348af53e1bb440ca53cc2cacb  spidermonkey-v152.0.4-aistudio2api.1-linux-amd64.tar.gz
-b3c9539b8d8378d99f86b267e0e3d007dd01ff80acebf4f52f3e1d6ac04d9d00  spidermonkey-v152.0.4-aistudio2api.1-linux-arm64.tar.gz
-50df89da549e87f0baedfaa15f05ba5faf4719eaafee5da48c3b9f46a29b06d3  spidermonkey-v152.0.4-aistudio2api.1-linux-amd64-gnu.tar.gz
-942a3b57b202f899d799cac678b7471d01d0b34714070f0810c18fca37ffd721  spidermonkey-v152.0.4-aistudio2api.1-windows-amd64.tar.gz
-8063d69f56711c72b1244c8415b6c5096aa64ae8b022f555722667531acfe659  spidermonkey-v152.0.4-aistudio2api.1-darwin-amd64.tar.gz
-19f690d52ce2cfe7dbaedcc9771976145fff0dbd81f24e89a2dd094a1424b673  spidermonkey-v152.0.4-aistudio2api.1-darwin-arm64.tar.gz
+13d5e7005d313d7f72210d612fba618a8cf8f9bd1a11a72e54f0cd018e145104  spidermonkey-v158.0.1-aistudio2api.1-linux-amd64.tar.gz
+5e94db80dee1b4c9d8481d618059526b9870337a48307284cdff06841acbff00  spidermonkey-v158.0.1-aistudio2api.1-linux-arm64.tar.gz
+21a92346caeeb475f2d68c11706e6e0645002881055236f1b38c1acbc9dd5bf9  spidermonkey-v158.0.1-aistudio2api.1-linux-amd64-gnu.tar.gz
+d43ad4ee9e08e854c3577a58fe9cd9d37bf36308bea44fdea342323a12322623  spidermonkey-v158.0.1-aistudio2api.1-windows-amd64.tar.gz
+aa43b6962fc45f4e077f2fd80fa2be9194378ff29a6e22fe77918d12687848be  spidermonkey-v158.0.1-aistudio2api.1-darwin-amd64.tar.gz
+bf5f9a8ee91af775b5311d757806072b349c924f8fbfac8bd936b220d2610085  spidermonkey-v158.0.1-aistudio2api.1-darwin-arm64.tar.gz
 d5047d17eace8b9639a08786b750e46ee83a1f251b7b961cd0f049371974ab78  libwebp-v1.6.0-aistudio2api.1-linux-amd64.tar.gz
 299028ab369a7f8b34feefd41f68cebdc6118c1306d37a57731da9503cd64084  libwebp-v1.6.0-aistudio2api.1-linux-arm64.tar.gz
 1c89878d1f7c7b7232ea8fad1292a8f6c70f3d2d92fffc24c1fa6ac9e8070c85  libwebp-v1.6.0-aistudio2api.1-linux-amd64-gnu.tar.gz

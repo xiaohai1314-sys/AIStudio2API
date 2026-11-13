@@ -1627,6 +1627,9 @@ func (manager *accountWorkerManager) startAuthenticatedWorker(ctx context.Contex
 	if started {
 		worker, err = manager.startReservedWorker(ctx, accountID, model)
 	}
+	if denial := aistudio.RestrictionDenial(err); denial != nil {
+		return nil, errors.Join(err, manager.pool.MarkRestricted(accountID, denial))
+	}
 	if !aistudio.DefinitiveAuthenticationFailure(err) {
 		return worker, err
 	}
@@ -1636,6 +1639,9 @@ func (manager *accountWorkerManager) startAuthenticatedWorker(ctx context.Contex
 			worker, err = manager.startReservedWorker(context.WithValue(ctx, workerReloadKey{}, started), accountID, model)
 			if err == nil {
 				return worker, nil
+			}
+			if denial := aistudio.RestrictionDenial(err); denial != nil {
+				return nil, errors.Join(err, manager.pool.MarkRestricted(accountID, denial))
 			}
 			err = manager.refresher.markAuthenticationRequired(ctx, err)
 		} else {
