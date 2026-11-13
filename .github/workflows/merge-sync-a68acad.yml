@@ -1,0 +1,110 @@
+name: Merge upstream a68acad (take resolved tree)
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  merge-a68acad:
+    if: github.event.pull_request.head.ref == 'ops/sync-a68acad-res'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18.0'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Merge upstream, take resolved tree, verify, push
+        run: |
+          set -e
+          set -o pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Mag1cFall/AIStudio2API.git
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin ops/sync-a68acad-res:refs/remotes/origin/ops/sync-a68acad-res
+          git rev-parse origin/ops/sync-a68acad-res
+          LIVE=0
+          if git show "origin/ops/sync-a68acad-res:merge-sync-a68acad.live" >/dev/null 2>&1; then LIVE=1; fi
+          echo "LIVE=$LIVE"
+          UPSTREAM_TIP=a68acad8b56619a8bef7802131db595ee5d11b6c
+          MAIN_BASE=3b7ef58c55e947f6269d517f0e44fa6acf257d55
+          test "$(git rev-parse upstream/main)" = "$UPSTREAM_TIP" || { echo "ERROR: upstream main moved from $UPSTREAM_TIP"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$MAIN_BASE" || { echo "ERROR: fork main moved from $MAIN_BASE"; exit 1; }
+          if git merge-base --is-ancestor "$UPSTREAM_TIP" HEAD; then echo "a68acad is already an ancestor of main; nothing to do"; exit 0; fi
+          echo "=== merge base ==="
+          git merge-base HEAD upstream/main
+          MERGE_STATUS=0
+          git merge --no-commit --no-ff upstream/main || MERGE_STATUS=$?
+          echo "merge exit code: $MERGE_STATUS"
+          if [ "$MERGE_STATUS" -eq 0 ]; then echo "ERROR: merge succeeded cleanly, conflicts were expected"; exit 1; fi
+          if [ "$MERGE_STATUS" -ne 1 ]; then echo "ERROR: unexpected merge exit $MERGE_STATUS"; exit 1; fi
+          echo "=== unmerged files ==="
+          git diff --name-only --diff-filter=U | sort
+          EXPECTED="README.md
+          README_en.md
+          internal/aistudio/accounts.go
+          internal/aistudio/assistant.go
+          internal/aistudio/assistant_session.go
+          internal/aistudio/client.go
+          internal/aistudio/transport_browser.go
+          internal/aistudio/transport_http.go
+          internal/api/remote_media.go
+          internal/app/admin.go
+          internal/app/proxy_pool.go
+          internal/app/runtime.go
+          internal/camoufoxnative/download.go
+          internal/config/config.go
+          web/src/types.ts"
+          UNMERGED="$(git diff --name-only --diff-filter=U | sort)"
+          if [ "$UNMERGED" != "$EXPECTED" ]; then echo "ERROR: conflict set differs from expectation"; echo "--- expected ---"; echo "$EXPECTED"; echo "--- actual ---"; echo "$UNMERGED"; exit 1; fi
+          echo "conflict set OK (15 files)"
+          echo "=== take resolved tree for conflicted text files ==="
+          git checkout origin/ops/sync-a68acad-res -- README.md README_en.md internal/aistudio/accounts.go internal/aistudio/client.go internal/aistudio/transport_browser.go internal/aistudio/transport_http.go internal/api/remote_media.go internal/app/admin.go internal/app/proxy_pool.go internal/app/runtime.go internal/camoufoxnative/download.go internal/config/config.go web/src/types.ts internal/chromeauth/verify.go internal/camoufoxnative/download_test.go build/dependency-checksums.txt
+          echo "=== accept upstream deletions of the code-assistant files ==="
+          git rm -q internal/aistudio/assistant.go internal/aistudio/assistant_session.go
+          echo "=== remaining unmerged (must be empty) ==="
+          test -z "$(git diff --name-only --diff-filter=U)" || { echo "ERROR: unresolved conflicts remain"; git diff --name-only --diff-filter=U; exit 1; }
+          echo "=== no conflict markers anywhere ==="
+          if grep -rn "^<<<<<<< \|^>>>>>>> " --exclude-dir=.git --exclude-dir=node_modules . ; then echo "ERROR: conflict markers remain"; exit 1; fi
+          git add -A
+          echo "=== sanity: deletions and new binary ==="
+          test ! -e internal/aistudio/assistant.go || { echo "ERROR: assistant.go still present"; exit 1; }
+          test ! -e internal/aistudio/assistant_session.go || { echo "ERROR: assistant_session.go still present"; exit 1; }
+          test ! -e internal/waa/firefox152.json.gz || { echo "ERROR: firefox152.json.gz still present"; exit 1; }
+          test ! -e internal/waa/locale.go || { echo "ERROR: locale.go still present"; exit 1; }
+          test -e internal/waa/firefox158.json.gz || { echo "ERROR: firefox158.json.gz missing"; exit 1; }
+          test -e internal/aistudio/hidden_models.go || { echo "ERROR: hidden_models.go missing"; exit 1; }
+          grep -q "158.0.1-beta.41" internal/camoufoxnative/download.go || { echo "ERROR: download.go is not on 158"; exit 1; }
+          echo "=== fetch 158 static libs (merged tree's script + checksums) ==="
+          SM="$RUNNER_TEMP/sm-158"
+          WP="$RUNNER_TEMP/webp-158"
+          sh build/fetch-verified.sh "https://github.com/Mag1cFall/firefox/releases/download/v158.0.1-aistudio2api.1/spidermonkey-v158.0.1-aistudio2api.1-linux-amd64-gnu.tar.gz" "spidermonkey-v158.0.1-aistudio2api.1-linux-amd64-gnu.tar.gz" "$SM" "build/dependency-checksums.txt" tar.gz
+          sh build/fetch-verified.sh "https://github.com/Mag1cFall/libwebp/releases/download/v1.6.0-aistudio2api.1/libwebp-v1.6.0-aistudio2api.1-linux-amd64-gnu.tar.gz" "libwebp-v1.6.0-aistudio2api.1-linux-amd64-gnu.tar.gz" "$WP" "build/dependency-checksums.txt" tar.gz
+          echo "CGO_CPPFLAGS=-I$SM/include -I$WP/include" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$SM/lib -L$WP/lib" >> "$GITHUB_ENV"
+          export CGO_CPPFLAGS="-I$SM/include -I$WP/include"
+          export CGO_LDFLAGS="-L$SM/lib -L$WP/lib"
+          echo "=== verify merged tree ==="
+          (cd web && npm ci && npx vp build)
+          go vet ./...
+          go build ./cmd/aistudio2api
+          go test -mod=readonly -trimpath -vet=off -count=1 ./cmd/... ./internal/...
+          echo "=== commit + push (LIVE=$LIVE) ==="
+          if [ "$LIVE" -ne 1 ]; then echo "LIVE flag not present on ops branch; NOT pushing. Merge verified but not landed."; exit 0; fi
+          git commit -m "Merge upstream main a68acad"
+          git push origin main
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$UPSTREAM_TIP" origin/main && echo "OK: a68acad is now an ancestor of origin/main" || { echo "ERROR: a68acad not ancestor after push"; exit 1; }
+          echo "=== origin/main now ==="
+          git log --oneline -1 origin/main
+          git rev-list --left-right --count origin/main...upstream/main
