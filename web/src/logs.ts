@@ -157,6 +157,14 @@ export function requestSources(row: LogRow): string[] {
   return sources.size > 0 ? [...sources] : [row.entry.source]
 }
 
+// errorDedupKey 返回请求错误行的去重标识：同一账户、模型、状态码与归一化错误文本只保留前两次；非错误请求返回 undefined；归一化去掉“resets in …”这类随时间变化的括号内容
+export function errorDedupKey(row: LogRow): string | undefined {
+  const req = row.entry.request
+  if (!req?.error) return undefined
+  const error = req.error.replace(/\s*\([^)]*resets in[^)]*\)/gi, '').trim()
+  return [requestSources(row).join(' → '), req.model ?? '', req.status ?? '', error].join('\n')
+}
+
 // groupLogs 按请求标识合并生命周期、按来源与阶段名合并分阶段运行日志，并保持服务事件的原始顺序；previous 中事件相同的行沿用原对象
 
 export function groupLogs(logs: AdminLog[], previous: ReadonlyMap<string, LogRow>): LogRow[] {

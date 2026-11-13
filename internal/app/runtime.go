@@ -1497,8 +1497,8 @@ func (closer *trackedMediaReadCloser) Close() error {
 	return closer.err
 }
 
-// acquireWarmLease 取得 Worker 已就绪的账户租约，全部账户冷却时在上限内排队等待恢复，最早恢复的是权限拒绝冷却时不排队；quotaFallback 为 true 时排队超过上限改用套餐限额或每日限额冷却中的账户；冷 Worker 启动失败后换到其他账户计入 failures，超过换号上限时返回启动失败
-func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection, quotaFallback bool, failures *int) (*aistudio.AccountLease, error) {
+// acquireWarmLease 取得 Worker 已就绪的账户租约，全部账户冷却时在上限内排队等待恢复，最早恢复的是权限拒绝冷却时不排队；排队超过上限时直接返回 AllCoolingError，不再改用套餐限额或每日限额冷却中的账户向上游发送（用量限额 429 只让上游看到一次，之后本地直接失败）；冷 Worker 启动失败后换到其他账户计入 failures，超过换号上限时返回启动失败
+func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection, failures *int) (*aistudio.AccountLease, error) {
 	fixedAccount := strings.TrimSpace(selection.AccountID) != "" || strings.TrimSpace(selection.ResourceID) != ""
 	failedWorkers := make(map[string]struct{})
 	var promoteFailure error
@@ -1629,10 +1629,6 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		if !groups.EarliestCooldown.Until.IsZero() {
 			remaining := time.Until(groups.EarliestCooldown.Until)
 			if remaining > cooldownQueueLimit || strings.HasPrefix(groups.EarliestCooldown.Reason, aistudio.AccountRejectionKind) {
-				if quotaFallback && !selection.IgnoreQuotaCooldown {
-					selection.IgnoreQuotaCooldown = true
-					continue
-				}
 				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
 			}
 			if err := wait(min(remaining, schedulingRecheck)); err != nil {
@@ -2032,15 +2028,14 @@ func (service *trackedService) generateWithRetry(
 				"排队等待 | 已等待=%s | 模型=%s", waited, modelID,
 			))
 		})
-		quotaFallback := selection.ResourceID == ""
-		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, quotaFallback, &retry.failures)
+		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, &retry.failures)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
 			(errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &buildCooling)) {
 			// 没有账户能经 Build 服务时改用 Playground，Playground 无法表达的设置按其最接近的形式发送
 			selection.Channel = ""
 			fallbackReason = "Build 通道没有可用账户"
-			lease, acquireErr = service.acquireWarmLease(requestCtx, selection, quotaFallback, &retry.failures)
+			lease, acquireErr = service.acquireWarmLease(requestCtx, selection, &retry.failures)
 		}
 		queueDelayed := queueWait.finish()
 		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && lease.Channel() != aistudio.ChannelBuild {
@@ -2442,7 +2437,7 @@ func (service *trackedService) continuationAccount(ctx context.Context, requestI
 			selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, accountID)
 		}
 	}
-	lease, acquireErr := service.acquireWarmLease(ctx, selection, false, &attempt.failures)
+	lease, acquireErr := service.acquireWarmLease(ctx, selection, &attempt.failures)
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
