@@ -45,6 +45,18 @@ func (e *ContentPolicyError) Error() string {
 	return fmt.Sprintf("AI Studio 因内容策略结束生成: %s", strings.ToUpper(e.Reason))
 }
 
+// HTTPStatus 将内容策略拦截映射为 400：提示词被安全策略拦截是确定性
+// 的客户端错误，不可重试；上游 a68acad 改成的 502 会让客户端反复重试
+// 一个永远会被拦的提示词，所以 fork 在此明确覆盖。
+func (e *ContentPolicyError) HTTPStatus() int {
+	return http.StatusBadRequest
+}
+
+// ErrorCode 返回内容策略拦截的公开错误码
+func (e *ContentPolicyError) ErrorCode() string {
+	return "content_policy"
+}
+
 // Error 返回协议证据错误
 func (e *ProtocolEvidenceError) Error() string {
 	if e.Method == "" {
