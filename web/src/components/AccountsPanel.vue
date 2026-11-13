@@ -1432,10 +1432,12 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                 <span
                   v-for="(key, state) in stateKeys"
                   :key="state"
+                  aria-hidden="true"
                   class="[grid-area:1/1]"
                   :class="[
                     stateTone[state],
-                    { 'invisible max-md:hidden': state !== account.state },
+                    'invisible',
+                    { 'max-md:hidden': state !== account.state },
                   ]"
                   >{{ t(key) }}</span
                 >
