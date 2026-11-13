@@ -7,7 +7,7 @@ import UiSelect from './UiSelect.vue'
 import RequestLogCard from './RequestLogCard.vue'
 import StageLogCard from './StageLogCard.vue'
 import LogText from './LogText.vue'
-import { groupLogs, requestSources, type LogRow } from '@/logs'
+import { errorDedupKey, groupLogs, requestSources, type LogRow } from '@/logs'
 import { reducedMotion, standardEase, type CollapseResize } from '@/motion'
 import { useQueryParam, useQueryText } from '@/url'
 
@@ -77,16 +77,23 @@ const rows = computed(() => {
   previousRows = new Map(next.map((row) => [row.key, row]))
   return next
 })
-// filteredLogs 按级别、来源与搜索筛选日志行，阶段卡片的任一步骤命中即显示
+// filteredLogs 按级别、来源与搜索筛选日志行，阶段卡片的任一步骤命中即显示；同一请求错误只保留前两次，之后相同的错误行不再显示
 const filteredLogs = computed(() => {
   const query = search.value.trim().toLowerCase()
-  return rows.value.filter(({ entry, events, stage }) => {
+  const seen = new Map<string, number>()
+  return rows.value.filter((row) => {
+    const { entry, events, stage } = row
     const checked = stage ? events : [entry]
-    return (
+    const matched =
       (level.value === 'ALL' || checked.some((event) => event.level === level.value)) &&
       (source.value === 'ALL' || events.some((event) => event.source === source.value)) &&
       (query === '' || checked.some((event) => matchLog(event, query)))
-    )
+    if (!matched) return false
+    const key = errorDedupKey(row)
+    if (key === undefined) return true
+    const count = (seen.get(key) ?? 0) + 1
+    seen.set(key, count)
+    return count <= 2
   })
 })
 
