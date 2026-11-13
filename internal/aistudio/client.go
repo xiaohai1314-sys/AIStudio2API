@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
@@ -283,6 +286,28 @@ func (c *Client) do(ctx context.Context, method string, accountID string, reques
 	return c.send(ctx, newRPCRequest(method, accountID, requestID, body, streaming))
 }
 
+// unaryRetryAttempts 是非流式 RPC 在瞬时传输错误上的最多尝试次数（含首次）
+const unaryRetryAttempts = 3
+
+// unaryRetryBackoff 是非流式 RPC 瞬时传输错误重试前的等待时长，按尝试次数递增
+var unaryRetryBackoff = []time.Duration{200 * time.Millisecond, 500 * time.Millisecond}
+
+// isTransientTransportError 判断传输错误是否为可重试的瞬时错误：
+// 服务端/代理关闭了复用的空闲连接（EOF）、连接被重置或断开时，重发一次通常就能成功。
+// 调用方取消或超时不重试，避免掩盖真实的取消与缓慢。
+func isTransientTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
 // send 发送 RPC 请求并校验响应状态与媒体类型。fork 的三项行为保留在这个统一入口：
 // 先过 pacer、非流式加超时 ctx、非流式响应同步有界读完再返回
 func (c *Client) send(ctx context.Context, rpc RPCRequest) (*RPCResponse, error) {
@@ -295,7 +320,34 @@ func (c *Client) send(ctx context.Context, rpc RPCRequest) (*RPCResponse, error)
 		defer cancel()
 	}
 	c.applyBenefitTier(rpc.Method, rpc.AccountID, rpc.Header)
-	response, err := c.transport.Do(ctx, rpc)
+	// 非流式 RPC 遇到瞬时传输错误时重试：请求体是内存中的 []byte，可安全重发；
+	// 常见原因是复用的空闲连接被服务端/代理关闭（EOF），重发一次通常就能成功。
+	// 流式请求不重试，避免重复发送已部分发出的流。
+	attempts := 1
+	if !rpc.Streaming {
+		attempts = unaryRetryAttempts
+	}
+	var response *RPCResponse
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(unaryRetryBackoff[attempt-1])
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		response, err = c.transport.Do(ctx, rpc)
+		if err == nil {
+			break
+		}
+		if !isTransientTransportError(err) {
+			break
+		}
+		slog.Debug("非流式 RPC 瞬时传输错误，重试", "method", rpc.Method, "attempt", attempt+1, "error", err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("发送 AI Studio %s: %w", rpc.Method, err)
 	}
