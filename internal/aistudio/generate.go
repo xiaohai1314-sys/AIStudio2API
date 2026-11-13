@@ -1034,7 +1034,7 @@ func (c *Client) Generate(ctx context.Context, request GenerateRequest) (<-chan 
 		}
 		var feedback *PromptFeedbackError
 		if errors.As(err, &feedback) {
-			err = &ContentPolicyError{Reason: feedback.Reason, Message: feedback.Message}
+			err = &ContentPolicyError{Reason: feedback.Reason, Message: feedback.Message, Input: true}
 		}
 		// trailing 是上游在函数调用之后结束生成的错误，客户端已收到完整的函数调用，按正常完成结束
 		var trailing error

@@ -35,6 +35,10 @@ type ContentPolicyError struct {
 	Message string
 	// Usage 是下游还没有收到事件就结束时上游给出的用量
 	Usage *Usage
+	// Input 为真表示上游在生成开始前就拒绝了输入（promptFeedback），
+	// 同一提示词重试也不会通过；为假表示生成中途因内容策略结束，
+	// 重试可能通过（采样随机），按上游的 502 可重试语义处理
+	Input bool
 }
 
 // Error 返回上游结束生成的内容策略原因
@@ -45,11 +49,14 @@ func (e *ContentPolicyError) Error() string {
 	return fmt.Sprintf("AI Studio 因内容策略结束生成: %s", strings.ToUpper(e.Reason))
 }
 
-// HTTPStatus 将内容策略拦截映射为 400：提示词被安全策略拦截是确定性
-// 的客户端错误，不可重试；上游 a68acad 改成的 502 会让客户端反复重试
-// 一个永远会被拦的提示词，所以 fork 在此明确覆盖。
+// HTTPStatus 按拦截位置映射状态码：输入端拦截是确定性的客户端错误，
+// 返回 400；输出端拦截（生成中途因内容策略结束）保留上游 a68acad
+// 的 502 可重试语义，重试同一提示词有时能通过。
 func (e *ContentPolicyError) HTTPStatus() int {
-	return http.StatusBadRequest
+	if e.Input {
+		return http.StatusBadRequest
+	}
+	return http.StatusBadGateway
 }
 
 // ErrorCode 返回内容策略拦截的公开错误码
