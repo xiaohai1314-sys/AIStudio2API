@@ -3,8 +3,10 @@ package aistudio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -51,6 +53,9 @@ func TestIsTransientTransportError(t *testing.T) {
 		{"unexpected EOF", io.ErrUnexpectedEOF, true},
 		{"connection reset", syscall.ECONNRESET, true},
 		{"broken pipe", syscall.EPIPE, true},
+		// DBSC 刷新（tls-client）与 MakerSuite 传输返回的正是这种形状：url.Error 包着 EOF，再经 %w 层层包装
+		{"url.Error wrapping EOF", &url.Error{Op: "Post", URL: "https://accounts.google.com/RotateBoundCookies", Err: io.EOF}, true},
+		{"wrapped url.Error EOF", fmt.Errorf("DBSC 刷新请求失败: %w", &url.Error{Op: "Post", URL: "https://accounts.google.com/RotateBoundCookies", Err: io.EOF}), true},
 		{"context canceled", context.Canceled, false},
 		{"context deadline", context.DeadlineExceeded, false},
 		{"generic error", errors.New("boom"), false},
