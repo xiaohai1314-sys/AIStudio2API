@@ -775,6 +775,29 @@ func driveStorageQuotaExceeded(err error) bool {
 		rpcError.StatusCode == http.StatusForbidden && strings.Contains(rpcError.Message, `"storageQuotaExceeded"`)
 }
 
+// uploadFailures 记录内联附件上传的逐文件失败。Drive 满额回退只在全部失败
+// 都是存储空间已满时才适用：若任一失败是满额就把整个 join 错误当满额吞掉，
+// 会连带掩盖混在其中的认证失败、绑定失败。
+type uploadFailures struct {
+	failures GroupedErrors
+	total    int
+	quota    int
+}
+
+// Add 记录一次逐文件失败并归类是否为满额失败
+func (f *uploadFailures) Add(err error) {
+	f.failures.Add("", err)
+	f.total++
+	if driveStorageQuotaExceeded(err) {
+		f.quota++
+	}
+}
+
+// allQuotaExceeded 报告是否有失败且全部失败都是 Drive 存储空间已满
+func (f *uploadFailures) allQuotaExceeded() bool {
+	return f.total > 0 && f.quota == f.total
+}
+
 // CopyFileReferencesToLease 将文件引用复制到目标账户并返回改写内容
 func (s *PooledService) CopyFileReferencesToLease(
 	ctx context.Context,
@@ -1180,6 +1203,7 @@ func (s *PooledService) UploadInlineMediaToLease(
 		temporary.copies = append(temporary.copies, temporaryDriveCopy{id: id, token: token, bound: true})
 	}
 	uploadErr := folderErr
+	var failures uploadFailures
 	if len(pending) > 0 && folderErr == nil {
 		drive := s.client.transport.(DriveTransport)
 		uploadCtx, cancelUploads := context.WithCancel(targetCtx)
@@ -1215,25 +1239,24 @@ func (s *PooledService) UploadInlineMediaToLease(
 			}
 		}
 		cancelUploads()
-		var failures GroupedErrors
 		for index, result := range results {
 			if result.err != nil {
-				failures.Add("", result.err)
+				failures.Add(result.err)
 				continue
 			}
 			job := pending[index]
 			if bindErr := target.bindInlineMedia(targetCtx, result.file, job.key, int64(len(job.blob.Data))); bindErr != nil {
 				temporary.copies = append(temporary.copies, temporaryDriveCopy{id: result.file.ID, token: token})
-				failures.Add("", bindErr)
+				failures.Add(bindErr)
 				continue
 			}
 			files[job.key] = result.file
 			used = append(used, result.file.ID)
 		}
-		uploadErr = failures.Join(nil)
+		uploadErr = failures.failures.Join(nil)
 	}
 	temporary.release = s.useInlineMedia(used)
-	if uploadErr != nil && (keepImages || !driveStorageQuotaExceeded(uploadErr)) {
+	if uploadErr != nil && (keepImages || !failures.allQuotaExceeded()) {
 		if DefinitiveAuthenticationFailure(uploadErr) {
 			uploadErr = errors.Join(uploadErr, target.ConfirmAuthenticationFailure(targetCtx, uploadErr))
 		}
