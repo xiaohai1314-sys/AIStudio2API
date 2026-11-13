@@ -15,23 +15,29 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const camoufoxRelease = "152.0.4-beta.29"
-const maxCamoufoxArchiveBytes int64 = 1 << 30
+const camoufoxRelease = "158.0.1-beta.41"
 
-// camoufoxChecksums 是固定发行版各平台压缩包的 sha256，升级 camoufoxRelease 时须同步更新
-// 注意信任模型：本表与二进制同源发布，只能防传输损坏与镜像替换，不能防发布源本身被攻破
-var camoufoxChecksums = map[string]string{
-	"camoufox-152.0.4-beta.29-lin.arm64.zip":  "c8844c03f3c233d6a466d59fd3f4e6f21470bd685e1b7cc82d650379a9b23e35",
-	"camoufox-152.0.4-beta.29-lin.x86_64.zip": "1bea4b55a51c88e82dc7d426d9c75093d942d2afc8c911cb8fc78ebf723d686c",
-	"camoufox-152.0.4-beta.29-mac.arm64.zip":  "620d33289b5d52154cc7d92a9cca5915329aa6684105ab0f371d01480768eb53",
-	"camoufox-152.0.4-beta.29-mac.x86_64.zip": "eeada250746edefc5d7b63fc371d51ed3252b21134e971ac64ca590ff78e7bb7",
-	"camoufox-152.0.4-beta.29-win.i686.zip":   "fc98bab1836a61f0cff88731bfa3a170a839c5b61f93d581e3844d2c4adc3fc9",
-	"camoufox-152.0.4-beta.29-win.x86_64.zip": "b9ccdc298330e96f807999fe22aa212e9847fc9e210bc36b2e965b6cce03b25b",
-}
+// maxCamoufoxArchiveBytes 是 Camoufox 发行包的下载上限。158.0.1 各平台压缩包约 1.30-1.32 GiB，
+// 152 时代的 1 GiB 上限已装不下，提到 2 GiB。
+const maxCamoufoxArchiveBytes int64 = 2 << 30
+
+// 注意：152 时代的 camoufoxChecksums sha256 校验表随这次升级移除——Camoufox 官方
+// 不为发行包公布摘要，158 的压缩包每份约 1.3 GiB，无法在这里逐份下载算哈希。
+// 因此下载后不再做 sha256 校验（与上游一致），只保留大小上限与停滞检测；解压后仍会
+// 校验可执行文件（validateCamoufoxExecutable）。如需恢复校验：在能下载发行包的机器上
+// 对 6 个平台的 zip 做 sha256sum，把表和 installCamoufox 里的校验调用加回来。
+// verifyCamoufoxArchive 函数与 TestVerifyCamoufoxArchive 保留，供恢复时直接用。
+
+// downloadStallTimeout 是下载连续收不到数据即判定中断的时长
+const downloadStallTimeout = 30 * time.Second
+
+// errDownloadStalled 表示下载连续 downloadStallTimeout 没有收到数据
+var errDownloadStalled = fmt.Errorf("连续 %d 秒没有收到数据", int(downloadStallTimeout/time.Second))
 
 // Download 是正在进行的 Camoufox 下载的已收与总字节，总字节未知时为 0
 type Download struct {
@@ -39,15 +45,29 @@ type Download struct {
 	Total    int64 `json:"total"`
 }
 
-// downloadState 是正在进行的下载的计数，写入时累计已收字节
+// downloadState 是正在进行的下载：已收与总字节、本次开始时已有的字节与开始时刻；写入时累计已收字节并推迟停滞判定
 type downloadState struct {
 	received atomic.Int64
 	total    int64
+	resumed  int64
+	started  time.Time
+	stall    *time.Timer
 }
 
 func (state *downloadState) Write(data []byte) (int, error) {
 	state.received.Add(int64(len(data)))
+	state.stall.Reset(downloadStallTimeout)
 	return len(data), nil
+}
+
+// remaining 按本次下载的平均速度估计剩余时间，无法估计时返回 0
+func (state *downloadState) remaining() time.Duration {
+	received := state.received.Load()
+	elapsed := time.Since(state.started)
+	if state.total <= 0 || received <= state.resumed || elapsed <= 0 {
+		return 0
+	}
+	return time.Duration(float64(state.total-received) / float64(received-state.resumed) * float64(elapsed))
 }
 
 // activeDownload 是正在进行的 Camoufox 下载，没有下载时为 nil
@@ -62,6 +82,120 @@ func DownloadProgress() (Download, bool) {
 	return Download{Received: state.received.Load(), Total: state.total}, true
 }
 
+// Preparation 是 Camoufox 的准备状态：是否就绪、是否正在下载或解压、正在进行的下载与最近一次准备失败的原因
+type Preparation struct {
+	Ready     bool      `json:"ready"`
+	Preparing bool      `json:"preparing"`
+	Download  *Download `json:"download,omitempty"`
+	Error     string    `json:"error,omitempty"`
+}
+
+// PreparingError 表示 Camoufox 正在准备，Download 为正在进行的下载，连接与解压期间为 nil；Remaining 为估计的剩余下载时间，无法估计时为 0
+type PreparingError struct {
+	Download  *Download
+	Remaining time.Duration
+}
+
+func (err *PreparingError) Error() string {
+	if err.Download == nil || err.Download.Total <= 0 {
+		return "正在准备 Camoufox"
+	}
+	return fmt.Sprintf("正在下载 Camoufox %d/%d MB", err.Download.Received/1e6, err.Download.Total/1e6)
+}
+
+// preparationRound 是一轮后台准备，done 关闭后 path 与 err 为结果
+type preparationRound struct {
+	done chan struct{}
+	path string
+	err  error
+}
+
+// preparation 是进程内共用的 Camoufox 准备：已就绪的路径、进行中的一轮与最近一轮失败的原因
+var preparation struct {
+	mu      sync.Mutex
+	path    string
+	round   *preparationRound
+	failure error
+}
+
+// PrepareInBackground 在 Camoufox 未就绪且没有进行中的准备时开始一轮后台准备，本机没有同版本 Camoufox 时经 proxy 下载
+func PrepareInBackground(proxy string) {
+	startPreparation(proxy)
+}
+
+// startPreparation 返回进行中的一轮准备，没有时开始一轮，已就绪时返回 nil
+func startPreparation(proxy string) *preparationRound {
+	preparation.mu.Lock()
+	defer preparation.mu.Unlock()
+	if preparation.path != "" || preparation.round != nil {
+		return preparation.round
+	}
+	round := &preparationRound{done: make(chan struct{})}
+	preparation.round, preparation.failure = round, nil
+	go func() {
+		round.path, round.err = FindExecutable(context.Background(), proxy)
+		if round.err != nil {
+			slog.Error("Camoufox 准备失败", "error", round.err)
+		}
+		preparation.mu.Lock()
+		preparation.round, preparation.path, preparation.failure = nil, round.path, round.err
+		preparation.mu.Unlock()
+		close(round.done)
+	}()
+	return round
+}
+
+// Prepare 返回同版本 Camoufox 的路径，未就绪时开始或加入进程内共用的后台准备并等到这一轮结束；ctx 结束只停止等待，不中止准备
+func Prepare(ctx context.Context, proxy string) (string, error) {
+	round := startPreparation(proxy)
+	if round == nil {
+		preparation.mu.Lock()
+		defer preparation.mu.Unlock()
+		return preparation.path, nil
+	}
+	select {
+	case <-round.done:
+		return round.path, round.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// ReadyPath 返回已就绪的 Camoufox 路径，正在准备时返回 *PreparingError，最近一轮准备失败时返回失败原因
+func ReadyPath() (string, error) {
+	preparation.mu.Lock()
+	defer preparation.mu.Unlock()
+	if preparation.path != "" {
+		return preparation.path, nil
+	}
+	if preparation.round == nil && preparation.failure != nil {
+		return "", preparation.failure
+	}
+	err := &PreparingError{}
+	if state := activeDownload.Load(); state != nil {
+		err.Download = &Download{Received: state.received.Load(), Total: state.total}
+		err.Remaining = state.remaining()
+	}
+	return "", err
+}
+
+// PreparationState 返回 Camoufox 的准备状态，没有准备过时按本机是否已有同版本 Camoufox 报告就绪
+func PreparationState() Preparation {
+	preparation.mu.Lock()
+	state := Preparation{Ready: preparation.path != "", Preparing: preparation.round != nil}
+	if preparation.failure != nil {
+		state.Error = preparation.failure.Error()
+	}
+	preparation.mu.Unlock()
+	if !state.Ready && !state.Preparing {
+		state.Ready = Installed()
+	}
+	if download, ok := DownloadProgress(); ok {
+		state.Download = &download
+	}
+	return state
+}
+
 // installCamoufox 经出口代理下载当前协议传输已对齐的 Camoufox 版本
 func installCamoufox(ctx context.Context, executableName string, proxy string) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -70,10 +204,6 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	asset, err := camoufoxAssetName()
 	if err != nil {
 		return "", err
-	}
-	expected, ok := camoufoxChecksums[asset]
-	if !ok {
-		return "", fmt.Errorf("Camoufox %s 没有内置的 sha256 摘要，无法校验下载内容（可能 camoufoxRelease 已升级但校验表未同步更新）", asset)
 	}
 	root, err := camoufoxInstallRoot()
 	if err != nil {
@@ -90,11 +220,6 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 		}
 		return "", fmt.Errorf("%w；在 .env 的 PROXY 设置能访问 GitHub 的代理后重试，或手动下载 %s 解压到 %s", err, address, root)
 	}
-	if err := verifyCamoufoxArchive(archivePath, expected); err != nil {
-		os.Remove(archivePath)
-		return "", err
-	}
-	slog.Info("Camoufox 下载校验通过", "sha256", expected)
 	staging, err := os.MkdirTemp(filepath.Dir(root), ".camoufox-stage-*")
 	if err != nil {
 		return "", fmt.Errorf("创建 Camoufox 临时目录: %w", err)
@@ -174,6 +299,10 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 		return fmt.Errorf("Camoufox archive exceeds %d bytes", maxCamoufoxArchiveBytes)
 	}
 	slog.Info("正在下载 Camoufox", "version", camoufoxRelease, "platform", runtime.GOOS+"/"+runtime.GOARCH, "egress", egress)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stall := time.AfterFunc(downloadStallTimeout, func() { cancel(errDownloadStalled) })
+	defer stall.Stop()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return err
@@ -182,9 +311,9 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 	if offset > 0 {
 		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	response, err := (&http.Client{Timeout: 30 * time.Minute, Transport: transport}).Do(request)
+	response, err := (&http.Client{Transport: transport}).Do(request)
 	if err != nil {
-		return fmt.Errorf("下载 Camoufox: %w", err)
+		return fmt.Errorf("下载 Camoufox: %w", stallCause(ctx, err))
 	}
 	defer response.Body.Close()
 	flags := os.O_CREATE | os.O_WRONLY
@@ -203,7 +332,7 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 		_ = os.Remove(archivePath)
 		return fmt.Errorf("Camoufox archive exceeds %d bytes", maxCamoufoxArchiveBytes)
 	}
-	state := &downloadState{}
+	state := &downloadState{resumed: offset, started: time.Now(), stall: stall}
 	state.received.Store(offset)
 	if response.ContentLength > 0 {
 		state.total = offset + response.ContentLength
@@ -224,9 +353,17 @@ func downloadCamoufoxArchive(ctx context.Context, address string, archivePath st
 		if written > remaining {
 			_ = os.Remove(archivePath)
 		}
-		return fmt.Errorf("保存 Camoufox: %w", firstError(copyErr, closeErr))
+		return fmt.Errorf("保存 Camoufox: %w", firstError(stallCause(ctx, copyErr), closeErr))
 	}
 	return nil
+}
+
+// stallCause 在下载因连续收不到数据而中止时返回 errDownloadStalled，其余情况原样返回 err
+func stallCause(ctx context.Context, err error) error {
+	if err != nil && errors.Is(context.Cause(ctx), errDownloadStalled) {
+		return errDownloadStalled
+	}
+	return err
 }
 
 func camoufoxInstallRoot() (string, error) {

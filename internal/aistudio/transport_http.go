@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -21,7 +20,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-const publicDiscoveryUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0"
+const publicDiscoveryUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0"
 
 var makerSuiteAPIKeyPattern = regexp.MustCompile(`"WIu0Nc":"([^"]+)"`)
 
@@ -203,108 +202,6 @@ func NewProxyHTTPClient(proxyURL string) (*http.Client, error) {
 	return client, nil
 }
 
-// UploadAssistantFile 以账户身份按官网对话面板的 /_/upload 可续传协议上传附件，返回上传路径
-func (t *MakerSuiteHTTPTransport) UploadAssistantFile(ctx context.Context, accountID string, blob Blob) (string, error) {
-	lease, owned, err := resolveAccountLease(ctx, t.pool, AccountSelection{AccountID: accountID})
-	if err != nil {
-		return "", err
-	}
-	if owned {
-		defer lease.Release()
-	}
-	account := lease.Account()
-	public, err := t.headers.ProtocolHeaders(ctx, account.ID)
-	if err != nil {
-		return "", fmt.Errorf("读取账户动态公共头: %w", err)
-	}
-	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(blob.Data)
-	hash := "sha256=" + base64.StdEncoding.EncodeToString(digest[:])
-	send := func(address string, header http.Header, body []byte) (http.Header, []byte, error) {
-		state, err := lease.ReloadStorageState()
-		if err != nil {
-			return nil, nil, fmt.Errorf("读取账户 storage state: %w", err)
-		}
-		cookie, err := state.CookieHeader(address, t.now())
-		if err != nil {
-			return nil, nil, err
-		}
-		header.Set("User-Agent", public.Get("User-Agent"))
-		header.Set("Accept", "*/*")
-		header.Set("Origin", aiStudioOrigin)
-		header.Set("Referer", aiStudioOrigin+"/")
-		header.Set("Sec-Fetch-Dest", "empty")
-		header.Set("Sec-Fetch-Mode", "cors")
-		header.Set("Sec-Fetch-Site", "same-origin")
-		if account.Config.AuthUser > 0 {
-			header.Set("X-Goog-Authuser", strconv.Itoa(account.Config.AuthUser))
-		}
-		if language := account.AcceptLanguage(); language != "" {
-			header.Set("Accept-Language", language)
-		}
-		header.Set("Cookie", cookie)
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, address, bytes.NewReader(body))
-		if err != nil {
-			return nil, nil, fmt.Errorf("创建写代码助手附件上传请求: %w", err)
-		}
-		request.Header = header
-		response, err := unaryTransferDo(ctx, client, request)
-		if err != nil {
-			return nil, nil, fmt.Errorf("执行写代码助手附件上传: %w", err)
-		}
-		defer response.Body.Close()
-		if setCookies := response.Header.Values("Set-Cookie"); len(setCookies) > 0 {
-			if err := lease.MergeSetCookieHeaders(setCookies, address, t.now()); err != nil {
-				return nil, nil, fmt.Errorf("合并写代码助手附件上传响应 Cookie: %w", err)
-			}
-		}
-		var raw []byte
-		if response.StatusCode != http.StatusOK {
-			raw, err = readErrorResponseBody(response.Body)
-		} else {
-			raw, err = ReadResponseBody(response.Body, maxUploadResponseBytes)
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("读取写代码助手附件上传响应: %w", err)
-		}
-		if response.StatusCode != http.StatusOK {
-			return nil, nil, DecodeRPCError(assistantUploadMethod, response.StatusCode, raw)
-		}
-		return response.Header, raw, nil
-	}
-	header, _, err := send(aiStudioOrigin+"/_/upload", http.Header{
-		"X-Goog-Upload-Header-Content-Length": {strconv.Itoa(len(blob.Data))},
-		"X-Goog-Upload-Header-Content-Type":   {blob.MIME},
-		"X-Goog-Hash":                         {hash},
-		"X-Goog-Upload-Protocol":              {"resumable"},
-		"X-Goog-Upload-Command":               {"start"},
-	}, nil)
-	if err != nil {
-		return "", err
-	}
-	address := header.Get("X-Goog-Upload-URL")
-	if address == "" {
-		return "", fmt.Errorf("写代码助手附件上传响应缺少 X-Goog-Upload-URL")
-	}
-	_, raw, err := send(address, http.Header{
-		"Content-Type":          {blob.MIME},
-		"X-Goog-Hash":           {hash},
-		"X-Goog-Upload-Command": {"upload, finalize"},
-		"X-Goog-Upload-Offset":  {"0"},
-	}, blob.Data)
-	if err != nil {
-		return "", err
-	}
-	path := strings.TrimSpace(string(raw))
-	if path == "" {
-		return "", fmt.Errorf("写代码助手附件上传响应缺少上传路径")
-	}
-	return path, nil
-}
-
 // Do 发送普通 MakerSuite RPC 并让响应 body 持有租约
 // doClientRequest 按 RPC 是否流式选择请求方式：流式（SSE）不套固定超时，
 // 健康的长时间思考流会超过任何固定上限，超时由调用方 ctx 控制；非流式包 unaryRPCTimeout 兜底
@@ -400,6 +297,33 @@ func (t *MakerSuiteHTTPTransport) Do(ctx context.Context, rpc RPCRequest) (*RPCR
 		},
 	}
 	return &RPCResponse{StatusCode: response.StatusCode, Header: response.Header.Clone(), Body: body}, nil
+}
+
+// FetchStatic 经账户的固定出口以 GET 读取官网静态资源
+func (t *MakerSuiteHTTPTransport) FetchStatic(ctx context.Context, accountID string, address string) ([]byte, error) {
+	account, err := t.pool.Account(accountID)
+	if err != nil {
+		return nil, err
+	}
+	client, err := t.clientForProxy(account.EffectiveProxy(t.globalProxy))
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", publicDiscoveryUserAgent)
+	response, err := sendHTTP(client, request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	// 上游静态资源正常只有几 MB，用 fork 的共享上限读，避免代理/MITM 返回超大体时 OOM
+	return ReadResponseBody(response.Body, maxPageResourceBytes)
 }
 
 // CloseIdleConnections 关闭全部固定出口的空闲连接
