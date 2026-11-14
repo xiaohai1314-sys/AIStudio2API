@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ type generationAdmin interface {
 	Accounts(context.Context) ([]api.AdminAccount, error)
 	EnvironmentCheck(context.Context, api.EnvironmentCheckInput) (api.EnvironmentCheckResult, error)
 	UpdateGeoIP(context.Context) error
+	AccountExits(context.Context) ([]api.AccountExit, error)
 	CreateAccount(context.Context, api.AccountCreateInput, *camoufoxnative.LiveView) (api.AdminAccount, error)
 	ChromeImportProfiles(context.Context) ([]api.ChromeImportProfile, error)
 	CookieBrowsers(ctx context.Context, proxy string) ([]api.CookieBrowser, error)
@@ -106,6 +108,8 @@ type runtimeManager struct {
 	startMu            sync.Mutex
 	mu                 sync.RWMutex
 	current            *runtimeGeneration
+	// initial 是进程启动时装配、尚未启动过的生成服务，自动启动时配置未变就直接启动它而不重新载入账户
+	initial *runtimeGeneration
 	// launchMu 保护 startCancel、launching、launchReleased 与 autoStartCancel
 	launchMu    sync.Mutex
 	startCancel context.CancelFunc
@@ -138,6 +142,9 @@ func newRuntimeManager(
 	}
 	generation.service.SetAPIKeyAccounts(apiKeyAccounts(cfg.ProxyAPIKey, cfg.APIKeyAccounts, cfg))
 	manager.current = generation
+	if cfg.AutoStart {
+		manager.initial = generation
+	}
 	return manager, nil
 }
 
@@ -182,11 +189,8 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 	manager.launchMu.Lock()
 	manager.startCancel, manager.launching, manager.launchReleased = launchCancel, launching, released
 	manager.launchMu.Unlock()
-	if _, err := current.admin.StopService(ctx); err != nil {
-		manager.finishStart(launchCancel)
-		return api.AdminStatus{}, err
-	}
-
+	initial := manager.initial
+	manager.initial = nil
 	cfg, err := config.Load(manager.configPath)
 	if err != nil {
 		manager.finishStart(launchCancel)
@@ -198,14 +202,23 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 		return api.AdminStatus{}, err
 	}
 
-	next, err := manager.factory(launchCtx, manager.lifecycle, cfg, manager.requests)
-	if err != nil {
-		manager.finishStart(launchCancel)
-		return api.AdminStatus{}, err
+	next := current
+	if initial != current || !reflect.DeepEqual(cfg, current.config) {
+		if _, err := current.admin.StopService(ctx); err != nil {
+			manager.finishStart(launchCancel)
+			return api.AdminStatus{}, err
+		}
+		next, err = manager.factory(launchCtx, manager.lifecycle, cfg, manager.requests)
+		if err != nil {
+			manager.finishStart(launchCancel)
+			return api.AdminStatus{}, err
+		}
 	}
 	if launchCtx.Err() != nil {
 		manager.finishStart(launchCancel)
-		_ = next.Close()
+		if next != current {
+			_ = next.Close()
+		}
 		return manager.Status(ctx)
 	}
 
@@ -224,11 +237,15 @@ func (manager *runtimeManager) startService(ctx context.Context) (api.AdminStatu
 		}()
 	}
 
-	current.lifecycleCancel()
+	if next != current {
+		current.lifecycleCancel()
+	}
 	status, startErr := next.admin.StartService(launchCtx)
 	manager.finishStart(launchCancel)
-	if err := current.Close(); err != nil {
-		manager.requests.log("service", "WARN", "旧生成服务关闭失败 | 错误="+err.Error())
+	if next != current {
+		if err := current.Close(); err != nil {
+			manager.requests.log("service", "WARN", "旧生成服务关闭失败 | 错误="+err.Error())
+		}
 	}
 	return status, startErr
 }
@@ -492,6 +509,14 @@ func (manager *runtimeManager) Accounts(ctx context.Context) ([]api.AdminAccount
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 	return manager.current.admin.Accounts(ctx)
+}
+
+// AccountExits 查询当前生成服务各账户出口的公网 IP 与地理位置，查询期间不占用生成服务
+func (manager *runtimeManager) AccountExits(ctx context.Context) ([]api.AccountExit, error) {
+	manager.mu.RLock()
+	admin := manager.current.admin
+	manager.mu.RUnlock()
+	return admin.AccountExits(ctx)
 }
 
 // CreateAccount 等 Camoufox 就绪后在当前生成服务以浏览器登录创建账户，等待下载期间不占用生成服务

@@ -3,6 +3,7 @@ import { keepPage } from '@/desktop'
 import type {
   Account,
   AccountDraft,
+  AccountExit,
   AccountLoginInput,
   AccountRefresh,
   AccountTask,
@@ -139,6 +140,8 @@ export const api = {
     requestJSON<UpdateStatus>(refresh ? '/api/update?refresh=1' : '/api/update'),
   applyUpdate: () => requestJSON<UpdateStatus>('/api/update', { method: 'POST' }),
   accounts: async () => (await requestJSON<AccountsResponse>('/api/accounts')).accounts,
+  accountExits: async () =>
+    (await requestJSON<{ exits: AccountExit[] }>('/api/accounts/exits')).exits,
   models: async () => (await requestJSON<ModelsResponse>('/api/models')).models,
   cooldowns: async () => (await requestJSON<CooldownsResponse>('/api/cooldowns')).cooldowns,
   endpointRisks: async () =>
