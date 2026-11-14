@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	stdhttp "net/http"
+	"net/http/httptrace"
 	"net/url"
 	"slices"
 	"sort"
@@ -98,6 +99,7 @@ var firefoxRequestHeaderOrder = []string{
 	"x-goog-api-key",
 	"x-goog-authuser",
 	"authorization",
+	"content-encoding",
 	"content-type",
 	"x-user-agent",
 	"content-length",
@@ -118,6 +120,9 @@ var firefoxRequestHeaderOrder = []string{
 
 // waaHost 是官网 Waa/Create 的主机，其页面脚本先写 authorization 再写 x-goog-authuser
 const waaHost = "waa-pa.clients6.google.com"
+
+// clearcutHost 是官网 clearcut 上报的主机，2712 上报脚本同样先写 authorization 再写 x-goog-authuser
+const clearcutHost = "play.google.com"
 
 // gapiRequestHeaderOrder 是 Firefox 158 发出官网页面 gapi 请求（Drive discovery 与上传）的请求头顺序
 var gapiRequestHeaderOrder = []string{
@@ -195,7 +200,8 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 		}
 	}
 	pool := &firefoxConnPool{
-		dial: func(address string, anonymous bool) (net.Conn, error) {
+		dial: func(address string, anonymous bool, timing *connectionTiming) (net.Conn, error) {
+			proxyDialer := timing.dialer(proxyDialer, sessions.tunnel)
 			return dialBrowserTLS(proxyDialer, sessions, address, anonymous)
 		},
 		conns:       map[string][]*http2.ClientConn{},
@@ -225,10 +231,62 @@ func newBrowserRoundTripper(proxyURL string) (stdhttp.RoundTripper, error) {
 	return roundTripper, nil
 }
 
+// connectionTimingKey 是请求 context 中记录该请求自己建立连接各阶段时刻的 *connectionTiming
+type connectionTimingKey struct{}
+
+// connectionTiming 是一次请求自己建立连接时各阶段的时刻，请求复用已有连接时 dialed 为 false
+type connectionTiming struct {
+	mu     sync.Mutex
+	dialed bool
+	// dnsStart 与 dnsDone 是解析目标主机或代理主机的起止时刻，地址为 IP 时为零值
+	dnsStart, dnsDone time.Time
+	// connectStart 与 connectDone 是与目标主机或代理建立 TCP 连接的起止时刻
+	connectStart, connectDone time.Time
+	// tunneled 是 HTTP 代理返回 CONNECT 应答的时刻，直连与 SOCKS5 代理时为零值
+	tunneled time.Time
+}
+
+// dialer 返回记录各阶段时刻的拨号器，tunnel 表示经 HTTP 代理的 CONNECT 隧道，timing 为 nil 时原样返回
+func (timing *connectionTiming) dialer(dialer proxy.ContextDialer, tunnel bool) proxy.ContextDialer {
+	if timing == nil {
+		return dialer
+	}
+	return tracedDialer{ContextDialer: dialer, timing: timing, tunnel: tunnel}
+}
+
+// mark 在 timing 的锁内记下一个时刻
+func (timing *connectionTiming) mark(at *time.Time) {
+	timing.mu.Lock()
+	*at = time.Now()
+	timing.mu.Unlock()
+}
+
+// tracedDialer 以 httptrace 记下拨号的 DNS 与 TCP 起止时刻，经 HTTP 代理时记下 CONNECT 应答时刻
+type tracedDialer struct {
+	proxy.ContextDialer
+	timing *connectionTiming
+	tunnel bool
+}
+
+func (dialer tracedDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	timing := dialer.timing
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		DNSStart:     func(httptrace.DNSStartInfo) { timing.mark(&timing.dnsStart) },
+		DNSDone:      func(httptrace.DNSDoneInfo) { timing.mark(&timing.dnsDone) },
+		ConnectStart: func(string, string) { timing.mark(&timing.connectStart) },
+		ConnectDone:  func(string, string, error) { timing.mark(&timing.connectDone) },
+	})
+	conn, err := dialer.ContextDialer.DialContext(ctx, network, address)
+	if err == nil && dialer.tunnel {
+		timing.mark(&timing.tunneled)
+	}
+	return conn, err
+}
+
 // firefoxConnPool 按 Firefox 选择 HTTP/2 连接，匿名请求、携带凭据的请求与 HTTP/3 备用连接分开建连
 type firefoxConnPool struct {
 	transport *http2.Transport
-	dial      func(address string, anonymous bool) (net.Conn, error)
+	dial      func(address string, anonymous bool, timing *connectionTiming) (net.Conn, error)
 	mu        sync.Mutex
 	conns     map[string][]*http2.ClientConn
 	// experienced 记录握手完成后又分派过请求的连接，即 Firefox 的 IsExperienced
@@ -281,77 +339,38 @@ func (pool *firefoxConnPool) get(ctx context.Context, address string, dispatch b
 		return conn, nil
 	}
 	pool.dialing[key]++
-	added := pool.added
 	pool.mu.Unlock()
-	type dialed struct {
-		conn *http2.ClientConn
-		err  error
+	timing, _ := ctx.Value(connectionTimingKey{}).(*connectionTiming)
+	if timing != nil {
+		timing.dialed = true
 	}
-	result := make(chan dialed, 1)
-	paniclog.Go("transport_browser.go:272", func() {
-		func() {
-			var conn *http2.ClientConn
-			var err error
-			// 记账与结果回送放进 defer：拨号 panic 时也要归还连接名额并唤醒等待方，
-			// 否则该 key 永久少一个名额、等待方又没有超时分支会一直挂住
-			defer func() {
-				recovered := recover()
-				if recovered != nil {
-					conn, err = nil, fmt.Errorf("浏览器连接拨号 panic: %v", recovered)
-				}
-				pool.mu.Lock()
-				pool.dialing[key]--
-				if err == nil {
-					pool.conns[key] = append(pool.conns[key], conn)
-				}
-				result <- dialed{conn: conn, err: err}
-				pool.notifyLocked()
-				pool.mu.Unlock()
-				if recovered != nil {
-					panic(recovered)
-				}
-			}()
-			var raw net.Conn
-			raw, err = pool.dial(address, class.anonymous)
-			if err == nil {
-				conn, err = pool.transport.NewClientConn(raw)
-				if err != nil {
-					_ = raw.Close()
-				}
-			}
-		}()
-	})
-	for {
-		select {
-		case own := <-result:
-			if own.err != nil {
-				return nil, own.err
-			}
-			pool.mu.Lock()
-			conn := pool.firstLocked(key, own.conn, dispatch)
-			pool.mu.Unlock()
-			return conn, nil
-		case <-added:
-			pool.mu.Lock()
-			select {
-			case own := <-result:
-				if own.err != nil {
-					pool.mu.Unlock()
-					return nil, own.err
-				}
-				conn := pool.firstLocked(key, own.conn, dispatch)
-				pool.mu.Unlock()
-				return conn, nil
-			default:
-			}
-			conn := pool.availableLocked(key, inverted, dispatch)
-			added = pool.added
-			pool.mu.Unlock()
-			if conn != nil {
-				return conn, nil
-			}
+	var err error
+	// 记账放进 defer：拨号 panic 时也要归还拨号名额并唤醒等待方，否则该 key 永久少一个名额
+	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			conn, err = nil, fmt.Errorf("浏览器连接拨号 panic: %v", recovered)
+		}
+		pool.mu.Lock()
+		pool.dialing[key]--
+		if err == nil {
+			pool.conns[key] = append(pool.conns[key], conn)
+		}
+		pool.notifyLocked()
+		pool.mu.Unlock()
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
+	var raw net.Conn
+	raw, err = pool.dial(address, class.anonymous, timing)
+	if err == nil {
+		conn, err = pool.transport.NewClientConn(raw)
+		if err != nil {
+			_ = raw.Close()
 		}
 	}
+	return conn, err
 }
 
 // availableLocked 返回本类能接受新请求的最早连接，没有时返回另一类已复用过的连接；dispatch 时把取到的本类连接记为已复用
@@ -368,20 +387,6 @@ func (pool *firefoxConnPool) availableLocked(key string, inverted string, dispat
 		}
 	}
 	return nil
-}
-
-// firstLocked 返回本类最先建好且能接受新请求的连接，取到的不是本请求拨出的连接时记为已复用
-func (pool *firefoxConnPool) firstLocked(key string, own *http2.ClientConn, dispatch bool) *http2.ClientConn {
-	for _, conn := range pool.conns[key] {
-		if conn == own {
-			return own
-		}
-		if conn.CanTakeNewRequest() {
-			pool.experienced[conn] = pool.experienced[conn] || dispatch
-			return conn
-		}
-	}
-	return own
 }
 
 // idle 报告该类别是否已有能接受新请求的连接
@@ -529,6 +534,7 @@ func dialBrowserTLS(dialer proxy.ContextDialer, sessions *firefoxSessionCache, a
 	return connection, nil
 }
 
+// RoundTrip 按缓存先发 CORS 预检再发送请求，context 标为匿名类别的请求经不带凭据的连接发送，请求在收到响应头前失败时清除该 URL 的预检缓存
 func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdhttp.Response, error) {
 	err := transport.ensurePreflight(request)
 	var upstream *fhttp.Request
@@ -549,7 +555,7 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 	}
 	upstream.Header.Set("Te", "trailers")
 	upstream.Header[fhttp.HeaderOrderKey] = orderedHeaderNames(upstream.Header, request.URL.Host)
-	response, err := transport.roundTrip(upstream, false)
+	response, err := transport.roundTrip(upstream, requestClassOf(request.Context()).anonymous)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +580,7 @@ func (transport *browserRoundTripper) RoundTrip(request *stdhttp.Request) (*stdh
 	}, nil
 }
 
-// roundTrip 执行上游请求，anonymous 表示不携带凭据的 CORS 预检：直连时先按 Alt-Svc 选择 HTTP/3，其余经 HTTP/2 发送并记录响应的 Alt-Svc
+// roundTrip 执行上游请求，anonymous 表示不携带凭据的请求（CORS 预检与 CSP 报告）：直连时先按 Alt-Svc 选择 HTTP/3，其余经 HTTP/2 发送并记录响应的 Alt-Svc
 func (transport *browserRoundTripper) roundTrip(request *fhttp.Request, anonymous bool) (*fhttp.Response, error) {
 	request = request.WithContext(withRequestClass(request.Context(), requestClass{anonymous: anonymous}))
 	if transport.http3 == nil {
@@ -663,10 +669,10 @@ func standardHeader(source fhttp.Header) stdhttp.Header {
 	return result
 }
 
-// ensurePreflight 为带 Origin 的跨域请求按 Firefox 的流程先发 CORS 预检，结果按 Access-Control-Max-Age（上限 24 小时）缓存
+// ensurePreflight 为带 Origin 的跨域 cors 请求按 Firefox 的流程先发 CORS 预检，结果按 Access-Control-Max-Age（上限 24 小时）缓存；no-cors 请求不预检
 func (transport *browserRoundTripper) ensurePreflight(request *stdhttp.Request) error {
 	origin, err := url.Parse(request.Header.Get("Origin"))
-	if request.Method == stdhttp.MethodOptions || err != nil || origin.Host == "" || origin.Host == request.URL.Host {
+	if request.Method == stdhttp.MethodOptions || request.Header.Get("Sec-Fetch-Mode") == "no-cors" || err != nil || origin.Host == "" || origin.Host == request.URL.Host {
 		return nil
 	}
 	target := request.URL.String()
@@ -746,7 +752,7 @@ func requestHeaderOrder(host string) []string {
 	if gapiHosts[host] {
 		return gapiRequestHeaderOrder
 	}
-	if host != waaHost {
+	if host != waaHost && host != clearcutHost {
 		return firefoxRequestHeaderOrder
 	}
 	order := slices.Clone(firefoxRequestHeaderOrder)

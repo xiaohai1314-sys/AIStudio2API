@@ -110,12 +110,12 @@ func TestDeletedAccountFilesDisappear(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(directory, runtimeStateName), append(encoded, '\n'), 0o600); err != nil {
 		t.Fatal(err)
-		}
-		deleted := &Account{
-			ID: directoryBase(directory), Directory: directory,
-			ConfigPath: filepath.Join(directory, accountConfigName), StoragePath: filepath.Join(directory, StorageStateName),
-			RuntimePath: filepath.Join(directory, runtimeStateName), State: AccountReady, Config: AccountConfig{Enabled: true, Label: "gone@example.com"},
-		}
+	}
+	deleted := &Account{
+		ID: directoryBase(directory), Directory: directory,
+		ConfigPath: filepath.Join(directory, accountConfigName), StoragePath: filepath.Join(directory, StorageStateName),
+		RuntimePath: filepath.Join(directory, runtimeStateName), State: AccountReady, Config: AccountConfig{Enabled: true, Label: "gone@example.com"},
+	}
 	kept := scopedFileAccount("keep@example.com", "file-keep", time.Date(2024, 2, 2, 0, 0, 0, 0, time.UTC))
 	pool := NewAccountPool([]*Account{deleted, kept}, 1)
 
@@ -147,11 +147,11 @@ func corruptRuntimeAccount(t *testing.T, id, fileID string) *Account {
 	}
 	if err := os.WriteFile(filepath.Join(directory, runtimeStateName), []byte("not-json"), 0o600); err != nil {
 		t.Fatal(err)
-		}
-		return &Account{
-			ID: id, Directory: directory, State: AccountReady,
-			ConfigPath: filepath.Join(directory, accountConfigName), StoragePath: filepath.Join(directory, StorageStateName),
-			RuntimePath: filepath.Join(directory, runtimeStateName), Config: AccountConfig{Enabled: true, Label: id},
+	}
+	return &Account{
+		ID: id, Directory: directory, State: AccountReady,
+		ConfigPath: filepath.Join(directory, accountConfigName), StoragePath: filepath.Join(directory, StorageStateName),
+		RuntimePath: filepath.Join(directory, runtimeStateName), Config: AccountConfig{Enabled: true, Label: id},
 		runtime: accountRuntimeState{Resources: map[string]ResourceBinding{
 			fileID: {Kind: "drive-file", Name: fileID + ".txt", MIME: "text/plain", Size: 8, Purpose: "user",
 				CreatedAt: time.Date(2024, 1, 4, 0, 0, 0, 0, time.UTC)},

@@ -26,8 +26,10 @@ import type {
 } from '@/types'
 import type { IconName } from '@/icons'
 import AccountEnvironmentFields from './AccountEnvironmentFields.vue'
+import AccountExits from './AccountExits.vue'
 import DetailDialog from './DetailDialog.vue'
 import DisclosureChevron from './DisclosureChevron.vue'
+import LinkedText from './LinkedText.vue'
 import LoginViewer from './LoginViewer.vue'
 import StagedRefreshIcon from './StagedRefreshIcon.vue'
 import UiCollapse from './UiCollapse.vue'
@@ -145,17 +147,12 @@ function toggleAllChromeProfiles(): void {
     ? []
     : importableChromeProfiles.value.map((profile) => profile.id)
 }
+// accountEnvironment 是添加账户时的代理、语言与时区，语言与时区留空时按出口位置填写
 const accountEnvironment = reactive({
   proxy: '',
-  locale: defaultAccountLocale,
+  locale: '',
   timezone: '',
 })
-// accountEnvironment 的时区在挂载后的任务中填入本机时区，首次读取时区要载入时区数据，不并入挂载面板的任务
-onMounted(() =>
-  setTimeout(
-    () => (accountEnvironment.timezone ||= Intl.DateTimeFormat().resolvedOptions().timeZone),
-  ),
-)
 const draft = reactive<AccountDraft>({
   label: '',
   enabled: true,
@@ -258,7 +255,8 @@ function toggleAccountSelected(accountID: string): void {
 
 // toggleRowSelected 点击账户行时勾选或取消该账户，点击行内控件与拖选文字时不切换
 function toggleRowSelected(account: Account, event: MouseEvent): void {
-  if ((event.target as Element).closest('button, a, input')) return
+  const path = event.composedPath()
+  if (path.some((node) => node instanceof Element && node.matches('button, a, input'))) return
   if (!getSelection()!.isCollapsed) return
   toggleAccountSelected(account.id)
 }
@@ -302,14 +300,6 @@ function bulkRefresh(): void {
 function bulkDelete(): void {
   emit('delete', [...selectedAccounts.value])
   selected.clear()
-}
-
-// linkPieces 把原因文字按其中的 https 地址切分，地址片段标记为链接
-function linkPieces(text: string): { text: string; url: boolean }[] {
-  return text
-    .split(/(https:\/\/[^\s，。；）)]+)/)
-    .filter(Boolean)
-    .map((piece) => ({ text: piece, url: piece.startsWith('https://') }))
 }
 
 // reason 是悬窗中显示的账户或任务、原因类别与完整原因
@@ -729,7 +719,7 @@ function browserKey(browser: CookieBrowser): string {
   return `${browser.address}#${browser.auth_user}`
 }
 
-// browserSummary 返回浏览器条目第二行：未登录提示、读取错误或浏览器名、地址、u/N、语言与时区
+// browserSummary 返回浏览器条目第二行：未登录提示、读取错误或浏览器名、地址与 u/N
 function browserSummary(browser: CookieBrowser): string {
   if (browser.signed_out) return t('accounts.browserSignedOut')
   return (
@@ -738,8 +728,6 @@ function browserSummary(browser: CookieBrowser): string {
       browser.browser,
       browser.address,
       browser.email || browser.restricted ? `u/${browser.auth_user}` : '',
-      browser.locale,
-      browser.timezone,
     ]
       .filter(Boolean)
       .join(' · ')
@@ -780,7 +768,7 @@ function switchToCookiePaste(): void {
   showCookieImport.value = true
 }
 
-// importBrowserAccounts 在账户任务中导入勾选的调试浏览器账户并关闭对话框，账户沿用浏览器的语言与时区
+// importBrowserAccounts 在账户任务中导入勾选的调试浏览器账户并关闭对话框，语言与时区按出口位置填写
 async function importBrowserAccounts(): Promise<void> {
   pendingAction.value = 'browser-import'
   try {
@@ -994,7 +982,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
   emit('refresh')
   emit(
     'notice',
-    t('accounts.refreshedAll')
+    t(total - failed === 1 ? 'accounts.refreshedAllOne' : 'accounts.refreshedAll')
       .replace('{count}', String(total - failed))
       .replace('{failed}', String(failed)),
     failed === 0 ? 'success' : 'error',
@@ -1298,6 +1286,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
           </table>
         </div>
       </div>
+      <AccountExits v-if="accounts.length > 0" :accounts="accounts" />
       <div
         v-if="error"
         class="flex items-center gap-2 rounded border border-red-500/40 bg-red-500/10 p-4 text-red-300"
@@ -1337,7 +1326,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
             <span class="text-gray-400 tabular-nums">{{
               selectedAccounts.length > 0
                 ? t('accounts.selectedCount').replace('{count}', String(selectedAccounts.length))
-                : t('accounts.totalCount').replace('{count}', String(visibleAccounts.length))
+                : t(
+                    visibleAccounts.length === 1 ? 'accounts.totalCountOne' : 'accounts.totalCount',
+                  ).replace('{count}', String(visibleAccounts.length))
             }}</span>
           </label>
           <DropdownMenuRoot v-if="selectedAccounts.length > 0" :modal="false">
@@ -1628,7 +1619,7 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
         <pre
           v-if="reason"
           class="rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] text-red-300"
-        ><template v-for="(piece, index) in linkPieces(logText(reason.text))" :key="index"><a v-if="piece.url" :href="piece.text" target="_blank" rel="noreferrer" class="underline underline-offset-2 hover:text-red-200">{{ piece.text }}</a><template v-else>{{ piece.text }}</template></template></pre>
+        ><LinkedText :text="logText(reason.text)" /></pre>
       </DetailDialog>
 
       <LoginViewer
@@ -1797,8 +1788,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   <span
                     v-if="profile.restricted"
                     class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
-                    >{{ t('state.restricted') }} · {{ logText(profile.restricted) }}</span
-                  >
+                    >{{ t('state.restricted') }} ·
+                    <LinkedText :text="logText(profile.restricted)" compact
+                  /></span>
                 </span>
               </label>
             </div>
@@ -1966,8 +1958,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                       <span
                         v-if="candidate.restricted"
                         class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
-                        >{{ t('state.restricted') }} · {{ logText(candidate.restricted) }}</span
-                      >
+                        ><template v-if="candidate.email">{{ t('state.restricted') }} · </template
+                        ><LinkedText :text="logText(candidate.restricted)" compact
+                      /></span>
                     </span>
                     <span v-if="candidate.imported" class="shrink-0 text-xs text-gray-400">{{
                       t('accounts.alreadyImported')
@@ -2117,8 +2110,9 @@ async function refreshAccounts(accounts: Account[]): Promise<void> {
                   <span
                     v-if="browser.restricted"
                     class="mt-1 block text-xs leading-5 [overflow-wrap:anywhere] text-red-300"
-                    >{{ t('state.restricted') }} · {{ logText(browser.restricted) }}</span
-                  >
+                    >{{ t('state.restricted') }} ·
+                    <LinkedText :text="logText(browser.restricted)" compact
+                  /></span>
                 </span>
                 <span v-if="browser.imported" class="shrink-0 text-xs text-gray-400">{{
                   t('accounts.alreadyImported')
