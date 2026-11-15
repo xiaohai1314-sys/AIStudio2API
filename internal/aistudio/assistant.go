@@ -444,6 +444,13 @@ func (c *Client) prepareAssistantTurn(ctx context.Context, lease *AccountLease, 
 	return turn, nil
 }
 
+// runAssistantWithCleanup 在清理回调之后恢复主体或清理回调的 panic
+func runAssistantWithCleanup(label string, fn, cleanup func()) {
+	defer paniclog.Recover(label)
+	defer cleanup()
+	fn()
+}
+
 // sendAssistant 在账户的 Build 应用中提交本轮并返回任务流：续接得上已保存的 trajectory 时只提交新增轮次，否则开启新 trajectory；CodeAssistantOffline 以 404 报告应用不存在时新建应用重新提交一次。本轮结束时没有任何回复、调用块写坏或调用了被禁止的工作区工具，且客户端尚未收到正文与函数调用的，在同一 trajectory 中追加用户轮请模型重答；回复完整结束时保存 trajectory 的续接位置并发送伴随请求，否则取消未完成的任务并放弃续接位置
 func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, entry modelEntry) (*RPCResponse, func(io.Reader, func(Event) error) error, error) {
 	reason := ""
@@ -498,15 +505,13 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 	turn := cleanup.turn
 	if turn.target.created() {
 		release := lease.Retain()
-		go func() {
-			defer func() {
-				if err := release(); err != nil {
-					slog.Warn("账户租约释放失败", "account", request.AccountID, "error", err)
-				}
-			}()
-			defer paniclog.Recover("assistant.go:afterAssistantCreated")
+		go runAssistantWithCleanup("assistant.go:afterAssistantCreated", func() {
 			c.afterAssistantCreated(cleanup.ctx, request.AccountID, turn.target.applet)
-		}()
+		}, func() {
+			if err := release(); err != nil {
+				slog.Warn("账户租约释放失败", "account", request.AccountID, "error", err)
+			}
+		})
 	}
 	stream.Body = &assistantStreamBody{ReadCloser: stream.Body, cleanup: cleanup}
 	return stream, func(source io.Reader, emit func(Event) error) error {
@@ -819,9 +824,7 @@ func (cleanup *assistantCleanup) run() {
 		if !cancel {
 			cleanup.lease.finishAssistantGeneration()
 		}
-		go func() {
-			defer cleanup.finish()
-			defer paniclog.Recover("assistant.go:assistantCleanup")
+		go runAssistantWithCleanup("assistant.go:assistantCleanup", func() {
 			ctx, stop := context.WithTimeout(cleanup.ctx, assistantCleanupTimeout)
 			defer stop()
 			if !cancel {
@@ -831,7 +834,7 @@ func (cleanup *assistantCleanup) run() {
 			if err := cleanup.cancel(ctx); err != nil {
 				slog.Warn("Build 写代码助手取消任务失败", "account", accountID, "method", "CancelCodeAssistantOfflineGeneration", "applet", cleanup.turn.target.applet, "error", err)
 			}
-		}()
+		}, cleanup.finish)
 	})
 }
 
