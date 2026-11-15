@@ -1921,6 +1921,8 @@ type generateAttempt struct {
 // maxGenerateAttempts 是单次请求尝试次数的硬上限，避免上游持续失败时无限扩容换号
 const maxGenerateAttempts = 8
 
+var errGenerateAttemptPanic = errors.New("generate attempt panic")
+
 // generateRetry 是生成请求跨尝试的换号与恢复状态
 type generateRetry struct {
 	maxAttempts int
@@ -2265,13 +2267,25 @@ func (service *trackedService) startAttempt(
 	attempt.serving.Store(lease)
 	attemptCtx, cancel := context.WithCancel(requestCtx)
 	attempt.cancel = cancel
-	paniclog.Go("runtime.go:2015", func() {
-		func() {
-			defer close(attempt.done)
-			service.runAttempt(attemptCtx, request, resourceID, modelID, fallbackReason, attempt)
-		}()
+	launchGenerateAttempt(attempt, func() {
+		service.runAttempt(attemptCtx, request, resourceID, modelID, fallbackReason, attempt)
 	})
 	return attempt
+}
+
+// launchGenerateAttempt 在 attempt panic 时先写入非空可重试错误并取消上下文，再交由外层记录 panic；done 仍保证关闭。
+func launchGenerateAttempt(attempt *generateAttempt, run func()) {
+	paniclog.Go("runtime.go:2015", func() {
+		defer close(attempt.done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				attempt.err = fmt.Errorf("%w: %v", errGenerateAttemptPanic, recovered)
+				attempt.cancel()
+				panic(recovered)
+			}
+		}()
+		run()
+	})
 }
 
 // runAttempt 复制文件引用、上传内联附件、发送请求并等待首事件，结果写入 attempt
@@ -2834,7 +2848,7 @@ func collectGenerateEvents(ctx context.Context, source <-chan aistudio.Event, on
 }
 
 func retryableGenerateAccountError(ctx context.Context, err error) bool {
-	if errors.Is(err, errStreamClosedBeforeFirstEvent) || errors.Is(err, aistudio.ErrAccountCoolingDown) {
+	if errors.Is(err, errGenerateAttemptPanic) || errors.Is(err, errStreamClosedBeforeFirstEvent) || errors.Is(err, aistudio.ErrAccountCoolingDown) {
 		return true
 	}
 	var interrupted *aistudio.StreamInterruptedError

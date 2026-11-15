@@ -26,12 +26,17 @@ const camoufoxRelease = "158.0.1-beta.41"
 // 152 时代的 1 GiB 上限已装不下，提到 2 GiB。
 const maxCamoufoxArchiveBytes int64 = 2 << 30
 
-// 注意：152 时代的 camoufoxChecksums sha256 校验表随这次升级移除——Camoufox 官方
-// 不为发行包公布摘要，158 的压缩包每份约 1.3 GiB，无法在这里逐份下载算哈希。
-// 因此下载后不再做 sha256 校验（与上游一致），只保留大小上限与停滞检测；解压后仍会
-// 校验可执行文件（validateCamoufoxExecutable）。如需恢复校验：在能下载发行包的机器上
-// 对 6 个平台的 zip 做 sha256sum，把表和 installCamoufox 里的校验调用加回来。
-// verifyCamoufoxArchive 函数与 TestVerifyCamoufoxArchive 保留，供恢复时直接用。
+// camoufoxArchiveSHA256 来自 daijro/camoufox v158.0.1-beta.41 的 GitHub Release API assets[].digest。
+// 该摘要由 GitHub 在资产上传时计算，可固定已发布字节；它不是发布者另行签名的校验清单。
+// 新版本必须先固定每个受支持资产的官方 SHA-256；缺少摘要时拒绝下载和安装。
+var camoufoxArchiveSHA256 = map[string]string{
+	"camoufox-158.0.1-beta.41-lin.arm64.zip":  "60e25f6eb95e13d9ec655bc02913d51057e669cb31542e6ace9d2190ab5380af",
+	"camoufox-158.0.1-beta.41-lin.x86_64.zip": "3f2eb1d0451fa58e45e43e55f5e6181565069791ae60c0574f0ceb1f01341c33",
+	"camoufox-158.0.1-beta.41-mac.arm64.zip":  "9038f86d666c9780b6fff199d488737b8596c01f24e3e517845a0ecfb0cf8add",
+	"camoufox-158.0.1-beta.41-mac.x86_64.zip": "1afd6caa1e82caa41a4f56d8519f673e36b0835700b1c9c904e78a84c5711f3a",
+	"camoufox-158.0.1-beta.41-win.i686.zip":   "5c6b4e57764ff6caa568c6ce77a01c03c7ad5da560c3e22097def2c28235f09d",
+	"camoufox-158.0.1-beta.41-win.x86_64.zip": "2644bd14f1cc345c768f6a70b576bcc87eb3d0bf0df54856d6fe0bbc3027515f",
+}
 
 // downloadStallTimeout 是下载连续收不到数据即判定中断的时长
 const downloadStallTimeout = 30 * time.Second
@@ -205,6 +210,10 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	if err != nil {
 		return "", err
 	}
+	expected, err := camoufoxArchiveChecksum(asset)
+	if err != nil {
+		return "", err
+	}
 	root, err := camoufoxInstallRoot()
 	if err != nil {
 		return "", err
@@ -214,42 +223,54 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 	}
 	archivePath := filepath.Join(filepath.Dir(root), asset+".part")
 	address := fmt.Sprintf("https://github.com/daijro/camoufox/releases/download/v%s/%s", camoufoxRelease, asset)
-	if err := downloadCamoufoxArchive(ctx, address, archivePath, proxy); err != nil {
+	if err := installCamoufoxArchive(ctx, root, archivePath, executableName, address, proxy, expected); err != nil {
 		if ctx.Err() != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("%w；在 .env 的 PROXY 设置能访问 GitHub 的代理后重试，或手动下载 %s 解压到 %s", err, address, root)
+		return "", fmt.Errorf("Camoufox 安装失败 (%s): %w", asset, err)
+	}
+	executable := filepath.Join(root, executableName)
+	slog.Info("Camoufox 已就绪", "path", executable)
+	return executable, nil
+}
+
+// installCamoufoxArchive 下载后先校验可信 SHA-256，再解压、验证可执行文件并原子发布。
+func installCamoufoxArchive(ctx context.Context, root string, archivePath string, executableName string, address string, proxy string, expected string) error {
+	if err := downloadCamoufoxArchive(ctx, address, archivePath, proxy); err != nil {
+		return err
+	}
+	if err := verifyCamoufoxArchive(archivePath, expected); err != nil {
+		_ = os.Remove(archivePath)
+		return fmt.Errorf("拒绝安装未通过 SHA-256 校验的 Camoufox 压缩包: %w", err)
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(root), ".camoufox-stage-*")
 	if err != nil {
-		return "", fmt.Errorf("创建 Camoufox 临时目录: %w", err)
+		return fmt.Errorf("创建 Camoufox 临时目录: %w", err)
 	}
 	defer os.RemoveAll(staging)
 	if err := extractCamoufoxArchive(ctx, archivePath, staging); err != nil {
 		if ctx.Err() == nil {
 			os.Remove(archivePath)
 		}
-		return "", err
+		return err
 	}
 	stagedExecutable := filepath.Join(staging, executableName)
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(stagedExecutable, 0o755); err != nil {
-			return "", fmt.Errorf("设置 Camoufox 执行权限: %w", err)
+			return fmt.Errorf("设置 Camoufox 执行权限: %w", err)
 		}
 	}
 	if _, err := validateCamoufoxExecutable(stagedExecutable); err != nil {
-		return "", fmt.Errorf("校验 Camoufox 临时目录: %w", err)
+		return fmt.Errorf("校验 Camoufox 临时目录: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return err
 	}
 	if err := replaceCamoufoxRoot(root, staging); err != nil {
-		return "", err
+		return err
 	}
 	os.Remove(archivePath)
-	executable := filepath.Join(root, executableName)
-	slog.Info("Camoufox 已就绪", "path", executable)
-	return executable, nil
+	return nil
 }
 
 // replaceCamoufoxRoot 用 staging 替换 root：先把旧目录改名备份，发布失败时恢复，避免升级中断后失去可用版本
@@ -381,6 +402,18 @@ func camoufoxAssetName() (string, error) {
 		return "", fmt.Errorf("Camoufox 没有 %s/%s 发行包", runtime.GOOS, runtime.GOARCH)
 	}
 	return fmt.Sprintf("camoufox-%s-%s.%s.zip", camoufoxRelease, platform, architecture), nil
+}
+
+func camoufoxArchiveChecksum(asset string) (string, error) {
+	expected, ok := camoufoxArchiveSHA256[asset]
+	if !ok {
+		return "", fmt.Errorf("Camoufox 资产 %q 没有受信任的 SHA-256，拒绝安装", asset)
+	}
+	decoded, err := hex.DecodeString(expected)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", fmt.Errorf("Camoufox 资产 %q 的固定 SHA-256 无效，拒绝安装", asset)
+	}
+	return expected, nil
 }
 
 // verifyCamoufoxArchive 校验下载完成的压缩包与内置 sha256 一致

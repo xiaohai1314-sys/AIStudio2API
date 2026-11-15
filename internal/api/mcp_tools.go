@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -72,32 +71,20 @@ func (s *server) resolveMCPTools(ctx context.Context, request aistudio.GenerateR
 
 // connectMCP 只连接解析到公网地址的 MCP 服务器，避免公开 API 把服务端当作访问内网的跳板
 func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, method string) (*mcp.ClientSession, error) {
+	if s.config.EgressProxy != nil && s.config.EgressProxy() != "" {
+		return nil, fmt.Errorf("mcp server %q: EgressProxy is disabled for MCP because proxy-side DNS resolution cannot be validated", server.Name)
+	}
 	endpoint, err := validatePublicHTTPURL(ctx, server.URL)
 	if err != nil {
 		return nil, fmt.Errorf("mcp server %q url: %w", server.Name, err)
 	}
 	base := newPublicOutboundTransport()
-	if s.config.EgressProxy != nil {
-		if proxy := s.config.EgressProxy(); proxy != "" {
-			proxyURL, err := url.Parse(proxy)
-			if err != nil {
-				return nil, fmt.Errorf("mcp server %q egress proxy: %w", server.Name, err)
-			}
-			base = http.DefaultTransport.(*http.Transport).Clone()
-			base.Proxy = http.ProxyURL(proxyURL)
-		}
-	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "aistudio2api"}, nil)
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: endpoint.String(),
 		HTTPClient: &http.Client{
-			Transport: mcpHeaderTransport{base: base, host: endpoint.Host, headers: server.Headers},
-			CheckRedirect: func(request *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return errors.New("stopped after 10 redirects")
-				}
-				return checkRemoteMediaHost(request.Context(), request.URL.Hostname())
-			},
+			Transport:     mcpHeaderTransport{base: base, host: endpoint.Host, headers: server.Headers},
+			CheckRedirect: checkMCPRedirect,
 		},
 		DisableStandaloneSSE: true,
 	}
@@ -106,6 +93,17 @@ func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, meth
 		return nil, fmt.Errorf("mcp server %q %s: %w", server.Name, method, err)
 	}
 	return session, nil
+}
+
+func checkMCPRedirect(request *http.Request, via []*http.Request) error {
+	return checkMCPRedirectWithHostCheck(request, via, checkRemoteMediaHost)
+}
+
+func checkMCPRedirectWithHostCheck(request *http.Request, via []*http.Request, checkHost func(context.Context, string) error) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return checkHost(request.Context(), request.URL.Hostname())
 }
 
 // listMCPTools 读取 MCP 服务器 tools/list 返回的全部工具

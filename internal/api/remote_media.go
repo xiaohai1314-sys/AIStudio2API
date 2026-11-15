@@ -239,16 +239,32 @@ func remoteMediaURL(value string) bool {
 // checkRemoteMediaHost 拒绝解析到本机、私网、链路本地、组播或未指定地址的主机。
 // 这个检查也用于 webhook，避免公开 API 触发对服务端内网资源的请求。
 func checkRemoteMediaHost(ctx context.Context, host string) error {
-	_, err := publicRemoteAddresses(ctx, host)
+	return checkRemoteMediaHostWithLookup(ctx, host, net.DefaultResolver.LookupNetIP)
+}
+
+func checkRemoteMediaHostWithLookup(
+	ctx context.Context,
+	host string,
+	lookup func(context.Context, string, string) ([]netip.Addr, error),
+) error {
+	_, err := publicRemoteAddressesWithLookup(ctx, host, lookup)
 	return err
 }
 
 // publicRemoteAddresses 解析并返回可安全建立出站连接的公网地址。
 func publicRemoteAddresses(ctx context.Context, host string) ([]netip.Addr, error) {
+	return publicRemoteAddressesWithLookup(ctx, host, net.DefaultResolver.LookupNetIP)
+}
+
+func publicRemoteAddressesWithLookup(
+	ctx context.Context,
+	host string,
+	lookup func(context.Context, string, string) ([]netip.Addr, error),
+) ([]netip.Addr, error) {
 	if strings.TrimSpace(host) == "" {
 		return nil, errors.New("host is required")
 	}
-	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	addresses, err := lookup(ctx, "ip", host)
 	if err != nil {
 		return nil, err
 	}
@@ -307,11 +323,20 @@ func validatePublicHTTPURL(ctx context.Context, raw string) (*url.URL, error) {
 
 // dialPublicRemote 在实际连接时重新解析和验证主机，并直接拨号到该 IP，阻止 DNS 在校验后切换到内网地址。
 func dialPublicRemote(ctx context.Context, network, address string) (net.Conn, error) {
+	return dialPublicRemoteWithLookup(ctx, network, address, net.DefaultResolver.LookupNetIP)
+}
+
+func dialPublicRemoteWithLookup(
+	ctx context.Context,
+	network string,
+	address string,
+	lookup func(context.Context, string, string) ([]netip.Addr, error),
+) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || port == "" {
 		return nil, fmt.Errorf("invalid remote address %q", address)
 	}
-	addresses, err := publicRemoteAddresses(ctx, host)
+	addresses, err := publicRemoteAddressesWithLookup(ctx, host, lookup)
 	if err != nil {
 		return nil, err
 	}

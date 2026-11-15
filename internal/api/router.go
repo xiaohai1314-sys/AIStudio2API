@@ -47,7 +47,7 @@ type Config struct {
 	SearchSettings func() (modelAliases, googleSearch bool)
 	// WaitLaunch 在生成服务启动期间等到启动结束，公开 API 请求经它等待后再处理
 	WaitLaunch func(context.Context)
-	// EgressProxy 返回服务连接外部 MCP 服务器所用的出口代理，空串为直连
+	// EgressProxy 返回配置的出口代理；非空时因无法验证代理侧 DNS，MCP 外连会按安全策略拒绝
 	EgressProxy func() string
 	// Lifecycle 是 webhook 重试等后台任务的存活上下文，为空时使用 context.Background()
 	Lifecycle context.Context
