@@ -4,7 +4,7 @@ import { api } from '@/api'
 import { useI18n } from '@/i18n'
 import type { AccountLoginInput, EnvironmentCheckResult } from '@/types'
 
-// environment 是账户的代理、语言与时区
+// environment 是账户的代理、语言与时区，语言与时区留空时按出口位置填写
 const environment = defineModel<AccountLoginInput>({ required: true })
 const { t } = useI18n()
 
@@ -95,7 +95,7 @@ function applySuggestion(): void {
       <input
         v-model.trim="environment.locale"
         class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-        required
+        :placeholder="t('accounts.byExit')"
       />
     </label>
     <label class="block">
@@ -103,7 +103,7 @@ function applySuggestion(): void {
       <input
         v-model.trim="environment.timezone"
         class="w-full rounded border border-line bg-canvas px-3 py-2 text-white transition focus:border-blue-500 focus:outline-none"
-        required
+        :placeholder="t('accounts.byExit')"
       />
     </label>
   </div>

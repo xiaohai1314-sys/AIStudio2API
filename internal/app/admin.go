@@ -1,8 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +24,7 @@ import (
 	"github.com/Mag1cFall/AIStudio2API/internal/camoufoxnative"
 	"github.com/Mag1cFall/AIStudio2API/internal/chromeauth"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/egress"
 	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
@@ -199,56 +202,58 @@ func adminWarnings(warnings []accountenv.Warning) []api.AdminWarning {
 	return result
 }
 
-// deriveEnvironment 经代理查询出口 IP 的国家并返回该地区的建议语言与时区，任何一步失败都返回空值
-func (admin *runtimeAdmin) deriveEnvironment(ctx context.Context, proxy string) (string, string) {
-	geoip, err := accountenv.OpenGeoIP(admin.config.GeoIPDBPath)
-	if err != nil {
-		return "", ""
+// AccountExits 并发查询各账户出口代理的公网 IP 与地理位置，每个代理一行，查询失败的代理带原因
+func (admin *runtimeAdmin) AccountExits(ctx context.Context) ([]api.AccountExit, error) {
+	var proxies []string
+	for _, status := range admin.pool.Status() {
+		if !slices.Contains(proxies, status.Egress) {
+			proxies = append(proxies, status.Egress)
+		}
 	}
-	defer geoip.Close()
-	client, err := aistudio.NewProxyHTTPClient(admin.effectiveProxy(proxy))
-	if err != nil {
-		return "", ""
+	exits := make([]api.AccountExit, len(proxies))
+	var wait sync.WaitGroup
+	for index, proxy := range proxies {
+		wait.Go(func() {
+			exits[index] = api.AccountExit{Proxy: proxy}
+			exit, err := egress.Lookup(ctx, proxy)
+			if err != nil {
+				exits[index].Error = err.Error()
+				return
+			}
+			exits[index].IP, exits[index].Country, exits[index].Timezone, exits[index].Locale = exit.IP, exit.Country, exit.Timezone, exit.Locale
+		})
 	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	address, err := accountenv.ExitIP(lookupCtx, client)
+	wait.Wait()
+	return exits, nil
+}
+
+// accountEnvironment 返回新账户的语言与时区：locale 或 timezone 未给出时按 proxy 出口的地理位置填写并写入日志
+func (admin *runtimeAdmin) accountEnvironment(ctx context.Context, proxy string, locale string, timezone string) (egress.Exit, error) {
+	exit, err := egress.Environment(ctx, proxy, strings.TrimSpace(locale), timezone)
 	if err != nil {
-		return "", ""
+		return egress.Exit{}, fmt.Errorf("按出口位置确定账户语言与时区: %w", err)
 	}
-	country, err := geoip.Country(address)
-	if err != nil {
-		return "", ""
+	if exit.IP != "" {
+		admin.requests.log("auth", "INFO", fmt.Sprintf("账户语言与时区按出口位置 | 出口=%s | 国家=%s | 语言=%s | 时区=%s", exit.IP, exit.Country, exit.Locale, exit.Timezone))
 	}
-	return accountenv.SuggestForCountry(country)
+	return exit, nil
 }
 
 func (admin *runtimeAdmin) CreateAccount(ctx context.Context, input api.AccountCreateInput, view *camoufoxnative.LiveView) (api.AdminAccount, error) {
 	accountConfig := aistudio.DefaultAccountConfig("")
 	accountConfig.Proxy = strings.TrimSpace(input.Proxy)
-	if locale := strings.TrimSpace(input.Locale); locale != "" {
-		accountConfig.Locale = locale
-	}
 	timezone, err := accountTimezone(input.Timezone)
 	if err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
-	if timezone != "" {
-		accountConfig.Timezone = timezone
-	}
 	if err := config.ValidateProxy(accountConfig.Proxy); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
-	// 未指定语言或时区时按代理出口 IP 所在地区取默认值，避免与本机浏览器环境不一致
-	if strings.TrimSpace(input.Locale) == "" || strings.TrimSpace(input.Timezone) == "" {
-		locale, timezone := admin.deriveEnvironment(ctx, accountConfig.Proxy)
-		if strings.TrimSpace(input.Locale) == "" && locale != "" {
-			accountConfig.Locale = locale
-		}
-		if strings.TrimSpace(input.Timezone) == "" && timezone != "" {
-			accountConfig.Timezone = timezone
-		}
+	environment, err := admin.accountEnvironment(ctx, admin.effectiveProxy(accountConfig.Proxy), input.Locale, timezone)
+	if err != nil {
+		return api.AdminAccount{}, err
 	}
+	accountConfig.Locale, accountConfig.Timezone = environment.Locale, environment.Timezone
 	directory, err := os.MkdirTemp("", "aistudio2api-account-login-*")
 	if err != nil {
 		return api.AdminAccount{}, fmt.Errorf("创建隔离登录目录: %w", err)
@@ -323,7 +328,7 @@ func chromeImportProfiles(accounts []chromeauth.Account, existing map[string]str
 		}
 		seen[email] = struct{}{}
 		profiles = append(profiles, api.ChromeImportProfile{
-			ID: account.ID, Profile: account.Profile, DisplayName: account.DisplayName, Email: email, Locale: account.Locale,
+			ID: account.ID, Profile: account.Profile, DisplayName: account.DisplayName, Email: email,
 			Restricted: cmp.Or(restricted, recorded[email]),
 		})
 	}
@@ -375,13 +380,12 @@ func (admin *runtimeAdmin) CookieBrowsers(ctx context.Context, proxy string) ([]
 	return append([]api.CookieBrowser{}, slices.Concat(browsers...)...), nil
 }
 
-// readCookieBrowser 读取调试浏览器的语言、时区与 Cookie，经 proxy 识别其中各会话登录 AI Studio 的账户
+// readCookieBrowser 读取调试浏览器的 Cookie，经 proxy 识别其中各会话登录 AI Studio 的账户
 func (admin *runtimeAdmin) readCookieBrowser(ctx context.Context, browser *api.CookieBrowser, proxy string) ([]chromeauth.CookieAccount, error) {
 	source, err := chromeauth.ReadCDPBrowser(ctx, browser.Address)
 	if err != nil {
 		return nil, err
 	}
-	browser.Locale, browser.Timezone = source.Locale, source.Timezone
 	state, err := aistudio.ParseCookieText(source.Cookies)
 	if err != nil {
 		return nil, err
@@ -497,6 +501,10 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 	if err != nil {
 		return nil, err
 	}
+	environment, err := admin.accountEnvironment(ctx, admin.effectiveProxy(accountProxy), input.Locale, timezone)
+	if err != nil {
+		return nil, err
+	}
 	configs := make([]aistudio.AccountConfig, len(results))
 	seen := make(map[string]struct{}, len(results))
 	for index, result := range results {
@@ -507,14 +515,7 @@ func (admin *runtimeAdmin) ImportChromeAccounts(ctx context.Context, input api.C
 		seen[email] = struct{}{}
 		accountConfig := aistudio.DefaultAccountConfig(email)
 		accountConfig.Proxy = accountProxy
-		if locale := strings.TrimSpace(input.Locale); locale != "" {
-			accountConfig.Locale = locale
-		} else if locale := strings.TrimSpace(result.Locale); locale != "" {
-			accountConfig.Locale = locale
-		}
-		if timezone != "" {
-			accountConfig.Timezone = timezone
-		}
+		accountConfig.Locale, accountConfig.Timezone = environment.Locale, environment.Timezone
 		if err := accountConfig.Validate(); err != nil {
 			return nil, invalidAccount(err)
 		}
@@ -561,12 +562,11 @@ func (admin *runtimeAdmin) ImportAccountState(ctx context.Context, input api.Acc
 	accountConfig := aistudio.DefaultAccountConfig(label)
 	accountConfig.AuthUser = input.AuthUser
 	accountConfig.Proxy = strings.TrimSpace(input.Proxy)
-	if locale := strings.TrimSpace(input.Locale); locale != "" {
-		accountConfig.Locale = locale
+	environment, err := admin.accountEnvironment(ctx, admin.effectiveProxy(accountConfig.Proxy), input.Locale, timezone)
+	if err != nil {
+		return api.AdminAccount{}, err
 	}
-	if timezone != "" {
-		accountConfig.Timezone = timezone
-	}
+	accountConfig.Locale, accountConfig.Timezone = environment.Locale, environment.Timezone
 	if err := accountConfig.Validate(); err != nil {
 		return api.AdminAccount{}, invalidAccount(err)
 	}
@@ -1395,6 +1395,8 @@ func (admin *runtimeAdmin) Cooldowns(context.Context) ([]api.AdminCooldown, erro
 			modelID, build := strings.CutPrefix(key, string(aistudio.ChannelBuild)+":")
 			if build {
 				channel = string(aistudio.ChannelBuild)
+			} else if admin.pool.AssistantModel(modelID) {
+				channel = string(aistudio.ChannelAssistant)
 			}
 			cooldowns = append(cooldowns, api.AdminCooldown{
 				AccountID: account.ID, AccountLabel: account.Label, Channel: channel,
@@ -1501,7 +1503,17 @@ func openAdminEvents(
 					refreshTimer.Stop()
 				}
 			}()
+			// sent 是本连接各类快照最近一次发出的内容，内容相同的快照跳过发送
+			sent := map[string][]byte{}
 			send := func(event api.AdminEvent) bool {
+				switch event.Type {
+				case "status", "models", "accounts", "cooldowns":
+					encoded, err := json.Marshal(event.Data)
+					if err == nil && bytes.Equal(encoded, sent[event.Type]) {
+						return true
+					}
+					sent[event.Type] = encoded
+				}
 				select {
 				case events <- event:
 					return true

@@ -22,6 +22,10 @@ import (
 const (
 	// MakerSuiteRPCBase 是 AI Studio RPC 根地址
 	MakerSuiteRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/"
+	// appletControlRPCBase 是 Build 应用文件系统 RPC 根地址
+	appletControlRPCBase = "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.alkali.boq.makersuite.makersuiteappletcontrol.proto.MakersuiteAppletControlService/"
+	// appletAuthRPCBase 是 Build 应用开发环境认证 RPC 根地址
+	appletAuthRPCBase = "https://alkalimakersuiteapplets.pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.applets.AppletAuthService/"
 	// JSONProtobufContentType 是 MakerSuite 使用的数组协议媒体类型
 	JSONProtobufContentType           = "application/json+protobuf"
 	maxHTMLResponseBytes        int64 = 16 << 20
@@ -100,6 +104,7 @@ type Client struct {
 	termsAccepted   map[string]struct{}
 	disclaimers     map[string]struct{}
 	turns           *modelTurnHistory
+	assistants      *assistantAppletCache
 	frontendMu      sync.Mutex
 	// frontend 是按地址解析过的官网前端主程序推荐模型
 	frontend map[string]frontendModels
@@ -119,6 +124,7 @@ func NewClient(options ClientOptions) *Client {
 		termsAccepted:   make(map[string]struct{}),
 		disclaimers:     make(map[string]struct{}),
 		turns:           newModelTurnHistory(),
+		assistants:      newAssistantAppletCache(),
 		frontend:        make(map[string]frontendModels),
 	}
 }
@@ -131,6 +137,8 @@ type RPCError struct {
 	Message    string
 	Metadata   map[string]string
 	RetryDelay time.Duration
+	// PerUserQuota 表示写代码助手步骤失败带每用户额度标记
+	PerUserQuota bool
 }
 
 // ContextOverflow 返回错误是否为上游报告的输入 token 超过模型上限
