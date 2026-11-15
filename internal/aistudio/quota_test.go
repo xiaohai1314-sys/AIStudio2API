@@ -35,11 +35,11 @@ func TestQuotaCooldownForError(t *testing.T) {
 		},
 		{
 			name: "全局额度", err: tooMany(map[string]string{"quota_metric": "requests_global"}, "quota exceeded"),
-			wantOK: true, wantKind: "短期限额", wantEnd: now.Add(time.Minute), global: true,
+			wantOK: true, wantKind: "短期限额", wantEnd: now.Add(time.Minute), global: true, escalate: true,
 		},
 		{
 			name: "按模型额度不是全局", err: tooMany(map[string]string{"quota_metric": "requests_global_per_model"}, "quota exceeded"),
-			wantOK: true, wantKind: "短期限额", wantEnd: now.Add(time.Minute),
+			wantOK: true, wantKind: "短期限额", wantEnd: now.Add(time.Minute), escalate: true,
 		},
 		{
 			name: "额度上限为零", err: tooMany(nil, "quota exceeded: limit: 0, limit: 0"),
