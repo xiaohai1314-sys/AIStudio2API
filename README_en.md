@@ -277,7 +277,7 @@ The image supports linux/amd64 and linux/arm64, and the service listens on `0.0.
    - When the server has no graphical display, or the console is opened from another computer or through a reverse proxy, Camoufox for "Sign in with browser" and "Sign in again" runs headless on the server and its screen appears in a full-screen sign-in window in the console, where you click, type and paste; Cancel ends the sign-in
    - Account proxy, locale and time zone are under "More settings" in the dialog; locale and time zone left empty follow the location of the exit IP
    - "Check environment" validates the locale and time zone format and whether their regions agree; once the local GeoIP database is installed it also resolves the exit IP of the account proxy and compares its country. Mismatches only produce warnings and suggested values, and "Apply suggestions" rewrites the form
-   - Above the account list, each exit IP is shown with the number of accounts that reach Google through it, with a notice when several accounts share one exit IP
+   - Above the account list, each exit IP is shown with the number of accounts that reach Google through it, and an exit IP shared by several accounts is highlighted in yellow
 
 4. **Start the API**:
    - Click "Start service" to start the data plane
@@ -685,7 +685,7 @@ Process environment variables override the same keys in `.env`, and those settin
 | `MEDIA_OUTPUT` | `inline` | How Chat Completions and Messages include generated images and audio: `inline` embeds a data URI; `url` saves the file under `runtime/media/`, named by its content, and links to it at `/media/<file>` on this service, a path that does not check the API key; when the directory exceeds 1 GB, the least recently used files are deleted first |
 | `MEDIA_BASE_URL` | empty | Service address used in media URLs, such as `https://ai.example.com`; when empty, the request address is used and HTTPS from a reverse proxy requires `TRUSTED_PROXY_CIDRS` |
 
-The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more. When no account has served a request for 30 minutes, the resident workers close, and prewarming resumes after the next request arrives.
+The service loads every account from `AISTUDIO_AUTH_STATES`. `WARM_WORKER_LIMIT` sets the resident warm pool, `MAX_ACTIVE_WORKERS` caps peak worker count, `WARM_STARTUP_CONCURRENCY` controls how many Camoufox workers cold-start at once, and `PER_ACCOUNT_CONCURRENCY` controls request slots per account. Saving these four in the console applies them to scheduling right away: lowering the peak limit closes the extra idle workers, and raising the resident count prewarms more.
 
 ### Port Configuration
 

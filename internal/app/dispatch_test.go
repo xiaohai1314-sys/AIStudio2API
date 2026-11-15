@@ -6,12 +6,17 @@ func TestDispatchQueueLeaveWakesNextHead(t *testing.T) {
 	queue := newDispatchQueue()
 	first := queue.join("key")
 	second := queue.join("key")
-	<-first.wake
+	if !queue.turn(first) || queue.turn(second) {
+		t.Fatal("同条件请求应按到达先后取号")
+	}
 	queue.leave(first)
 	select {
 	case <-second.wake:
 	default:
 		t.Fatal("队首离开后应当唤醒下一个请求")
+	}
+	if !queue.turn(second) {
+		t.Fatal("队首离开后下一个请求应轮到取号")
 	}
 	queue.leave(second)
 	if len(queue.queues) != 0 {
@@ -19,16 +24,22 @@ func TestDispatchQueueLeaveWakesNextHead(t *testing.T) {
 	}
 }
 
-func TestDispatchQueueLeaveKeepsHeadWhenNotHead(t *testing.T) {
+func TestDispatchQueueStartingLetsNextTakeTurn(t *testing.T) {
 	queue := newDispatchQueue()
 	head := queue.join("key")
 	tail := queue.join("key")
-	<-head.wake
-	queue.leave(tail)
+	queue.setStarting(head, true)
 	select {
-	case <-head.wake:
-		t.Fatal("非队首离开不应唤醒队首")
+	case <-tail.wake:
 	default:
+		t.Fatal("队首等待 Worker 启动时应当唤醒下一个请求")
+	}
+	if !queue.turn(tail) {
+		t.Fatal("队首等待 Worker 启动时下一个请求应轮到取号")
+	}
+	queue.setStarting(head, false)
+	if queue.turn(tail) {
+		t.Fatal("队首恢复取号后下一个请求应继续等待")
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 // TestLedgerUsageAndBodies 验证关闭前排队的记录落盘、当前与上一周期分开汇总、正文只保留最近条数
 func TestLedgerUsageAndBodies(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "requests.db")
-	logs := func(level, message string) { t.Errorf("%s %s", level, message) }
+	logs := func(level, message string, attrs ...any) { t.Errorf("%s %s %v", level, message, attrs) }
 	store, err := Open(path, logs)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestLedgerUsageAndBodies(t *testing.T) {
 
 // TestCloseConcurrent 验证并发关闭等待同一次关闭完成并返回相同结果
 func TestCloseConcurrent(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "requests.db"), func(string, string) {})
+	store, err := Open(filepath.Join(t.TempDir(), "requests.db"), func(string, string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
