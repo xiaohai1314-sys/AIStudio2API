@@ -68,7 +68,7 @@ func TestLedgerUsageAndBodies(t *testing.T) {
 
 // TestCloseConcurrent 验证并发关闭等待同一次关闭完成并返回相同结果
 func TestCloseConcurrent(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "requests.db"), func(string, string) {})
+	store, err := Open(filepath.Join(t.TempDir(), "requests.db"), func(string, string, ...any) {})
 	if err != nil {
 		t.Fatal(err)
 	}
