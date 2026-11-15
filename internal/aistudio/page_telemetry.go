@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 // clearcutURL 是官网页面 clearcut 上报的地址与固定参数
@@ -59,6 +61,7 @@ func (runtime *goWAARuntime) sendClearcut(shape clearcutShape, body []byte) {
 		headers.Set("Content-Type", "application/binary")
 	}
 	go func() {
+		defer paniclog.Recover("page_telemetry.go:send")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		runtime.drain(runtime.do(ctx, http.MethodPost, target, body, headers))
@@ -157,6 +160,7 @@ func (runtime *goWAARuntime) sendScriptReport(script string) {
 	headers.Set("Sec-Fetch-Site", "same-origin")
 	headers.Set("Priority", "u=4")
 	go func() {
+		defer paniclog.Recover("page_telemetry.go:send")
 		ctx, cancel := context.WithTimeout(withRequestClass(context.Background(), requestClass{anonymous: true}), time.Minute)
 		defer cancel()
 		runtime.drain(runtime.do(ctx, http.MethodPost, target, body, headers))

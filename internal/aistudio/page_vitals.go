@@ -4,6 +4,8 @@ import (
 	"math/rand/v2"
 	"sync"
 	"time"
+
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
 
 const (
@@ -67,7 +69,10 @@ func newPageVitals(send func(clearcutShape, []byte), telemetry pageTelemetry, lo
 	payload[17] = telemetry.sampling
 	vitals := &pageVitals{send: send, telemetry: telemetry, locale: locale, zone: zone, origin: origin, payload: payload}
 	at := origin.Add(time.Duration(nav("loadEventEnd"))*time.Millisecond + pageVitalsDelay + time.Duration(5+rand.IntN(15))*time.Millisecond)
-	vitals.timer = time.AfterFunc(time.Until(at), vitals.report)
+	vitals.timer = time.AfterFunc(time.Until(at), func() {
+		defer paniclog.Recover("page_vitals.go:report")
+		vitals.report()
+	})
 	return vitals
 }
 
@@ -95,7 +100,10 @@ func (vitals *pageVitals) report() {
 	now := time.Now()
 	window := now.Sub(vitals.origin).Milliseconds()
 	vitals.send(clearcutBeacon, vitals.body(now))
-	vitals.timer = time.AfterFunc(pageCountersDelay, func() { vitals.count(window) })
+	vitals.timer = time.AfterFunc(pageCountersDelay, func() {
+		defer paniclog.Recover("page_vitals.go:count")
+		vitals.count(window)
+	})
 }
 
 // body 编码 1957 上报

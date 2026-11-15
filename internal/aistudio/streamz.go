@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/waa"
 )
 
@@ -163,6 +164,7 @@ type streamzReporter struct {
 func newStreamzReporter(locale string, zone *time.Location, send func([]byte), take func(context.Context) ([]waa.BotGuardMetric, error)) *streamzReporter {
 	reporter := &streamzReporter{take: take, send: send, locale: locale, zone: zone, stop: make(chan struct{})}
 	go func() {
+		defer paniclog.Recover("streamz.go:loop")
 		ticker := time.NewTicker(streamzInterval)
 		defer ticker.Stop()
 		for {

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/google/uuid"
 )
 
@@ -503,6 +504,7 @@ func (c *Client) sendAssistant(ctx context.Context, request GenerateRequest, ent
 					slog.Warn("账户租约释放失败", "account", request.AccountID, "error", err)
 				}
 			}()
+			defer paniclog.Recover("assistant.go:afterAssistantCreated")
 			c.afterAssistantCreated(cleanup.ctx, request.AccountID, turn.target.applet)
 		}()
 	}
@@ -819,6 +821,7 @@ func (cleanup *assistantCleanup) run() {
 		}
 		go func() {
 			defer cleanup.finish()
+			defer paniclog.Recover("assistant.go:assistantCleanup")
 			ctx, stop := context.WithTimeout(cleanup.ctx, assistantCleanupTimeout)
 			defer stop()
 			if !cancel {

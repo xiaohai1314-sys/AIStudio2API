@@ -315,7 +315,8 @@ func (runtime *goWAARuntime) open(ctx context.Context, fingerprint map[string]an
 	if err != nil {
 		return err
 	}
-	go runtime.loadStarters(context.WithoutCancel(ctx), dependency, module)
+	starterCtx := context.WithoutCancel(ctx)
+	paniclog.Go("runtime_go.go:loadStarters", func() { runtime.loadStarters(starterCtx, dependency, module) })
 	if runtime.scriptReport.policy != "" {
 		if runtime.scriptReport.loader, err = runtime.pageCache.loader(runtime.scriptReport.bundle); err != nil {
 			return err
@@ -1222,7 +1223,7 @@ func (runtime *goWAARuntime) proof(ctx context.Context, digest string, prompt st
 	default:
 		proof, err = vm.Proof(ctx, digest, prompt)
 	}
-	go runtime.flushVMStreamz(context.Background(), vm)
+	paniclog.Go("runtime_go.go:flushVMStreamz", func() { runtime.flushVMStreamz(context.Background(), vm) })
 	if err != nil {
 		return "", fmt.Errorf("生成 fresh WAA proof: %w", err)
 	}
@@ -1289,7 +1290,7 @@ func (runtime *goWAARuntime) SendProtected(ctx context.Context, rawURL string, h
 	if running == nil {
 		return &camoufoxnative.ProtectedResponse{StatusCode: response.StatusCode, Header: response.Header, Body: response.Body}, nil
 	}
-	go running.Replaced(context.Background())
+	paniclog.Go("runtime_go.go:replaced", func() { running.Replaced(context.Background()) })
 	return &camoufoxnative.ProtectedResponse{StatusCode: response.StatusCode, Header: response.Header, Body: &runningBody{ReadCloser: response.Body, vm: running, turn: turn}}, nil
 }
 
@@ -1305,7 +1306,8 @@ type runningBody struct {
 // Close 关闭响应正文，派发一次指针下元素被替换的事件并记录回答结束
 func (body *runningBody) Close() error {
 	body.once.Do(func() {
-		go body.vm.Replaced(context.Background())
+		vm := body.vm
+		paniclog.Go("runtime_go.go:runningBody.replaced", func() { vm.Replaced(context.Background()) })
 		if body.turn != nil {
 			body.turn.done(time.Now())
 		}

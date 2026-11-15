@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/google/uuid"
 )
 
@@ -324,7 +325,10 @@ func (log *pageElements) record(body func(seq int) []any) int {
 	event[23] = encodedBody
 	log.batch = append(log.batch, event)
 	if log.timer == nil {
-		log.timer = time.AfterFunc(pageElementsDelay, log.flush)
+		log.timer = time.AfterFunc(pageElementsDelay, func() {
+			defer paniclog.Recover("page_elements.go:flush")
+			log.flush()
+		})
 	}
 	return log.seq
 }
@@ -391,6 +395,7 @@ func (log *pageElements) clicked(target int, ve int, detail any, at time.Time) i
 // after 在 at 时刻持有 mu 执行 action，日志关闭后不再执行
 func (log *pageElements) after(at time.Time, action func()) {
 	time.AfterFunc(time.Until(at), func() {
+		defer paniclog.Recover("page_elements.go:schedule")
 		log.mu.Lock()
 		defer log.mu.Unlock()
 		if !log.closed {
