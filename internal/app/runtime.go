@@ -2275,7 +2275,7 @@ func (service *trackedService) startAttempt(
 
 // launchGenerateAttempt 在 attempt panic 时先写入非空可重试错误并取消上下文，再交由外层记录 panic；done 仍保证关闭。
 func launchGenerateAttempt(attempt *generateAttempt, run func()) {
-	paniclog.Go("runtime.go:2015", func() {
+	paniclog.Go("launchGenerateAttempt", func() {
 		defer close(attempt.done)
 		defer func() {
 			if recovered := recover(); recovered != nil {

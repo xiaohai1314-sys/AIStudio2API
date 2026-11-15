@@ -237,7 +237,7 @@ func installCamoufox(ctx context.Context, executableName string, proxy string) (
 // installCamoufoxArchive 下载后先校验可信 SHA-256，再解压、验证可执行文件并原子发布。
 func installCamoufoxArchive(ctx context.Context, root string, archivePath string, executableName string, address string, proxy string, expected string) error {
 	if err := downloadCamoufoxArchive(ctx, address, archivePath, proxy); err != nil {
-		return err
+		return fmt.Errorf("%w；在 .env 的 PROXY 设置能访问 GitHub 的代理后重试，或手动下载 %s 解压到 %s", err, address, root)
 	}
 	if err := verifyCamoufoxArchive(archivePath, expected); err != nil {
 		_ = os.Remove(archivePath)

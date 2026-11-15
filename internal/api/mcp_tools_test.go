@@ -28,23 +28,16 @@ func TestConnectMCPRejectsPrivateTargets(t *testing.T) {
 	}
 }
 
-func TestConnectMCPRejectsEgressProxyBeforeContactingProxy(t *testing.T) {
-	var proxyRequests atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		proxyRequests.Add(1)
-		w.WriteHeader(http.StatusBadGateway)
-	}))
-	defer proxy.Close()
+func TestPublicOutboundTransportBypassesSystemProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
 
-	server := &server{config: Config{EgressProxy: func() string { return proxy.URL }}}
-	_, err := server.connectMCP(context.Background(), aistudio.MCPServer{
-		Name: "proxied", URL: "http://127.0.0.1:9/mcp",
-	}, "tools/list")
-	if err == nil || !strings.Contains(err.Error(), "EgressProxy") {
-		t.Fatalf("connect error = %v, want explicit proxy security rejection", err)
+	transport := newPublicOutboundTransport()
+	if transport.Proxy != nil {
+		t.Fatal("public outbound transport must not route MCP requests through a configured system proxy")
 	}
-	if got := proxyRequests.Load(); got != 0 {
-		t.Fatalf("proxy received %d requests despite fail-closed policy", got)
+	if transport.DialContext == nil {
+		t.Fatal("public outbound transport must retain its public-address-validating dialer")
 	}
 }
 

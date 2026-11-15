@@ -69,11 +69,8 @@ func (s *server) resolveMCPTools(ctx context.Context, request aistudio.GenerateR
 	return request, nil
 }
 
-// connectMCP 只连接解析到公网地址的 MCP 服务器，避免公开 API 把服务端当作访问内网的跳板
+// connectMCP 只通过带公网地址校验的直连传输访问 MCP，避免公开 API 把服务端当作访问内网的跳板
 func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, method string) (*mcp.ClientSession, error) {
-	if s.config.EgressProxy != nil && s.config.EgressProxy() != "" {
-		return nil, fmt.Errorf("mcp server %q: EgressProxy is disabled for MCP because proxy-side DNS resolution cannot be validated", server.Name)
-	}
 	endpoint, err := validatePublicHTTPURL(ctx, server.URL)
 	if err != nil {
 		return nil, fmt.Errorf("mcp server %q url: %w", server.Name, err)

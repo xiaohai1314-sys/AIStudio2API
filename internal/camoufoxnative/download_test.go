@@ -49,6 +49,19 @@ func TestDownloadCamoufoxArchiveRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
+func TestInstallCamoufoxArchiveDownloadFailureIncludesRecoveryInstructions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	root := filepath.Join(t.TempDir(), "camoufox")
+	err := installCamoufoxArchive(context.Background(), root, filepath.Join(t.TempDir(), "archive.part"), "camoufox", server.URL, "", strings.Repeat("0", 64))
+	if err == nil || !strings.Contains(err.Error(), ".env 的 PROXY") || !strings.Contains(err.Error(), server.URL) || !strings.Contains(err.Error(), root) {
+		t.Fatalf("install error = %v, want proxy and manual-download recovery instructions", err)
+	}
+}
+
 func TestCamoufoxArchiveChecksumsCoverReleaseAssets(t *testing.T) {
 	assets := []string{
 		"camoufox-158.0.1-beta.41-lin.arm64.zip",
@@ -97,6 +110,9 @@ func TestInstallCamoufoxArchiveRejectsBadDigestBeforeExtractOrPublish(t *testing
 	err := installCamoufoxArchive(context.Background(), root, archivePath, "camoufox", server.URL, "", hex.EncodeToString(wrong[:]))
 	if err == nil || !strings.Contains(err.Error(), "SHA-256") {
 		t.Fatalf("install error = %v, want SHA-256 verification failure", err)
+	}
+	if strings.Contains(err.Error(), ".env 的 PROXY") {
+		t.Fatalf("checksum rejection should not suggest bypassing archive verification: %v", err)
 	}
 	if _, err := os.Stat(archivePath); !os.IsNotExist(err) {
 		t.Fatalf("rejected archive was not removed: %v", err)
