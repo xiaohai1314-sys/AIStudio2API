@@ -20,6 +20,7 @@ import (
 
 	"github.com/Mag1cFall/AIStudio2API/internal/api"
 	"github.com/Mag1cFall/AIStudio2API/internal/config"
+	"github.com/Mag1cFall/AIStudio2API/internal/egress"
 	"github.com/Mag1cFall/AIStudio2API/internal/i18n"
 	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 	"github.com/Mag1cFall/AIStudio2API/internal/promptdb"
@@ -135,7 +136,7 @@ func runCommand(args []string, logs *logOutput, executable string) (restart bool
 // serviceReady 为管理服务的启动结果：管理页面地址与服务日志，或启动失败的原因
 type serviceReady struct {
 	url string
-	log func(level, message string)
+	log func(level, message string, attrs ...any)
 	err error
 }
 
@@ -150,8 +151,9 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	if err != nil {
 		return false, err
 	}
-	logService := func(level, message string) {
-		manager.requests.log("service", level, message)
+	egress.Prefetch(manager.egressProxy())
+	logService := func(level, message string, attrs ...any) {
+		manager.requests.log("service", level, message, attrs...)
 	}
 	ledger, err := requestdb.Open(filepath.Join("runtime", "requests.db"), logService)
 	if err != nil {
@@ -160,7 +162,7 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	ledger.SetBodyCapture(cfg.RequestBodyLog)
 	manager.ledger = ledger
 	if err := manager.seedFirstEvents(ctx); err != nil {
-		logService("WARN", "读取近期首事件样本失败 | 错误="+err.Error())
+		logService("WARN", "读取近期首事件样本失败", "error", err)
 	}
 	prompts, err := promptdb.Open(filepath.Join("runtime", "prompts.db"))
 	if err != nil {
@@ -173,9 +175,9 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	}
 	manager.states = states
 	manager.logs = logs
-	updater := newSelfUpdater(buildVersion(), executable, manager.egressProxy, logService, updateRestart(cancel, restarting, logService))
+	updater := newSelfUpdater(buildVersion(), executable, manager.egressProxy, manager.requests, updateRestart(cancel, restarting, logService))
 	if err := removeReplacedExecutables(executable); err != nil {
-		logService("WARN", "删除在线更新留下的旧版本失败 | 错误="+err.Error())
+		logService("WARN", "删除在线更新留下的旧版本失败", "error", err)
 	}
 	started, err = runServer(ctx, cfg, manager, updater, func(address string) {
 		ready <- serviceReady{url: address, log: logService}
@@ -236,20 +238,20 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	if err != nil {
 		return false, err
 	}
-	manager.requests.log("service", "INFO", fmt.Sprintf("管理监听启动 | 地址=%s", cfg.ListenAddr))
+	manager.requests.log("service", "INFO", "管理监听启动", "addr", cfg.ListenAddr)
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if errors.Is(err, portReserved) {
 		var address string
 		listener, address, err = listenAfter(cfg.ListenAddr)
 		if err == nil {
 			manager.reservedListenAddr, manager.activeManagement.ListenAddr = cfg.ListenAddr, address
-			manager.requests.log("service", "WARN", fmt.Sprintf("监听端口被 Windows 保留，改用其后第一个可用端口 | 配置=%s | 地址=%s", cfg.ListenAddr, address))
+			manager.requests.log("service", "WARN", "监听端口被 Windows 保留，改用其后第一个可用端口", "configured_addr", cfg.ListenAddr, "addr", address)
 		}
 	}
 	if err != nil {
 		return false, fmt.Errorf("监听 %s: %w", cfg.ListenAddr, err)
 	}
-	manager.requests.log("service", "INFO", fmt.Sprintf("预览监听启动 | 地址=%s", cfg.PreviewListenAddr))
+	manager.requests.log("service", "INFO", "预览监听启动", "addr", cfg.PreviewListenAddr)
 	previewListener, err := net.Listen("tcp", cfg.PreviewListenAddr)
 	if err != nil {
 		host, _, _ := net.SplitHostPort(cfg.PreviewListenAddr)
@@ -258,7 +260,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 			listener.Close()
 			return false, fmt.Errorf("监听 %s: %w", cfg.PreviewListenAddr, err)
 		}
-		manager.requests.log("service", "WARN", fmt.Sprintf("预览端口不可用，改用空闲端口 | 配置=%s | 地址=%s", cfg.PreviewListenAddr, previewListener.Addr()))
+		manager.requests.log("service", "WARN", "预览端口不可用，改用空闲端口", "configured_addr", cfg.PreviewListenAddr, "addr", previewListener.Addr())
 	}
 	manager.previewAddress = previewListener.Addr().String()
 	apiHandler := api.NewHandler(manager, api.Config{
@@ -298,7 +300,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	}
 
 	address := "http://" + browserAddress(listener.Addr().String())
-	manager.requests.log("service", "INFO", "管理服务就绪 | 地址="+address)
+	manager.requests.log("service", "INFO", "管理服务就绪", "addr", address)
 	onReady(address)
 	if cfg.AutoStart {
 		paniclog.Go("app.go:274", func() { autoStartService(ctx, manager) })
@@ -399,10 +401,10 @@ func autoStartService(ctx context.Context, manager *runtimeManager) {
 		}
 		var operation *adminOperationError
 		if errors.As(err, &operation) {
-			manager.requests.log("service", "ERROR", "自动启动生成服务失败 | 错误="+err.Error())
+			manager.requests.log("service", "ERROR", "自动启动生成服务失败", "error", err)
 			return
 		}
-		manager.requests.log("service", "ERROR", fmt.Sprintf("自动启动生成服务失败 | 重试间隔=%s | 错误=%s", delay, err))
+		manager.requests.log("service", "ERROR", "自动启动生成服务失败", "retry_in", delay, "error", err)
 		select {
 		case <-ctx.Done():
 			return
