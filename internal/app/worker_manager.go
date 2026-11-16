@@ -732,7 +732,8 @@ func (manager *accountWorkerManager) coldAccounts(accountIDs []string) []string 
 func (manager *accountWorkerManager) PrewarmTarget() int {
 	available := 0
 	for _, status := range manager.pool.Status() {
-		if !status.Enabled || (status.State != aistudio.AccountReady && status.State != aistudio.AccountBusy && status.State != aistudio.AccountCooldown) {
+		// 冷却中（含额度耗尽）的账户不计入预热目标，冷却结束前不为它启动 Worker
+		if !status.Enabled || (status.State != aistudio.AccountReady && status.State != aistudio.AccountBusy) {
 			continue
 		}
 		if models, err := manager.pool.BootstrapModels(status.ID); err == nil && len(models) > 0 {
