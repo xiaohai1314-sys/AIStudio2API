@@ -1067,14 +1067,22 @@ func (service *trackedService) awaitCatalogRound(ctx context.Context) {
 	}
 }
 
-// refreshAccountStates 逐个重新载入启用账户的页面读取权益与模型目录，没有空闲槽位或正在冷却的账户在本轮最后等到槽位空闲再读；first 在第一个账户读完或本轮结束时调用一次
+// refreshAccountStates 逐个重新载入启用账户的页面读取权益与模型目录，账户级冷却（额度耗尽等）中的账户本轮跳过，没有空闲槽位的账户在本轮最后等到槽位空闲再读；first 在第一个账户读完或本轮结束时调用一次
 func (service *trackedService) refreshAccountStates(ctx context.Context, first func()) {
 	first = sync.OnceFunc(first)
 	defer first()
+	cooling := make(map[string]bool)
+	for _, status := range service.pool.Status() {
+		cooling[status.ID] = status.State == aistudio.AccountCooldown
+	}
 	var busy []string
 	for _, accountID := range service.modelCatalogAccountIDs() {
 		if ctx.Err() != nil {
 			return
+		}
+		// 额度耗尽的账户在冷却结束前不参与巡检，不为它载入页面
+		if cooling[accountID] {
+			continue
 		}
 		if refresh, _ := service.refreshAccountState(ctx, accountID, false); refresh.Skipped {
 			busy = append(busy, accountID)
@@ -1498,8 +1506,8 @@ func (closer *trackedMediaReadCloser) Close() error {
 	return closer.err
 }
 
-// acquireWarmLease 取得 Worker 已就绪的账户租约，同条件的请求按到达先后取号；全部账户冷却时排队等待恢复，一个请求等冷却恢复累计不超过 cooldownQueueLimit，cooled 是它已等的时长，最早恢复的是权限拒绝冷却时不排队；quotaFallback 为 true 时不再排队后改用套餐限额或每日限额冷却中的账户；冷 Worker 启动失败后换到其他账户计入 failures，超过换号上限时返回启动失败
-func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection, quotaFallback bool, failures *int, cooled *time.Duration) (*aistudio.AccountLease, error) {
+// acquireWarmLease 取得 Worker 已就绪的账户租约，同条件的请求按到达先后取号；全部账户冷却时排队等待恢复，一个请求等冷却恢复累计不超过 cooldownQueueLimit，cooled 是它已等的时长，最早恢复的是权限拒绝冷却时不排队；不再排队时直接返回 AllCoolingError，额度耗尽（套餐限额、每日限额等额度冷却）的账户在冷却结束前不参与选号、不向上游发送；冷 Worker 启动失败后换到其他账户计入 failures，超过换号上限时返回启动失败
+func (service *trackedService) acquireWarmLease(ctx context.Context, selection aistudio.AccountSelection, failures *int, cooled *time.Duration) (*aistudio.AccountLease, error) {
 	fixedAccount := strings.TrimSpace(selection.AccountID) != "" || strings.TrimSpace(selection.ResourceID) != ""
 	failedWorkers := make(map[string]struct{})
 	var promoteFailure error
@@ -1643,10 +1651,6 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		if !groups.EarliestCooldown.Until.IsZero() {
 			remaining := time.Until(groups.EarliestCooldown.Until)
 			if remaining > cooldownQueueLimit-*cooled || strings.HasPrefix(groups.EarliestCooldown.Reason, aistudio.AccountRejectionKind) {
-				if quotaFallback && !selection.IgnoreQuotaCooldown {
-					selection.IgnoreQuotaCooldown = true
-					continue
-				}
 				return nil, &aistudio.AllCoolingError{ModelID: selection.ModelID, Until: groups.EarliestCooldown.Until, Reason: groups.EarliestCooldown.Reason}
 			}
 			waitStarted := time.Now()
@@ -2062,15 +2066,14 @@ func (service *trackedService) generateWithRetry(
 		queueWait := startWaitReporter(func(waited time.Duration) {
 			service.requests.logRequestProgress(request.ID, "request", "WARN", "排队等待", "waited", waited, "model", modelID)
 		})
-		quotaFallback := selection.ResourceID == ""
-		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, quotaFallback, &retry.failures, &retry.cooled)
+		lease, acquireErr := service.acquireWarmLease(requestCtx, selection, &retry.failures, &retry.cooled)
 		var buildCooling *aistudio.AllCoolingError
 		if acquireErr != nil && selection.Channel == aistudio.ChannelBuild && requestCtx.Err() == nil && !aistudio.RequestBuildOnly(request) &&
 			(errors.Is(acquireErr, aistudio.ErrNoEligibleAccount) || errors.As(acquireErr, &buildCooling)) {
 			// 没有账户能经 Build 服务时改用 Playground，Playground 无法表达的设置按其最接近的形式发送
 			selection.Channel = ""
 			fallbackReason = "Build 通道没有可用账户"
-			lease, acquireErr = service.acquireWarmLease(requestCtx, selection, quotaFallback, &retry.failures, &retry.cooled)
+			lease, acquireErr = service.acquireWarmLease(requestCtx, selection, &retry.failures, &retry.cooled)
 		}
 		queueDelayed := queueWait.finish()
 		if acquireErr == nil && selection.PreferredChannel == aistudio.ChannelBuild && lease.Channel() != aistudio.ChannelBuild {
@@ -2467,7 +2470,7 @@ func (service *trackedService) continuationAccount(ctx context.Context, requestI
 			selection.AllowedAccountIDs = append(selection.AllowedAccountIDs, accountID)
 		}
 	}
-	lease, acquireErr := service.acquireWarmLease(ctx, selection, false, &attempt.failures, new(time.Duration))
+	lease, acquireErr := service.acquireWarmLease(ctx, selection, &attempt.failures, new(time.Duration))
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
