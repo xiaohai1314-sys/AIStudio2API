@@ -1985,12 +1985,6 @@ type generateRetry struct {
 	cooled time.Duration
 	// rejectionUntil 是本次请求中因上游 403、协议错误码 7 而冷却的账户最早的恢复时刻
 	rejectionUntil time.Time
-	// rejectedAccountID 是本次请求中第一次被上游 403、协议错误码 7 拒绝且没有冷却的账户，没有其他账户可换时在它上面重试一次
-	rejectedAccountID string
-	// rejectedAccountLabel 是 rejectedAccountID 的账户标签
-	rejectedAccountLabel string
-	// rejectionRetried 表示已在被拒账户上重试过
-	rejectionRetried bool
 	// failures 是本次请求中换号重试的非额度失败次数
 	failures int
 }
@@ -2147,9 +2141,6 @@ func (service *trackedService) generateWithRetry(
 				retry.attempted[selectionAccountID] = struct{}{}
 				continue
 			}
-			if requestCtx.Err() == nil && service.retryRejectedAccount(request.ID, modelID, retry, err) {
-				continue
-			}
 			break
 		}
 		err = nil
@@ -2241,9 +2232,6 @@ func (service *trackedService) generateWithRetry(
 			retry.extend()
 		}
 		if attempt+1 == retry.maxAttempts {
-			if service.retryRejectedAccount(request.ID, modelID, retry, err) {
-				continue
-			}
 			break
 		}
 		if last.recoverWorker && errors.Is(err, aistudio.ErrProtectedTransport) {
@@ -2564,20 +2552,6 @@ func (err *quotaCooldownError) RetryAt(time.Time) time.Time {
 	return err.until
 }
 
-// retryRejectedAccount 在没有其他账户可换时把本次请求第一次被上游 403、协议错误码 7 拒绝且没有冷却的账户排为下一次尝试，返回是否已排入
-func (service *trackedService) retryRejectedAccount(requestID string, modelID string, retry *generateRetry, err error) bool {
-	accountID := retry.rejectedAccountID
-	if accountID == "" {
-		return false
-	}
-	retry.recoveryAccountID = accountID
-	delete(retry.attempted, accountID)
-	retry.maxAttempts++
-	service.requests.logRequestProgress(requestID, retry.rejectedAccountLabel, "WARN", "没有其他账户可换，同账户重试被上游拒绝的请求", attemptFields(modelID, err)...)
-	retry.rejectedAccountID, retry.rejectedAccountLabel, retry.rejectionRetried = "", "", true
-	return true
-}
-
 // accountsUnavailableError 是最后一次失败为上游暂时拒绝账户（403、协议错误码 7）或认证失败（401）的请求交给客户端的 503
 type accountsUnavailableError struct {
 	rpc   *aistudio.RPCError
@@ -2754,15 +2728,10 @@ func (service *trackedService) settleAttempt(
 	rejection, rejected := aistudio.AccountRejectionCooldown(err)
 	if rejected {
 		until, stateErr := service.markQuotaCooldown(requestID, modelID, lease, rejection)
-		switch {
-		case stateErr != nil:
+		if stateErr != nil {
 			err = errors.Join(err, stateErr)
 			retryable = false
-		case !until.After(time.Now()):
-			if !retry.rejectionRetried && retry.rejectedAccountID == "" {
-				retry.rejectedAccountID, retry.rejectedAccountLabel = accountID, accountLabel
-			}
-		case retry.rejectionUntil.IsZero() || until.Before(retry.rejectionUntil):
+		} else if !until.IsZero() && (retry.rejectionUntil.IsZero() || until.Before(retry.rejectionUntil)) {
 			retry.rejectionUntil = until
 		}
 	}

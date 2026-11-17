@@ -136,7 +136,7 @@ func BuildRejectionCooldown(err error) (QuotaCooldown, bool) {
 // AccountRejectionKind 是上游以 403、协议错误码 7 暂时拒绝账户时冷却的类型名，也是其冷却原因的前缀
 const AccountRejectionKind = "权限拒绝"
 
-// AccountRejectionCooldown 返回上游以 403、协议错误码 7 拒绝账户且官网不跳转拒绝页时的冷却：账户在该模型上自上次成功后第一次被拒只记下不冷却，再被拒时以 planLimitBackoff 递增
+// AccountRejectionCooldown 返回上游以 403、协议错误码 7 拒绝账户且官网不跳转拒绝页时，按账户与模型以 planLimitBackoff 递增的冷却
 func AccountRejectionCooldown(err error) (QuotaCooldown, bool) {
 	var rpcError *RPCError
 	if !errors.As(err, &rpcError) || rpcError.StatusCode != http.StatusForbidden || rpcError.Code != 7 || rpcError.accessDenial() != nil {

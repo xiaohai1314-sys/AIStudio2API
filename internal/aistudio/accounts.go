@@ -2522,10 +2522,7 @@ func (p *AccountPool) MarkQuotaCooldownIfGeneration(
 			}
 		}
 		next := CooldownState{Until: cooldown.Until.UTC(), Reason: cooldown.Reason}
-		switch {
-		case cooldown.Escalate && strings.HasPrefix(cooldown.Reason, AccountRejectionKind) && !(baseExists && strings.HasPrefix(base.Reason, AccountRejectionKind)):
-			next = CooldownState{Until: now.UTC(), Reason: cooldown.Reason}
-		case cooldown.Escalate:
+		if cooldown.Escalate {
 			next = planLimitCooldown(base, baseExists, now, cooldown.Reason)
 		}
 		if baseExists && base.Active(now) && !next.Until.After(base.Until) {
