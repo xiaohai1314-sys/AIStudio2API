@@ -142,6 +142,7 @@ func newRuntime(
 	closeRuntime := func() error {
 		stopProbe()
 		err := errors.Join(workers.Close(), proxies.Close())
+		camoufoxnative.WaitRetired()
 		transport.CloseIdleConnections()
 		return err
 	}
@@ -1556,7 +1557,18 @@ func (service *trackedService) acquireWarmLease(ctx context.Context, selection a
 		if len(warmAvailable) > 0 && preferred == "" {
 			candidate := selection
 			candidate.AllowedAccountIDs = warmAvailable
-			lease, _, acquireErr := service.pool.TryAcquireFor(ctx, candidate)
+			// 会话粘性没有指定账户时先选没有请求在等待或生成 proof 的账户，同账户的 proof 不排队
+			var lease *aistudio.AccountLease
+			var acquireErr error
+			if idle := service.pool.WithoutPendingProofs(warmAvailable); len(idle) > 0 && len(idle) < len(warmAvailable) &&
+				!slices.Contains(warmAvailable, selection.PreferredAccountID) {
+				candidate.AllowedAccountIDs = idle
+				lease, _, acquireErr = service.pool.TryAcquireFor(ctx, candidate)
+				candidate.AllowedAccountIDs = warmAvailable
+			}
+			if lease == nil && acquireErr == nil {
+				lease, _, acquireErr = service.pool.TryAcquireFor(ctx, candidate)
+			}
 			if errors.Is(acquireErr, aistudio.ErrAccountNotFound) && !fixedAccount {
 				continue
 			}
@@ -1850,6 +1862,29 @@ func inlineMediaInput(contents []aistudio.Content) (int, int64) {
 	return count, bytes
 }
 
+// requestInputBytes 返回请求系统指令、各轮文本、函数调用参数、函数结果与内联附件的字节数，作为同一账户额度拒绝比较请求大小的依据
+func requestInputBytes(request aistudio.GenerateRequest) int64 {
+	var size int64
+	for _, text := range request.System {
+		size += int64(len(text))
+	}
+	for _, content := range request.Contents {
+		for _, part := range content.Parts {
+			size += int64(len(part.Text))
+			if part.InlineData != nil {
+				size += int64(len(part.InlineData.Data))
+			}
+			if part.FunctionCall != nil {
+				size += int64(len(part.FunctionCall.Arguments))
+			}
+			if part.FunctionResult != nil {
+				size += int64(len(part.FunctionResult.Content))
+			}
+		}
+	}
+	return size
+}
+
 // Generate 获取唯一账户并转发规范事件流
 func (service *trackedService) Generate(ctx context.Context, request aistudio.GenerateRequest) (<-chan aistudio.Event, error) {
 	generationStartedAt := time.Now()
@@ -1998,6 +2033,7 @@ func (service *trackedService) generateWithRetry(
 		recoveredWorker: make(map[string]struct{}), buildOnly: aistudio.RequestBuildOnly(request),
 	}
 	retry.attempted = make(map[string]struct{}, retry.maxAttempts)
+	requestSize := requestInputBytes(request)
 	assistant := service.pool.AssistantModel(modelID)
 	preferredAccountID := ""
 	if assistant {
@@ -2025,6 +2061,7 @@ func (service *trackedService) generateWithRetry(
 		selection := aistudio.AccountSelection{
 			ModelID: modelID, Method: "generateContent",
 			AccountID: selectionAccountID, ResourceID: selectionResourceID, PreferredAccountID: preferredAccountID,
+			RequestSize: requestSize,
 		}
 		if resourceID != "" || request.Config.SpeechConfig != nil && request.Config.SpeechConfig.Mode != "" {
 			selection.PlaygroundOnly = true
@@ -2662,6 +2699,7 @@ func (service *trackedService) settleAttempt(
 	}
 	cooldown, quotaFailure := aistudio.QuotaCooldownForError(err, time.Now())
 	if quotaFailure {
+		cooldown.RequestSize = attempt.selection.RequestSize
 		until, stateErr := service.markQuotaCooldown(requestID, modelID, lease, cooldown)
 		if stateErr != nil {
 			err = errors.Join(err, stateErr)
@@ -2894,9 +2932,10 @@ func (service *trackedService) dataRequestContext(ctx context.Context) (context.
 		return nil, nil, service.stoppedError()
 	}
 	deadline, cancel := newRoundDeadlineContext(ctx, service.timeout)
-	stopData := context.AfterFunc(service.dataContext, cancel)
+	run := service.dataContext
+	stopData := context.AfterFunc(run, cancel)
 	service.lifecycleMu.Unlock()
-	return aistudio.ContextWithContinuationObserver(deadline, deadline.extend), func() {
+	return aistudio.ContextWithServiceRun(aistudio.ContextWithContinuationObserver(deadline, deadline.extend), run), func() {
 		stopData()
 		cancel()
 	}, nil

@@ -35,6 +35,9 @@ func quotaCooldownReason(reason string) bool {
 	return slices.ContainsFunc(quotaCooldownKinds, func(kind string) bool { return strings.HasPrefix(reason, kind+": ") })
 }
 
+// rejectedSizeWindow 是每日限额拒绝过的请求大小用于跳过不小于它的回退请求的时长
+const rejectedSizeWindow = time.Minute
+
 // planLimitBackoff 为没有恢复时间的套餐限额与短期限额按连续次数递增的冷却时长
 var planLimitBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
 
@@ -51,11 +54,20 @@ type CooldownState struct {
 	Level  int       `json:"level,omitempty"`
 	// Fallback 是套餐限额或每日限额冷却期间，忽略这两类冷却的回退选号另受的较早结束的冷却
 	Fallback *CooldownState `json:"fallback,omitempty"`
+	// RejectedSize 是每日限额冷却期间上游在 RejectedUntil 之前的一分钟内以额度拒绝过的最小请求输入字节数
+	RejectedSize int64 `json:"rejected_size,omitempty"`
+	// RejectedUntil 是 RejectedSize 失效的时刻
+	RejectedUntil time.Time `json:"rejected_until,omitzero"`
 }
 
 // Active 判断冷却状态当前是否生效
 func (c CooldownState) Active(now time.Time) bool {
 	return !c.Until.IsZero() && now.Before(c.Until)
+}
+
+// rejects 判断上游一分钟内以每日限额拒绝过不大于 size 的请求
+func (c CooldownState) rejects(size int64, now time.Time) bool {
+	return now.Before(c.RejectedUntil) && size >= c.RejectedSize
 }
 
 // QuotaCooldown 表示上游额度限制对应的调度冷却
@@ -65,6 +77,8 @@ type QuotaCooldown struct {
 	Kind     string
 	Reason   string
 	Escalate bool
+	// RequestSize 是被拒请求输入正文的字节数，0 表示未知
+	RequestSize int64
 }
 
 // QuotaCooldownForError 解析上游分钟或每日额度限制

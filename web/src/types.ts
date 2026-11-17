@@ -283,6 +283,8 @@ interface RequestLog {
   input_files?: number
   parameters?: Record<string, string>
   first_event_ms?: number
+  proof_ms?: number
+  proof_phases?: ProofPhases
   upstream_bytes?: number
   channel?: UpstreamChannel
   usage?: {
@@ -561,6 +563,14 @@ interface RequestAttempt {
   duration_ms: number
 }
 
+// ProofPhases 是 WAA 耗时的分项毫秒数
+export interface ProofPhases {
+  lock_ms: number
+  interaction_ms: number
+  refresh_ms: number
+  compute_ms: number
+}
+
 export interface UsageRecord {
   id: string
   time: string
@@ -574,6 +584,8 @@ export interface UsageRecord {
   duration_ms: number
   first_event_ms: number
   queue_ms: number
+  proof_ms: number
+  proof_phases: ProofPhases
   input_tokens: number
   cached_tokens: number
   reasoning_tokens: number

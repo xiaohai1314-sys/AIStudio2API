@@ -20,6 +20,17 @@ ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17  zig-aarch64-li
 d43ad4ee9e08e854c3577a58fe9cd9d37bf36308bea44fdea342323a12322623  spidermonkey-v158.0.1-aistudio2api.1-windows-amd64.tar.gz
 aa43b6962fc45f4e077f2fd80fa2be9194378ff29a6e22fe77918d12687848be  spidermonkey-v158.0.1-aistudio2api.1-darwin-amd64.tar.gz
 bf5f9a8ee91af775b5311d757806072b349c924f8fbfac8bd936b220d2610085  spidermonkey-v158.0.1-aistudio2api.1-darwin-arm64.tar.gz
+
+# SpiderMonkey v158.0.1-aistudio2api.2 的摘要同样来自 GitHub Releases API 的 asset.digest
+# （Mag1cFall/firefox v158.0.1-aistudio2api.2）。本环境下载过 linux-amd64、
+# linux-amd64-gnu 与 windows-amd64 三个包并核对过，与 API digest 一致；
+# 其余三个目标只记录同一 API 的 digest，构建时仍会在解压前校验。
+2a70d308f2b59bca62424af955a4f1d620a9bfbaad9d538f4cbd8e5cee871ae7  spidermonkey-v158.0.1-aistudio2api.2-linux-amd64.tar.gz
+a29715fd332d767e6b27f08efeb5a24ff261cc5e0b84927dbaef5044c97ebba2  spidermonkey-v158.0.1-aistudio2api.2-linux-arm64.tar.gz
+e9cf3cb2ad2a8ce68a62cf960670ecd58791f87e895e6c313741984838c8c437  spidermonkey-v158.0.1-aistudio2api.2-linux-amd64-gnu.tar.gz
+017bc187ca2f77bfa44783ebb8dbbfcbea5f69850198e701e47c4c418da6f50d  spidermonkey-v158.0.1-aistudio2api.2-windows-amd64.tar.gz
+12694d2f293bb49222cf46b7c5f6f2b03d736ae3e9b516f43920f0efdac4cd61  spidermonkey-v158.0.1-aistudio2api.2-darwin-amd64.tar.gz
+cf7ca569e9042ba9420525592bbefe738ee11f6b51a8b3b341cf4eaca14564d8  spidermonkey-v158.0.1-aistudio2api.2-darwin-arm64.tar.gz
 d5047d17eace8b9639a08786b750e46ee83a1f251b7b961cd0f049371974ab78  libwebp-v1.6.0-aistudio2api.1-linux-amd64.tar.gz
 299028ab369a7f8b34feefd41f68cebdc6118c1306d37a57731da9503cd64084  libwebp-v1.6.0-aistudio2api.1-linux-arm64.tar.gz
 1c89878d1f7c7b7232ea8fad1292a8f6c70f3d2d92fffc24c1fa6ac9e8070c85  libwebp-v1.6.0-aistudio2api.1-linux-amd64-gnu.tar.gz
