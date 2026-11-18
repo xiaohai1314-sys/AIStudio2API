@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/paniclog"
 )
@@ -408,17 +409,17 @@ var selectAllKeyActions = []map[string]any{
 	{"type": "keyUp", "value": "\uE009"},
 }
 
-// promptFillLimit 是界面运行写入官网输入框的最多字符数，与官网把更长的粘贴转为文本附件的长度相同；页面发出时正文整体换成服务的正文
+// promptFillLimit 是界面运行写入官网输入框的最多 UTF-16 码元数，与官网把更长的粘贴转为文本附件的长度相同；页面发出时正文整体换成服务的正文
 const promptFillLimit = 25000
 
-// promptHead 返回界面运行写入官网输入框的提示词开头，最多 promptFillLimit 个字符
+// promptHead 返回界面运行写入官网输入框的提示词开头，最多 promptFillLimit 个 UTF-16 码元，不拆开代理对
 func promptHead(prompt string) string {
-	count := 0
-	for index := range prompt {
-		if count == promptFillLimit {
+	units := 0
+	for index, char := range prompt {
+		units += utf16.RuneLen(char)
+		if units > promptFillLimit {
 			return prompt[:index]
 		}
-		count++
 	}
 	return prompt
 }
