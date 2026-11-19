@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -125,11 +127,15 @@ func TestUsageMapping(t *testing.T) {
 	}
 
 	gemini := geminiUsage(usage)
-	if gemini["promptTokenCount"] != int64(10) || gemini["candidatesTokenCount"] != int64(20) || gemini["thoughtsTokenCount"] != int64(5) {
-		t.Fatalf("Gemini 用量 = %v", gemini)
+	if gemini.PromptTokenCount != int64(10) || gemini.CandidatesTokenCount != int64(20) || gemini.ThoughtsTokenCount != int64(5) || gemini.TotalTokenCount != int64(37) {
+		t.Fatalf("Gemini 用量 = %+v", gemini)
 	}
-	if _, exists := gemini["outputTokenCount"]; exists {
-		t.Fatalf("上游没有的字段不应输出: %v", gemini)
+	encoded, err := json.Marshal(gemini)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "outputTokenCount") {
+		t.Fatalf("上游没有的字段不应输出: %s", encoded)
 	}
 }
 
