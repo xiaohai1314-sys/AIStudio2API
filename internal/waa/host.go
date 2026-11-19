@@ -370,6 +370,7 @@ func (state *agent) loaded() {
 		return
 	}
 	for _, done := range state.settled {
+		state.loop.starting = false
 		close(done)
 	}
 	state.settled = nil
@@ -630,14 +631,15 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 		natives["loadImage"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
 			state.pending++
+			issued, started := state.loop.now(), time.Now()
 			paniclog.Go("host.go:loadImage", func() {
 				loaded := false
 				// panic 时仍按加载失败回调脚本并结束计数，避免页面侧 Promise 与 Settle 永不结算
 				defer func() {
-					state.loop.post(func() {
+					state.loop.push(&task{at: issued + milliseconds(time.Since(started)), job: func() {
 						state.dispatch(realm, id, mozjs.Bool(loaded))
 						state.loaded()
-					})
+					}})
 				}()
 				loaded = state.loadImage(address)
 			})
@@ -648,14 +650,15 @@ func (state *agent) natives(realm *realmHost) map[string]hostNative {
 		natives["loadFrame"] = hostNative{2, func(call *mozjs.Call) error {
 			address, id := call.ArgString(0), call.ArgNumber(1)
 			state.pending++
+			issued, started := state.loop.now(), time.Now()
 			paniclog.Go("host.go:loadFrame", func() {
 				loaded := false
 				// panic 时仍按加载失败回调脚本并结束计数，避免页面侧 Promise 与 Settle 永不结算
 				defer func() {
-					state.loop.post(func() {
+					state.loop.push(&task{at: issued + milliseconds(time.Since(started)), job: func() {
 						state.dispatch(realm, id, mozjs.Bool(loaded))
 						state.loaded()
-					})
+					}})
 				}()
 				loaded = state.loadFrame(address)
 			})

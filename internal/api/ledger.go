@@ -35,6 +35,7 @@ type RequestLedger interface {
 	BodyCapture() bool
 	SaveBody(RequestBody)
 	Usage(context.Context, UsageQuery) (UsageReport, error)
+	UsagePairs(context.Context, UsageQuery) ([]UsagePair, error)
 	Records(context.Context, UsageRecordQuery) (UsageRecordPage, error)
 	ExportRecords(context.Context, UsageRecordQuery, io.Writer) error
 	RequestBody(context.Context, string) (RequestBody, error)
@@ -54,8 +55,6 @@ type UsageQuery struct {
 	Location *time.Location
 	Filters  UsageFilters
 	Stack    string
-	// SkipPairs 为真时报告不含账户与模型组合明细
-	SkipPairs bool
 }
 
 // UsageLatency 汇总一组请求的平均值与分位耗时
@@ -136,7 +135,6 @@ type UsageReport struct {
 	StackBy        string                  `json:"stack_by"`
 	Series         []UsageSeries           `json:"series"`
 	Groups         map[string][]UsageGroup `json:"groups"`
-	Pairs          []UsagePair             `json:"pairs"`
 	Options        map[string][]string     `json:"options"`
 }
 
@@ -249,6 +247,7 @@ type RequestBody struct {
 // registerLedger 注册用量统计、请求记录与请求正文接口
 func (s *server) registerLedger(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/usage", s.handleUsage)
+	mux.HandleFunc("GET /api/usage/pairs", s.handleUsagePairs)
 	mux.HandleFunc("GET /api/usage/records", s.handleUsageRecords)
 	mux.HandleFunc("GET /api/usage/records.csv", s.handleUsageExport)
 	mux.HandleFunc("GET /api/requests/{id}/body", s.handleRequestBody)
@@ -289,7 +288,7 @@ func parseUsageRange(values url.Values) (time.Time, time.Time, error) {
 	return from.UTC(), to.UTC(), nil
 }
 
-// parseUsageFilters 读取各维度的筛选值，逗号分隔多个取值，空值与重复值被忽略
+// parseUsageFilters 读取各维度的筛选值，逗号分隔多个取值，空字符串筛出该维度为空的记录，重复值被忽略
 func parseUsageFilters(values map[string][]string) UsageFilters {
 	filters := UsageFilters{}
 	for _, dimension := range UsageDimensions {
@@ -311,7 +310,7 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	query := UsageQuery{From: from, To: to, Location: time.UTC, Filters: parseUsageFilters(values), Stack: "model", SkipPairs: values.Get("pairs") == "0"}
+	query := UsageQuery{From: from, To: to, Location: time.UTC, Filters: parseUsageFilters(values), Stack: "model"}
 	if name := values.Get("tz"); name != "" {
 		if query.Location, err = tzcache.Load(name); err != nil {
 			writeAdminError(w, http.StatusBadRequest, "invalid_request", "tz 必须是 IANA 时区名")
@@ -344,6 +343,21 @@ func (s *server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *server) handleUsagePairs(w http.ResponseWriter, r *http.Request) {
+	values := r.URL.Query()
+	from, to, err := parseUsageRange(values)
+	if err != nil {
+		writeAdminError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	pairs, err := s.config.Ledger.UsagePairs(r.Context(), UsageQuery{From: from, To: to, Filters: parseUsageFilters(values)})
+	if err != nil {
+		writeAdminError(w, statusFromError(err), "usage_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string][]UsagePair{"pairs": pairs})
 }
 
 // parseUsageRecordQuery 读取请求记录的范围、筛选、状态码、关键字与分页参数
