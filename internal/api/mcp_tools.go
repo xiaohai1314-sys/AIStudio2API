@@ -1,24 +1,28 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
 )
 
-// mcpHeaderTransport 为发往 MCP 服务器主机的请求加上请求给出的头
+// mcpHeaderTransport 为发往 MCP 服务器主机的请求加上请求给出的头，schemas 不为 nil 时从响应中记下 tools/list 结果里各工具原样的 inputSchema
 type mcpHeaderTransport struct {
 	base    http.RoundTripper
 	host    string
 	headers map[string]string
+	schemas *mcpToolSchemas
 }
 
 func (t mcpHeaderTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -29,7 +33,93 @@ func (t mcpHeaderTransport) RoundTrip(request *http.Request) (*http.Response, er
 	for name, value := range t.headers {
 		request.Header.Set(name, value)
 	}
-	return t.base.RoundTrip(request)
+	response, err := t.base.RoundTrip(request)
+	if err == nil && t.schemas != nil {
+		response.Body = &mcpRecordedBody{ReadCloser: response.Body, schemas: t.schemas, stream: strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream")}
+	}
+	return response, err
+}
+
+// mcpToolSchemas 是 MCP 服务器 tools/list 结果中各工具原样的 inputSchema，键为工具名；SDK 把 inputSchema 解码为 map、属性按字母重排，属性顺序取这里的原文
+type mcpToolSchemas struct {
+	mu      sync.Mutex
+	schemas map[string]json.RawMessage
+}
+
+// record 从一条 JSON-RPC 消息中记下 tools/list 结果里各工具的 inputSchema
+func (schemas *mcpToolSchemas) record(message []byte) {
+	var response struct {
+		Result struct {
+			Tools []struct {
+				Name        string          `json:"name"`
+				InputSchema json.RawMessage `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(message, &response) != nil {
+		return
+	}
+	schemas.mu.Lock()
+	defer schemas.mu.Unlock()
+	for _, tool := range response.Result.Tools {
+		if schemas.schemas == nil {
+			schemas.schemas = map[string]json.RawMessage{}
+		}
+		schemas.schemas[tool.Name] = tool.InputSchema
+	}
+}
+
+// schema 返回工具 name 原样的 inputSchema
+func (schemas *mcpToolSchemas) schema(name string) json.RawMessage {
+	schemas.mu.Lock()
+	defer schemas.mu.Unlock()
+	return schemas.schemas[name]
+}
+
+// mcpRecordedBody 是 MCP 服务器的响应正文，SDK 读到完整的 JSON 正文或事件流中的一个完整事件时记下其中的 tools/list 结果
+type mcpRecordedBody struct {
+	io.ReadCloser
+	schemas *mcpToolSchemas
+	stream  bool
+	pending []byte
+}
+
+func (body *mcpRecordedBody) Read(buffer []byte) (int, error) {
+	read, err := body.ReadCloser.Read(buffer)
+	body.pending = append(body.pending, buffer[:read]...)
+	if body.stream {
+		body.pending = bytes.ReplaceAll(body.pending, []byte("\r\n"), []byte("\n"))
+		for {
+			end := bytes.Index(body.pending, []byte("\n\n"))
+			if end < 0 {
+				break
+			}
+			body.event(body.pending[:end])
+			body.pending = body.pending[end+2:]
+		}
+	}
+	if err == io.EOF {
+		if body.stream {
+			body.event(body.pending)
+		} else {
+			body.schemas.record(body.pending)
+		}
+		body.pending = nil
+	}
+	return read, err
+}
+
+// event 记下事件流中一个事件的 data 行连成的消息
+func (body *mcpRecordedBody) event(event []byte) {
+	var data [][]byte
+	for line := range bytes.SplitSeq(event, []byte("\n")) {
+		if value, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+			data = append(data, bytes.TrimPrefix(value, []byte(" ")))
+		}
+	}
+	if len(data) > 0 {
+		body.schemas.record(bytes.Join(data, []byte("\n")))
+	}
 }
 
 // resolveMCPTools 按 tools/list 把带只读或排除要求的 MCP 服务器换成允许的工具名，没有允许工具的服务器不发送
@@ -69,8 +159,8 @@ func (s *server) resolveMCPTools(ctx context.Context, request aistudio.GenerateR
 	return request, nil
 }
 
-// connectMCP 只通过带公网地址校验的直连传输访问 MCP，避免公开 API 把服务端当作访问内网的跳板
-func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, method string) (*mcp.ClientSession, error) {
+// connectMCP 只通过带公网地址校验的直连传输访问 MCP，避免公开 API 把服务端当作访问内网的跳板；schemas 不为 nil 时记下 tools/list 结果中原样的 inputSchema
+func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, method string, schemas *mcpToolSchemas) (*mcp.ClientSession, error) {
 	endpoint, err := validatePublicHTTPURL(ctx, server.URL)
 	if err != nil {
 		return nil, fmt.Errorf("mcp server %q url: %w", server.Name, err)
@@ -80,7 +170,7 @@ func (s *server) connectMCP(ctx context.Context, server aistudio.MCPServer, meth
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: endpoint.String(),
 		HTTPClient: &http.Client{
-			Transport:     mcpHeaderTransport{base: base, host: endpoint.Host, headers: server.Headers},
+			Transport:     mcpHeaderTransport{base: base, host: endpoint.Host, headers: server.Headers, schemas: schemas},
 			CheckRedirect: checkMCPRedirect,
 		},
 		DisableStandaloneSSE: true,
@@ -105,7 +195,8 @@ func checkMCPRedirectWithHostCheck(request *http.Request, via []*http.Request, c
 
 // listMCPTools 读取 MCP 服务器 tools/list 返回的全部工具
 func (s *server) listMCPTools(ctx context.Context, server aistudio.MCPServer) ([]*mcp.Tool, error) {
-	session, err := s.connectMCP(ctx, server, "tools/list")
+	schemas := &mcpToolSchemas{}
+	session, err := s.connectMCP(ctx, server, "tools/list", schemas)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +206,7 @@ func (s *server) listMCPTools(ctx context.Context, server aistudio.MCPServer) ([
 		if err != nil {
 			return nil, fmt.Errorf("mcp server %q tools/list: %w", server.Name, err)
 		}
+		tool.InputSchema = schemas.schema(tool.Name)
 		tools = append(tools, tool)
 	}
 	return tools, nil
@@ -126,7 +218,7 @@ func (s *server) callMCPTool(ctx context.Context, server aistudio.MCPServer, nam
 	if err := json.Unmarshal([]byte(arguments), &values); err != nil {
 		return "", false, fmt.Errorf("mcp tool %q arguments: %w", name, err)
 	}
-	session, err := s.connectMCP(ctx, server, "tools/call "+name)
+	session, err := s.connectMCP(ctx, server, "tools/call "+name, nil)
 	if err != nil {
 		return "", false, err
 	}
@@ -385,7 +477,7 @@ func (s *server) approvedMCPCall(ctx context.Context, tools []responsesTool, app
 	output, failed, err := s.callMCPTool(ctx, server, approval.Name, approval.Arguments)
 	switch {
 	case err != nil:
-		item["status"], item["error"] = "failed", map[string]any{"type": "mcp_protocol_error", "code": -32603, "message": err.Error()}
+		item["status"], item["error"] = "failed", map[string]any{"type": "mcp_protocol_error", "code": -32603, "message": publicReason(err)}
 	case failed:
 		item["status"], item["error"] = "failed", map[string]any{"type": "mcp_tool_execution_error", "content": []any{map[string]any{"type": "text", "text": output}}}
 	default:
