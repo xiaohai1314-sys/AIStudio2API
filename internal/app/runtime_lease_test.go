@@ -31,7 +31,8 @@ func TestAcquireWarmLeaseAllCoolingReturnsAllCoolingError(t *testing.T) {
 	}
 	manager := newAccountWorkerManager(pool, []*aistudio.Account{account}, newRequestRegistry(context.Background()), "", "", time.Minute, 0, 2, 1)
 	defer func() { _ = manager.Close() }()
-	service := &trackedService{pool: pool, workers: manager, maxAccountSwitches: 3}
+	service := &trackedService{pool: pool, workers: manager}
+	service.SetRequestPolicy(nil, 3)
 
 	failures := 0
 	var cooled time.Duration
@@ -88,7 +89,8 @@ func TestFirstRejectionCoolsModelOnly(t *testing.T) {
 	}
 	manager := newAccountWorkerManager(pool, []*aistudio.Account{account}, newRequestRegistry(context.Background()), "", "", time.Minute, 0, 2, 1)
 	defer func() { _ = manager.Close() }()
-	service := &trackedService{pool: pool, workers: manager, maxAccountSwitches: 3}
+	service := &trackedService{pool: pool, workers: manager}
+	service.SetRequestPolicy(nil, 3)
 
 	failures := 0
 	var cooled time.Duration

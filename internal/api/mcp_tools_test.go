@@ -21,7 +21,7 @@ func TestConnectMCPRejectsPrivateTargets(t *testing.T) {
 		"http://10.0.0.1:9/mcp",
 		"http://169.254.169.254/latest/meta-data",
 	} {
-		_, err := server.connectMCP(context.Background(), aistudio.MCPServer{Name: "local", URL: target}, "tools/list")
+		_, err := server.connectMCP(context.Background(), aistudio.MCPServer{Name: "local", URL: target}, "tools/list", nil)
 		if err == nil || !strings.Contains(err.Error(), "non-public") {
 			t.Fatalf("%s: err = %v", target, err)
 		}

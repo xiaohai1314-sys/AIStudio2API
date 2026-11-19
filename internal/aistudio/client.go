@@ -44,6 +44,8 @@ type RPCRequest struct {
 	RequestID string
 	Header    http.Header
 	Body      []byte
+	// ProofAt 是受保护请求编码 Body 时给出的 WAA proof 字段占位 null 的起始字节
+	ProofAt   int
 	Streaming bool
 }
 
@@ -379,11 +381,12 @@ func (c *Client) send(ctx context.Context, rpc RPCRequest) (*RPCResponse, error)
 	return validateRPCResponse(rpc.Method, response)
 }
 
-func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte) (*RPCResponse, error) {
+func (c *Client) doProtected(ctx context.Context, request GenerateRequest, body []byte, proofAt int) (*RPCResponse, error) {
 	if err := c.pacer.Wait(ctx, request.AccountID); err != nil {
 		return nil, err
 	}
 	rpc := newRPCRequest("GenerateContent", request.AccountID, request.ID, body, true)
+	rpc.ProofAt = proofAt
 	c.applyBenefitTier(rpc.Method, request.AccountID, rpc.Header)
 	if request.ImageRoute {
 		// 图像请求使用独立于文本预热页的扩展头默认值

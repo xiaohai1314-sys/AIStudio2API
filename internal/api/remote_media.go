@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -217,8 +216,6 @@ func inlineRemoteMediaWithBudget(ctx context.Context, contents []aistudio.Conten
 				}
 				downloaded[part.File.ID] = blob
 			}
-			part.DisplayName = cmp.Or(part.DisplayName, part.File.Name)
-			part.File, part.InlineData = nil, blob
 		}
 	}
 	return budget.release, nil
