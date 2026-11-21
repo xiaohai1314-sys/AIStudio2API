@@ -16,7 +16,9 @@ import (
 
 // Config 定义公开 API 服务配置
 type Config struct {
-	APIKey string
+	// PickPath 以系统对话框选择账户目录并返回选中的路径，用户取消时返回空串；只在桌面版提供
+	PickPath func(start string) (string, error)
+	APIKey   string
 	// PublicRateLimit 是每个 API key（无 key 时每个对端 IP）每分钟允许的公开 API 请求数。
 	PublicRateLimit int
 	// PublicRateBurst 是单个身份可立即使用的令牌数。
