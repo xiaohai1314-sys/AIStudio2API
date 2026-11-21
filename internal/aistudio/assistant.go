@@ -198,7 +198,8 @@ func (target assistantTarget) created() bool {
 	return target.trajectory == "" && !target.fresh
 }
 
-// EncodeAssistantRequest 编码 CodeAssistantOffline：field 1 对话轮、6 模式、8 模型、9 自定义指令、12 应用、14 框架、16、19 思考配置、21 续接的 trajectory、23 开启新 trajectory、29 请求 ID，field 2 由 WAA proof 写入；新应用的第一段对话模式为 1、框架为 [2,null,2]，其余模式为 2、框架为 [2]
+// EncodeAssistantRequest 编码写代码助手一轮的 CodeAssistantOffline 请求
+// field 2 由 WAA proof 写入，各字段依据见 docs/build.md 的“CodeAssistantOffline”一节
 func EncodeAssistantRequest(request GenerateRequest, defaults GenerationDefaults, target assistantTarget, requestID string) ([]byte, int, error) {
 	contents, err := encodeContents(request.Contents)
 	if err != nil {
@@ -251,7 +252,10 @@ func assistantContextDigest(request GenerateRequest) (string, error) {
 	return fmt.Sprintf("%x", sum), err
 }
 
-// assistantToolPrompt 改写写代码助手的一轮请求，返回是否用了说明文件：自定义指令以禁止调用内置工具的说明开头，对话中的函数调用与函数结果改写为 function_calls 与 function_results 代码块，前 transcriptEnd 轮去掉思考后转录，只提交 start 起的对话轮，全部转录时提交请模型从最后一轮继续的用户轮，start 等于 transcriptEnd 时转录中的附件按编号放在提交的第一轮开头；file 为假且自定义指令依次写入函数声明、系统提示词与转录后不超过 assistantInstructionLimit 时都写在自定义指令中，否则自定义指令只有说明与函数声明（函数声明放不下时只有说明），context 为真时的系统提示词、放不下的函数声明与转录写成一个 text/plain 说明文件，放在提交的第一轮开头、转录中的附件之前
+// assistantToolPrompt 改写写代码助手的一轮请求，返回改写后的请求与是否用了说明文件
+// 前 transcriptEnd 轮转录，只提交 start 起的对话轮
+// file 为真或自定义指令超过 assistantInstructionLimit 字节时用说明文件，context 为真时说明文件含系统提示词
+// 转录与说明文件的格式依据见 docs/build.md 的“对话历史转录”与“说明文件”两节
 func assistantToolPrompt(request GenerateRequest, transcriptEnd int, start int, file bool, context bool) (GenerateRequest, bool, error) {
 	system, declarations, err := assistantContext(request)
 	if err != nil {
@@ -430,7 +434,9 @@ func assistantLatest(contents []Content, links []turnLink) bool {
 	return links[count-1].model || localPartsTokens(parts) > assistantTurnTokenLimit
 }
 
-// planAssistantTurn 按续接的 trajectory 改写请求，返回本轮之后 trajectory 转录在自定义指令中的开头分组数与说明文件摘要：续接没有说明文件的 trajectory 时沿用开启时转录的开头分组，续接有说明文件的 trajectory 时只在系统提示词或函数声明改变时提交新的说明文件；开启新 trajectory 时最后一组之前的对话转录，最后一组也要转录时全部转录；用了说明文件时转录随说明文件存入 trajectory，开头分组数为 0
+// planAssistantTurn 按续接的 trajectory 改写请求，返回本轮之后自定义指令中转录的开头分组数与说明文件摘要
+// 用了说明文件时开头分组数为 0
+// 续接与开启新 trajectory 的转录规则见 docs/build.md 的“对话历史转录”与“说明文件”两节
 func planAssistantTurn(request GenerateRequest, links []turnLink, trajectory *assistantTrajectory, start int) (GenerateRequest, int, string, error) {
 	context, err := assistantContextDigest(request)
 	if err != nil {
