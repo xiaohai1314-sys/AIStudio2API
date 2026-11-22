@@ -33,7 +33,7 @@ func TestEvictClientRemovesOldest(t *testing.T) {
 	}
 }
 
-// TestEvictClientSkipsInflight 验证有在途请求的客户端不被淘汰：HTTP/3 连接关闭会中止活跃流
+// TestEvictClientSkipsInflight 验证有在途请求的客户端不被淘汰：连接关闭会中止活跃流
 func TestEvictClientSkipsInflight(t *testing.T) {
 	now := time.Now()
 	busy := &atomic.Int64{}

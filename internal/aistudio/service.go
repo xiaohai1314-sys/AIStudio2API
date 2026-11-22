@@ -139,7 +139,8 @@ func (t *WorkerProtectedTransport) DoProtected(ctx context.Context, request Gene
 	}, rpc)
 }
 
-// doPrepared 为请求取得 proof 后经账户的 WAA 运行时发送，proof 写在 rpc.ProofAt 处，并写回运行时导出的 Cookie；proof 非空时写入该 proof
+// doPrepared 为请求取得 proof 后经账户的 WAA 运行时发送，proof 写在 rpc.ProofAt 处，并写回运行时导出的 Cookie；proof 非空时写入该 proof；准备结果没有 proof 时由页面应用在界面运行中取 proof 并构造请求头，不签 Authorization，等待响应头的阶段由运行时在页面发出后报告；
+// 页面函数标签页不可用时跳过函数标签页重试一次。
 // 非流式 RPC 在发送阶段包 unaryRPCTimeout 兜底超时，避免上游或代理 hang 住时无限占用账户租约；
 // 流式 RPC（rpc.Streaming，如 GenerateContent 与 Build 流式代理）不加，避免截断长时间思考的健康 SSE。
 // 超时 ctx 必须覆盖正文读取与 Cookie 写回，成功时由响应体关闭触发取消，只有出错路径立即取消
@@ -160,48 +161,66 @@ func (t *WorkerProtectedTransport) doPrepared(
 			cancel()
 		}
 	}()
-	lease, worker, rpc, prepared, err := t.prepareProtectedRequest(ctx, prompt, page, proof, selection, rpc)
-	if err != nil {
-		return nil, err
-	}
-	headers := rpc.Header
-	if prepared.Proof != "" {
-		browserState, err := worker.BrowserStorageState(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+	var (
+		lease    *AccountLease
+		worker   ProtectedPreparer
+		response *RPCResponse
+	)
+	for retried := false; ; retried = true {
+		attemptCtx := ctx
+		if retried {
+			attemptCtx = context.WithValue(ctx, skipFunctionTabKey{}, true)
 		}
-		authorization, err := t.transport.signer.Authorization(browserState)
+		var (
+			preparedRPC RPCRequest
+			prepared    PreparedProtectedRequest
+			err         error
+		)
+		lease, worker, preparedRPC, prepared, err = t.prepareProtectedRequest(attemptCtx, prompt, page, proof, selection, rpc)
 		if err != nil {
 			return nil, err
 		}
-		headers = rpc.Header.Clone()
-		headers.Set("Authorization", authorization)
-	}
-	if lease.CoolingDown(selectionAccessScope(selection)) {
-		return nil, ErrAccountCoolingDown
-	}
-	if prepared.Proof != "" {
-		reportRequestPhase(ctx, RequestPhaseSendingUpstream)
-	}
-	response, err := worker.SendProtected(ctx, ProtectedRequest{
-		URL: rpc.URL, Headers: headers, Body: rpc.Body, ProofAt: rpc.ProofAt, Prompt: prompt, PagePrompt: prepared.PagePrompt, Proof: prepared.Proof,
-	})
-	if err != nil {
+		headers := preparedRPC.Header
+		if prepared.Proof != "" {
+			browserState, err := worker.BrowserStorageState(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("读取浏览器 Cookie: %w", err)
+			}
+			authorization, err := t.transport.signer.Authorization(browserState)
+			if err != nil {
+				return nil, err
+			}
+			headers = preparedRPC.Header.Clone()
+			headers.Set("Authorization", authorization)
+		}
+		if lease.CoolingDown(selectionAccessScope(selection)) {
+			return nil, ErrAccountCoolingDown
+		}
+		if prepared.Proof != "" {
+			reportRequestPhase(ctx, RequestPhaseSendingUpstream)
+		}
+		response, err = worker.SendProtected(attemptCtx, ProtectedRequest{
+			URL: preparedRPC.URL, Headers: headers, Body: preparedRPC.Body, ProofAt: preparedRPC.ProofAt, Prompt: prompt, PagePrompt: prepared.PagePrompt, Proof: prepared.Proof,
+		})
+		if err == nil {
+			break
+		}
+		if !retried && prepared.Proof == "" && errors.Is(err, camoufoxnative.ErrFunctionTabUnavailable) {
+			continue
+		}
 		return nil, err
 	}
 	saving := &cookieSavingBody{ReadCloser: response.Body, done: make(chan struct{})}
-	paniclog.Go("service.go:169", func() {
-		func() {
-			defer close(saving.done)
-			browserState, err := worker.BrowserStorageState(ctx)
-			if err != nil {
-				saving.err = fmt.Errorf("导出浏览器 Cookie: %w", err)
-				return
-			}
-			if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
-				saving.err = fmt.Errorf("保存浏览器 Cookie: %w", err)
-			}
-		}()
+	paniclog.Go("service.go:cookieSaving", func() {
+		defer close(saving.done)
+		browserState, err := worker.BrowserStorageState(ctx)
+		if err != nil {
+			saving.err = fmt.Errorf("导出浏览器 Cookie: %w", err)
+			return
+		}
+		if err := lease.ReplaceCookies(browserState.Cookies); err != nil {
+			saving.err = fmt.Errorf("保存浏览器 Cookie: %w", err)
+		}
 	})
 	response.Body = saving
 	if cancel != nil {
@@ -461,6 +480,44 @@ func (s *PooledService) refreshSteps(ctx context.Context, accountID string, wait
 	return enter
 }
 
+// VerifyAccount 占用指定账户的一个普通槽位同步目录并发一次最小生成请求核对验证状态，正常时解除受限、上游要求验证时标为需要验证
+func (s *PooledService) VerifyAccount(ctx context.Context, accountID string) error {
+	accountID = strings.TrimSpace(accountID)
+	enter := s.verifySteps(ctx, accountID)
+	lease, err := s.pool.AcquireFor(ctx, AccountSelection{AccountID: accountID, anyState: true})
+	if err != nil {
+		return err
+	}
+	enter(AccountStepCatalog)
+	_, err = s.modelsForLease(ContextWithAccountLease(ContextWithResidentCatalog(ctx), lease), lease, true)
+	if err == nil {
+		enter(AccountStepVerifying)
+		err = s.checkAccountVerification(ctx, lease)
+	}
+	return errors.Join(err, lease.Release())
+}
+
+// verifySteps 返回验证核对流程的步骤报告函数，总步数包含目录读取、生成核对以及等待在途请求
+func (s *PooledService) verifySteps(ctx context.Context, accountID string) func(AccountStep) {
+	report, _ := ctx.Value(refreshStepsContextKey{}).(func(AccountStep, int, int))
+	if report == nil {
+		return func(AccountStep) {}
+	}
+	waiting := s.pool.SlotBusy(accountID)
+	steps, done := 2, 0
+	if waiting {
+		steps++
+	}
+	enter := func(step AccountStep) {
+		done++
+		report(step, done, max(steps, done))
+	}
+	if waiting {
+		enter(AccountStepWaiting)
+	}
+	return enter
+}
+
 // checkAccountVerification 以账户的页面初始化模型在租约内发一次最小生成请求，第一次被上游 403、协议错误码 7 拒绝时与普通请求一样在同一账户重试一次：生成成功时解除受限，上游仍拒绝账户时按其原因保持服务受限，其他失败保持受限并返回该失败
 func (s *PooledService) checkAccountVerification(ctx context.Context, lease *AccountLease) error {
 	accountID := lease.Account().ID
@@ -582,6 +639,40 @@ func (s *PooledService) cachedModels(accountID string) []Model {
 		return nil
 	}
 	return cloneModels(account.Models)
+}
+
+// Model 返回租约账户实时目录中的模型
+func (l *AccountLease) Model(modelID string) (Model, bool) {
+	modelID = strings.TrimPrefix(strings.TrimSpace(modelID), "models/")
+	if modelID == "" {
+		return Model{}, false
+	}
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	for _, model := range l.account.Models {
+		if modelMatchesID(model, modelID) {
+			return cloneModels([]Model{model})[0], true
+		}
+	}
+	return Model{}, false
+}
+
+// InteractionRoute 返回模型在租约账户与当前通道上是否走 CreateInteractionStream 或 CreateInteraction 后台任务
+func (l *AccountLease) InteractionRoute(modelID string) (stream bool, task bool) {
+	model, ok := l.Model(modelID)
+	if !ok {
+		return false, false
+	}
+	return interactionRoute(model, GenerationDefaults{}, l.Channel())
+}
+
+// interactionRoute 返回模型在指定通道上是否走 CreateInteractionStream 或 CreateInteraction 后台任务
+func interactionRoute(model Model, defaults GenerationDefaults, channel Channel) (stream bool, task bool) {
+	if channel == ChannelBuild {
+		return false, false
+	}
+	return model.Capabilities["interaction_stream"] || defaults.InteractionStream,
+		model.Capabilities["interaction_task"] || defaults.InteractionTask
 }
 
 // DefinitiveAuthenticationFailure 判断上游是否明确要求重新认证
@@ -908,6 +999,10 @@ func retryableAccountError(err error) bool {
 	}
 	if errors.Is(err, ErrAccountCoolingDown) {
 		return true
+	}
+	var readError *ResponseReadError
+	if errors.As(err, &readError) {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
 	var rpcError *RPCError
 	if !errors.As(err, &rpcError) {

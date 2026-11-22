@@ -189,9 +189,13 @@ var remoteMediaClient = &http.Client{Transport: publicOutboundTransport, CheckRe
 	return checkRemoteMediaHost(request.Context(), request.URL.Hostname())
 }}
 
+// remoteMediaHeaderTimeout 是下载外部媒体（及 interaction webhook）等待响应头的超时
+const remoteMediaHeaderTimeout = 30 * time.Second
+
 func newPublicOutboundTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	transport.ResponseHeaderTimeout = remoteMediaHeaderTimeout
 	transport.DialContext = dialPublicRemote
 	return transport
 }
