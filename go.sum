@@ -8,10 +8,6 @@ github.com/Mag1cFall/go-mp3 v0.1.1 h1:r/wBscYGXWpGdEhCQCcrHI36EDbNx6rtio2yv/Y547
 github.com/Mag1cFall/go-mp3 v0.1.1/go.mod h1:/vhuC+guK5mKVhCBE8ZQSocH0FmHXM244FT7239cSlY=
 github.com/Mag1cFall/go-sentencepiece v0.7.1 h1:Evzu4bQYge6F2tv40wMqr9MazbtbvoPbSD/eLl2gJEA=
 github.com/Mag1cFall/go-sentencepiece v0.7.1/go.mod h1:5xb9a9oAB7EQ/J/47DTrj+BSrGoJIcXZ9CB5y27Nehw=
-github.com/Mag1cFall/uquic v0.0.6-firefox.6 h1:AvAWHvAMST2ffRJb+LKTWv8+Gz0u6JfzGxcXuXxOPFI=
-github.com/Mag1cFall/uquic v0.0.6-firefox.6/go.mod h1:JHH4tzlX5KM0a4TJSglkbL2kW1hdVBenlA0YFKD8o0E=
-github.com/Mag1cFall/utls v1.8.2-firefox.3 h1:5DGK0Ps9Kew+pd1E0d96YeirOdk4AOHJmx+NeNJwRxM=
-github.com/Mag1cFall/utls v1.8.2-firefox.3/go.mod h1:HFKOiYks7qa1VvvhZBWu7Ic9tTYm1xNXHKiRcpw3Mtc=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
@@ -44,6 +40,8 @@ github.com/dlclark/regexp2/v2 v2.5.2 h1:HAsucWRhsqcDzl6Ua9aR8JwYOTzrZyPrF0/FNxJV
 github.com/dlclark/regexp2/v2 v2.5.2/go.mod h1:avUrQvPaLz2DrFNHJF0taWAFFX2C1GMSSoeiqFjcBmU=
 github.com/ebitengine/purego v0.11.1 h1:2zpWRSQNVKN4eKsKO9eM1ILDgWfYMY9GwqRmK6XeQ/0=
 github.com/ebitengine/purego v0.11.1/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
+github.com/go-ego/gocc v0.10.0 h1:PLgtMnmP1eGs1pjNxIB0kZCdgAss2/U2ZkTrUptLIeY=
+github.com/go-ego/gocc v0.10.0/go.mod h1:Ek/gRkY2iOZ/bNe8pxZcDFyUPSzW4bLO+bbAf73amN8=
 github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e h1:Lf/gRkoycfOBPa42vU2bbgPurFong6zXeFtPoxholzU=
 github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiUsvbm0=
@@ -91,14 +89,10 @@ github.com/minio/selfupdate v0.6.0 h1:i76PgT0K5xO9+hjzKcacQtO7+MjJ4JKA8Ak8XQ9DDw
 github.com/minio/selfupdate v0.6.0/go.mod h1:bO02GTIPCMQFTEvE5h4DjYB58bCoZ35XLeBf0buTDdM=
 github.com/modelcontextprotocol/go-sdk v1.8.0 h1:KIvahhYqwtbeniWVPs3TcXEA7b8jEtwfBpOTAI+Urx4=
 github.com/modelcontextprotocol/go-sdk v1.8.0/go.mod h1:dL7u98E/zjJTGzEq+j30jQ8K2k1mb6LeAH4inEcSGts=
-github.com/molecule-man/go-brrr v1.2.0 h1:dOJU45BC3Gc2WXoxAW0rgCAgVuu2gruAOGncfieA0Jw=
-github.com/molecule-man/go-brrr v1.2.0/go.mod h1:7ybW6/7gA3oKY45jOfVNjSJDtrr6ea4tzbsTkjmQDC4=
 github.com/nlnwa/whatwg-url v0.6.2 h1:jU61lU2ig4LANydbEJmA2nPrtCGiKdtgT0rmMd2VZ/Q=
 github.com/nlnwa/whatwg-url v0.6.2/go.mod h1:x0FPXJzzOEieQtsBT/AKvbiBbQ46YlL6Xa7m02M1ECk=
 github.com/oschwald/maxminddb-golang v1.13.1 h1:G3wwjdN9JmIK2o/ermkHM+98oX5fS+k5MbwsmL4MRQE=
 github.com/oschwald/maxminddb-golang v1.13.1/go.mod h1:K4pgV9N/GcK694KSTmVSDTODk4IsCNThNdTmnaBZ/F8=
-github.com/oschwald/maxminddb-golang/v2 v2.9.0 h1:YpIl3WoA9oIuNvqNaO/aD1N/7Ci2wOqoKH5GWo53H5Y=
-github.com/oschwald/maxminddb-golang/v2 v2.9.0/go.mod h1:3TxexMBcR0ss3SbyYvnqfsDzDjN4o1KCg/nTsaMAivU=
 github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 h1:jL3a8soXdzuTCcRnKhOmtcsVOObdDTFf4O2B403HPRU=
 github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6/go.mod h1:OmDBASR4679mdNQnz2pUhc2G8CO2JrUAVFDRBDP/hJE=
 github.com/quic-go/qpack v0.6.0 h1:g7W+BMYynC1LbYLSqRt8PBg5Tgwxn214ZZR34VIOjz8=
@@ -125,6 +119,10 @@ github.com/tphakala/go-aac v0.7.2 h1:jUJG92lq5tNLEABdL1Ph4whaTgPwopiA+t8FKwaMXro
 github.com/tphakala/go-aac v0.7.2/go.mod h1:I+Cu4G/0EvZbLOG1PVyDCKGp6c7Rte838nkCv8r66l8=
 github.com/tphakala/simd v1.15.0 h1:DFFqn42R1G0U0nSKKZZ0ZHQl8HDvUPTiPnA/hcVQrHU=
 github.com/tphakala/simd v1.15.0/go.mod h1:eO53GkWg40mRbr2tzs0Xb1IMZQ5U8cMR+Aa1RlXUinE=
+github.com/vcaesar/cedar v0.50.1 h1:JhchIiYZyvjT7EhjMR3oN7JH7QNgeqLrw/zaPBrTWRQ=
+github.com/vcaesar/cedar v0.50.1/go.mod h1:eHvpmJXJmOowP8mW/Xqjra+HmKovJNcRxRPtezHjh7I=
+github.com/vcaesar/tt v0.40.0 h1:vWUNRJn13ozP3xXlAXV5q9WivaDSHRS2jQ2J2ayCvQs=
+github.com/vcaesar/tt v0.40.0/go.mod h1:cH2+AwGAJm19Wa6xvEa+0r+sXDJBT0QgNQey6mwqLeU=
 github.com/vearutop/statigz v1.5.0 h1:FuWwZiT82yBw4xbWdWIawiP2XFTyEPhIo8upRxiKLqk=
 github.com/vearutop/statigz v1.5.0/go.mod h1:oHmjFf3izfCO804Di1ZjB666P3fAlVzJEx2k6jNt/Gk=
 github.com/wailsapp/wails/v3 v3.0.0-beta.29 h1:oJbXasfieQmMkYtqPlFSPnDe0RwpzA5BKiov8WPD5lo=

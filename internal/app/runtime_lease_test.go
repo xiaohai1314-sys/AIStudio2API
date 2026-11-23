@@ -29,7 +29,7 @@ func TestAcquireWarmLeaseAllCoolingReturnsAllCoolingError(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("标记套餐限额冷却失败: %v", err)
 	}
-	manager := newAccountWorkerManager(pool, []*aistudio.Account{account}, newRequestRegistry(context.Background()), "", "", time.Minute, 0, 2, 1)
+	manager := newAccountWorkerManager(pool, []*aistudio.Account{account}, newRequestRegistry(), "", "", time.Minute, 0, 2, 1)
 	defer func() { _ = manager.Close() }()
 	service := &trackedService{pool: pool, workers: manager}
 	service.SetRequestPolicy(nil, 3)
@@ -87,7 +87,7 @@ func TestFirstRejectionCoolsModelOnly(t *testing.T) {
 	if pool.AccountCoolingDown(account.ID, "gemini-4-carbon") {
 		t.Fatalf("账户在 gemini-4-carbon 上不应被 gemini-4-argon 的冷却影响")
 	}
-	manager := newAccountWorkerManager(pool, []*aistudio.Account{account}, newRequestRegistry(context.Background()), "", "", time.Minute, 0, 2, 1)
+	manager := newAccountWorkerManager(pool, []*aistudio.Account{account}, newRequestRegistry(), "", "", time.Minute, 0, 2, 1)
 	defer func() { _ = manager.Close() }()
 	service := &trackedService{pool: pool, workers: manager}
 	service.SetRequestPolicy(nil, 3)

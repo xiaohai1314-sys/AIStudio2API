@@ -173,7 +173,7 @@ func NewHandler(service aistudio.Service, config Config) http.Handler {
 
 	root := http.NewServeMux()
 	root.Handle("GET /health", corsMiddleware(http.HandlerFunc(s.handleHealth)))
-	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, config.TrustedProxyCIDRs, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, s.catalogRead, public)))))))))
+	publicHandler := bodyLimitMiddleware(browserOriginMiddleware(config.APIKey, authMiddleware(config.APIKey, apiKeyContextMiddleware(config.APIKey, accountContextMiddleware(publicRateLimitMiddleware(config.APIKey, config.PublicRateLimit, config.PublicRateBurst, config.APIKeyRateLimits, config.TrustedProxyCIDRs, publicConcurrencyMiddleware(config.MaxPublicInFlight, requestEncodingMiddleware(requestBodyMiddleware(config.Ledger, waitLaunchMiddleware(config.WaitLaunch, s.catalogRead, public))))))))))
 	loggedHandler := requestLoggingMiddleware(config.Admin, corsMiddleware(publicHandler))
 	root.Handle("/v1/", loggedHandler)
 	root.Handle("/v1beta/", loggedHandler)

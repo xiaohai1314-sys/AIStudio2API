@@ -106,20 +106,15 @@ func (admin *runtimeAdmin) probeProxies(ctx context.Context) {
 	}
 }
 
-// rebindAccounts 在后台按代理池的新绑定重建账户的请求头客户端与 Worker
+// rebindAccounts 在后台按代理池的新绑定各自重建受影响账户的请求头客户端与 Worker
 func (admin *runtimeAdmin) rebindAccounts(accountIDs []string) {
-	if len(accountIDs) == 0 {
-		return
-	}
-	paniclog.Go("proxy_pool.go:95", func() {
-		func() {
-			for _, accountID := range accountIDs {
-				if err := admin.rebindAccount(admin.lifecycle, accountID); err != nil && admin.lifecycle.Err() == nil {
-					admin.requests.log(accountID, "WARN", "代理改绑失败", "error", err)
-				}
+	for _, accountID := range accountIDs {
+		paniclog.Go("proxy_pool.go:rebindAccount", func() {
+			if err := admin.rebindAccount(admin.lifecycle, accountID); err != nil && admin.lifecycle.Err() == nil {
+				admin.requests.log(accountID, "WARN", "代理改绑失败", "error", err)
 			}
-		}()
-	})
+		})
+	}
 }
 
 func (admin *runtimeAdmin) rebindAccount(ctx context.Context, accountID string) error {
