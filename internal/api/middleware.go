@@ -27,41 +27,44 @@ import (
 type accessLogContextKey struct{}
 
 type accessLogMetadata struct {
-	mu              sync.Mutex
-	admin           AdminService
-	method          string
-	path            string
-	started         bool
-	generation      bool
-	model           string
-	account         string
-	channel         string
-	finishReason    string
-	err             string
-	canceled        bool
-	detached        bool
-	failureStatus   int
-	firstEvent      time.Duration
-	firstOutput     int64
-	trailingError   string
-	upstreamBytes   int64
-	usage           *aistudio.Usage
-	toolCalls       int
-	inputMessages   int
-	inputTextChars  int
-	inputMedia      int
-	inputMediaBytes int64
-	inputFiles      int
-	temperature     string
-	topP            string
-	thinking        string
-	maxOutputTokens string
-	requestID       string
-	startedAt       time.Time
-	queueWait       time.Duration
-	proof           ProofTiming
-	attempts        []RequestAttempt
-	authorized      bool
+	mu                     sync.Mutex
+	admin                  AdminService
+	method                 string
+	path                   string
+	started                bool
+	generation             bool
+	model                  string
+	account                string
+	channel                string
+	finishReason           string
+	err                    string
+	canceled               bool
+	detached               bool
+	failureStatus          int
+	firstEvent             time.Duration
+	firstOutput            int64
+	trailingError          string
+	upstreamBytes          int64
+	usage                  *aistudio.Usage
+	toolCalls              int
+	replyTool              bool
+	replyToolCalls         int
+	replyToolContinuations int
+	inputMessages          int
+	inputTextChars         int
+	inputMedia             int
+	inputMediaBytes        int64
+	inputFiles             int
+	temperature            string
+	topP                   string
+	thinking               string
+	maxOutputTokens        string
+	requestID              string
+	startedAt              time.Time
+	queueWait              time.Duration
+	proof                  ProofTiming
+	attempts               []RequestAttempt
+	authorized             bool
 }
 
 type accessLogResponseWriter struct {
@@ -138,6 +141,7 @@ func (metadata *accessLogMetadata) finished(status int, disconnected bool) Acces
 	return AccessLog{
 		Status: status, FirstEvent: metadata.firstEvent, FirstOutput: metadata.firstOutput, TrailingError: metadata.trailingError, QueueWait: metadata.queueWait, Proof: metadata.proof,
 		UpstreamBytes: metadata.upstreamBytes, Usage: metadata.usage, ToolCalls: metadata.toolCalls,
+		ReplyTool: metadata.replyTool, ReplyToolCalls: metadata.replyToolCalls, ReplyToolContinuations: metadata.replyToolContinuations,
 		InputMessages: metadata.inputMessages, InputTextChars: metadata.inputTextChars,
 		InputMedia: metadata.inputMedia, InputMediaBytes: metadata.inputMediaBytes, InputFiles: metadata.inputFiles,
 		Temperature: metadata.temperature, TopP: metadata.topP, Thinking: metadata.thinking, MaxOutputTokens: metadata.maxOutputTokens,
@@ -410,6 +414,35 @@ func SetAccessLogGenerationResult(ctx context.Context, usage *aistudio.Usage, to
 	}
 }
 
+// SetAccessLogReplyTool 记录本次生成尝试是否实际启用回复工具并重置 final 调用与续接轮数计数
+func SetAccessLogReplyTool(ctx context.Context, enabled bool) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.mu.Lock()
+		metadata.replyTool = enabled
+		metadata.replyToolCalls = 0
+		metadata.replyToolContinuations = 0
+		metadata.mu.Unlock()
+	}
+}
+
+// AddAccessLogReplyToolCall 累加本次生成解包的回复工具 final 调用次数
+func AddAccessLogReplyToolCall(ctx context.Context) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.mu.Lock()
+		metadata.replyToolCalls++
+		metadata.mu.Unlock()
+	}
+}
+
+// AddAccessLogReplyToolContinuation 累加本次生成回复工具 more=true 触发的自动续接轮数
+func AddAccessLogReplyToolContinuation(ctx context.Context) {
+	if metadata, ok := ctx.Value(accessLogContextKey{}).(*accessLogMetadata); ok {
+		metadata.mu.Lock()
+		metadata.replyToolContinuations++
+		metadata.mu.Unlock()
+	}
+}
+
 func requestLoggingMiddleware(admin AdminService, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -450,10 +483,14 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return err == nil && net.ParseIP(host).IsLoopback() && loopbackHost(r.Host)
+}
+
 func loopbackMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil || !net.ParseIP(host).IsLoopback() || !loopbackHost(r.Host) {
+		if !isLoopbackRequest(r) {
 			writeAdminError(w, http.StatusForbidden, "control_plane_forbidden", "Control plane is only available from loopback")
 			return
 		}
@@ -476,11 +513,12 @@ func loopbackHost(host string) bool {
 }
 
 // browserOriginMiddleware 在未配置 API key 时拒绝外部网页与 null 来源的浏览器请求
-func browserOriginMiddleware(requiredKey string, next http.Handler) http.Handler {
-	if strings.TrimSpace(requiredKey) != "" {
-		return next
-	}
+func browserOriginMiddleware(requiredKey func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(requiredKey()) != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		originValue := strings.TrimSpace(r.Header.Get("Origin"))
 		if originValue == "" {
 			next.ServeHTTP(w, r)
@@ -599,14 +637,14 @@ func (limiter *publicRateLimiter) evict(now time.Time) {
 
 // publicRateLimitMiddleware 对每个已认证 API key 限制请求速率；没有 API key 时回退到客户端地址。
 // keyLimits 可为个别 key 指定更严格的速率，未列出的 key 使用 perMinute。
-func publicRateLimitMiddleware(configuredKeys string, perMinute, burst int, keyLimits map[string]KeyRateLimit, trusted []netip.Prefix, next http.Handler) http.Handler {
-	keys := apiKeys(configuredKeys)
+func publicRateLimitMiddleware(configuredKeys func() string, perMinute, burst int, keyLimits map[string]KeyRateLimit, trusted []netip.Prefix, next http.Handler) http.Handler {
 	limiter := newPublicRateLimiter(perMinute, burst)
 	perKey := make(map[string]*publicRateLimiter, len(keyLimits))
 	for key, limit := range keyLimits {
 		perKey[key] = newPublicRateLimiter(limit.PerMinute, 0)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys := apiKeys(configuredKeys())
 		limiterFor := limiter
 		if key := matchedAPIKey(r, keys); key != "" {
 			if custom, ok := perKey[key]; ok {
@@ -726,9 +764,9 @@ func sameOriginMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func authMiddleware(configuredKeys string, next http.Handler) http.Handler {
-	keys := apiKeys(configuredKeys)
+func authMiddleware(configuredKeys func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys := apiKeys(configuredKeys())
 		if len(keys) > 0 && matchedAPIKey(r, keys) == "" {
 			writeAuthError(w, r)
 			return
@@ -754,13 +792,9 @@ func accountContextMiddleware(next http.Handler) http.Handler {
 }
 
 // apiKeyContextMiddleware 把请求所用的已配置 API key 放进请求上下文，供账户池按 key 绑定的账户选号
-func apiKeyContextMiddleware(configuredKeys string, next http.Handler) http.Handler {
-	keys := apiKeys(configuredKeys)
-	if len(keys) == 0 {
-		return next
-	}
+func apiKeyContextMiddleware(configuredKeys func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if key := matchedAPIKey(r, keys); key != "" {
+		if key := matchedAPIKey(r, apiKeys(configuredKeys())); key != "" {
 			r = r.WithContext(aistudio.ContextWithAPIKey(r.Context(), key))
 		}
 		next.ServeHTTP(w, r)
