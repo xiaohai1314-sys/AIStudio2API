@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mag1cFall/AIStudio2API/internal/aistudio"
@@ -32,11 +33,31 @@ type authRuntimeRefresher struct {
 	// mergeWorker 把响应 Cookie 写入账户当前 Worker 的页面
 	mergeWorker func(context.Context, string, []string, string) error
 	// boundLocks 是各账户 DBSC 会话刷新的互斥锁
-	boundLocks  sync.Map
-	globalProxy string
-	requests    *requestRegistry
+	boundLocks     sync.Map
+	hotGlobalProxy atomic.Pointer[string]
+	requests       *requestRegistry
 	// pauseOnAuthFailure 为真时认证失败不自动续签，改为暂停账户等待人工检查
 	pauseOnAuthFailure bool
+}
+
+// SetGlobalProxy 替换认证续签使用的默认出口代理
+func (refresher *authRuntimeRefresher) SetGlobalProxy(proxy string) {
+	if refresher == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(proxy)
+	refresher.hotGlobalProxy.Store(&trimmed)
+}
+
+// currentGlobalProxy 返回当前默认出口代理
+func (refresher *authRuntimeRefresher) currentGlobalProxy() string {
+	if refresher == nil {
+		return ""
+	}
+	if proxy := refresher.hotGlobalProxy.Load(); proxy != nil {
+		return *proxy
+	}
+	return ""
 }
 
 // authRetryTransport 为普通 RPC 执行一次认证续签重试
@@ -158,14 +179,15 @@ func newAuthRuntimeRefresher(
 	globalProxy string,
 	pauseOnAuthFailure bool,
 ) *authRuntimeRefresher {
-	return &authRuntimeRefresher{
+	refresher := &authRuntimeRefresher{
 		pool:    workers.pool,
 		refresh: chromeauth.Refresh, importCurrent: importCurrentChromeState,
 		reset: workers.Reset, prepareWorker: workers.prepareUpdate,
 		rotate: chromeauth.RotateBoundCookies, mergeWorker: workers.MergeCookies,
-		globalProxy: globalProxy,
-		requests:    requests, pauseOnAuthFailure: pauseOnAuthFailure,
+		requests: requests, pauseOnAuthFailure: pauseOnAuthFailure,
 	}
+	refresher.SetGlobalProxy(globalProxy)
+	return refresher
 }
 
 // importCurrentChromeState 从原来源中更新同一 Google 账户的认证材料
@@ -416,7 +438,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 		if extension.OAuth == nil {
 			return fmt.Errorf("账户 %s 没有续签材料，需要重新登录", account.ID)
 		}
-		proxy := account.EffectiveProxy(refresher.globalProxy)
+		proxy := account.EffectiveProxy(refresher.currentGlobalProxy())
 		var cookies []aistudio.StateCookie
 		cookies, extension.Bound, err = refresher.refresh(ctx, extension.Source, *extension.OAuth, proxy)
 		if errors.Is(err, chromeauth.ErrCredentialsRejected) {
@@ -463,7 +485,7 @@ func (refresher *authRuntimeRefresher) Refresh(ctx context.Context, generation u
 	if !refreshed {
 		return nil
 	}
-	if err := setCookieAuthUser(lease, 0, refresher.prepareWorker); err != nil {
+	if err := setImportedAccountConfig(lease, 0, "", refresher.prepareWorker); err != nil {
 		return fmt.Errorf("保存账户 %s 会话序号: %w", account.ID, err)
 	}
 	logRenewal("INFO", api.LogStage{State: "completed"}, "账户认证续签完成", "duration", time.Since(startedAt))
@@ -480,7 +502,7 @@ func (refresher *authRuntimeRefresher) ensureBound(ctx context.Context) error {
 	return refresher.ensureBoundWith(
 		ctx,
 		account.ID,
-		account.EffectiveProxy(refresher.globalProxy),
+		account.EffectiveProxy(refresher.currentGlobalProxy()),
 		lease.ReloadStorageStateWithGeneration,
 		lease.MergeBoundSessionCookies,
 	)
@@ -501,7 +523,7 @@ func (refresher *authRuntimeRefresher) ensureBoundAccount(ctx context.Context, a
 	return refresher.ensureBoundWith(
 		ctx,
 		account.ID,
-		account.EffectiveProxy(refresher.globalProxy),
+		account.EffectiveProxy(refresher.currentGlobalProxy()),
 		func() (aistudio.StorageState, uint64, error) {
 			return refresher.pool.ReloadStorageStateWithGeneration(account.ID)
 		},

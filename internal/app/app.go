@@ -160,6 +160,7 @@ func runService(ctx context.Context, cancel func(), cfg config.Config, options c
 	}
 	ledger.SetBodyCapture(cfg.RequestBodyLog)
 	manager.ledger = ledger
+	manager.seedAccountUsage(ctx, manager.current)
 	prompts, err := promptdb.Open(filepath.Join("runtime", "prompts.db"))
 	if err != nil {
 		return false, errors.Join(fmt.Errorf("打开对话库: %w", err), manager.Close(), ledger.Close())
@@ -280,7 +281,7 @@ func runServer(ctx context.Context, cfg config.Config, manager *runtimeManager, 
 	manager.previewAddress = previewListener.Addr().String()
 	manager.settings.Store(requestSettingsOf(manager.currentConfig()))
 	apiHandler := api.NewHandler(manager, api.Config{
-		APIKey: cfg.ProxyAPIKey, PublicRateLimit: cfg.PublicRateLimit, PublicRateBurst: cfg.PublicRateBurst, APIKeyRateLimits: apiKeyRateLimits(cfg.ProxyAPIKey, cfg.APIKeyRateLimits), MaxPublicInFlight: max(16, 2*cfg.MaxActiveWorkers), TrustedProxyCIDRs: trustedProxies, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
+		APIKey: cfg.ProxyAPIKey, APIKeys: manager.currentAPIKey, PublicRateLimit: cfg.PublicRateLimit, PublicRateBurst: cfg.PublicRateBurst, APIKeyRateLimits: apiKeyRateLimits(cfg.ProxyAPIKey, cfg.APIKeyRateLimits), MaxPublicInFlight: max(16, 2*cfg.MaxActiveWorkers), TrustedProxyCIDRs: trustedProxies, Admin: manager, Ledger: manager.ledger, Prompts: manager.prompts, Updates: updater,
 		AdminAuthEnabled: cfg.AdminAuthEnabled, AdminUsername: cfg.AdminUsername, AdminPassword: cfg.AdminPassword,
 		AdminSessionPath: filepath.Join("runtime", "admin-sessions.json"),
 		MediaDir:         filepath.Join("runtime", "media"), MediaLimit: mediaLimit, MediaLinks: manager.mediaLinks,
